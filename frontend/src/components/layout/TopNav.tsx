@@ -250,6 +250,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           <div className="relative">
             <button
               onClick={() => setUserMenuOpen(!userMenuOpen)}
+              aria-label="User menu"
+              aria-expanded={userMenuOpen}
               className="flex items-center gap-1.5 cursor-pointer bg-transparent border-none text-text-muted hover:text-text-bright transition-colors"
             >
               <span className="relative">
@@ -320,6 +322,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           {/* Mobile hamburger */}
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={mobileOpen}
             className="lg:hidden text-text-muted cursor-pointer bg-transparent border-none p-1"
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
