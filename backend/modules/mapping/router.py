@@ -25,7 +25,7 @@ from modules.mapping.suggest import suggest_mappings, suggest_batch
 from utils.csv_safety import csv_safe
 from utils.sql_safety import safe_identifier
 from utils.rate_limit import limiter
-from utils.cdm_helper import check_cdm_access
+from utils.cdm_helper import check_cdm_access, get_domain_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
@@ -293,7 +293,7 @@ def list_unmapped(
 
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[domain]
+    cfg = get_domain_config(conn, schema, domain)
     table = safe_identifier(cfg["table"])
     sv_col = safe_identifier(cfg["source_value"])
     concept_col = safe_identifier(cfg["concept_id"])
@@ -377,7 +377,7 @@ def export_unmapped(
 
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[domain]
+    cfg = get_domain_config(conn, schema, domain)
     table = safe_identifier(cfg["table"])
     sv_col = safe_identifier(cfg["source_value"])
     concept_col = safe_identifier(cfg["concept_id"])
@@ -569,7 +569,7 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     # Gather all data needed by the worker while we still have the DB session
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[req.domain]
+    cfg = get_domain_config(conn, schema, req.domain)
     approved_svs = [
         r[0] for r in
         db.query(MappingDecision.source_value)
@@ -708,10 +708,23 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 result_map[r["source_value"]] = r
             results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
 
+            # Build warnings about limited strategies
+            warnings = []
+            if not sn_col:
+                warnings.append("source_name_missing")
+            if not ref_map:
+                warnings.append("no_reference_codebook")
+            if enable_sapbert and not sapbert_map:
+                warnings.append("no_sapbert_embeddings")
+            has_source_names = any(t.get("source_name") for t in terms)
+            if sn_col and not has_source_names and not ref_map:
+                warnings.append("source_names_empty")
+
             with _suggestions_lock:
                 if task_id in _active_suggestions:
                     _active_suggestions[task_id]["status"] = "done"
                     _active_suggestions[task_id]["results"] = results
+                    _active_suggestions[task_id]["warnings"] = warnings
 
         except Exception as e:
             logger.exception("Background batch suggestion failed")
@@ -740,6 +753,7 @@ def suggest_status(task_id: str):
     resp: dict = {"task_id": task_id, "status": entry["status"], "domain": entry["domain"]}
     if entry["status"] == "done":
         resp["results"] = entry["results"]
+        resp["warnings"] = entry.get("warnings", [])
         # Clean up after delivering results
         with _suggestions_lock:
             _active_suggestions.pop(task_id, None)
@@ -978,7 +992,7 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[req.domain]
+    cfg = get_domain_config(conn, schema, req.domain)
     table = safe_identifier(cfg["table"])
     full_table = f"{schema}.{table}"
     sv_col = safe_identifier(cfg["source_value"])

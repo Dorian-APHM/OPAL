@@ -12,7 +12,7 @@ from psycopg2 import sql as psysql
 from db.app_db import get_db
 from db.models import Cohort, MappingDecision, SavedQuery
 from utils.sql_safety import safe_identifier
-from utils.cdm_helper import get_cdm_connection
+from utils.cdm_helper import get_cdm_connection, get_domain_config
 from config import DOMAIN_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,10 @@ def global_search(
                         try:
                             union_parts = []
                             sv_params = []
-                            for domain_name, cfg in DOMAIN_CONFIG.items():
+                            for domain_name in DOMAIN_CONFIG:
+                                cfg = get_domain_config(conn, schema, domain_name)
+                                if not cfg:
+                                    continue
                                 table = safe_identifier(cfg["table"])
                                 source_col = safe_identifier(cfg["source_value"])
                                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None

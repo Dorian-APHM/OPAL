@@ -36,6 +36,58 @@ def get_cdm_connection(db: Session, cdm_name: str):
 
 _logger = logging.getLogger(__name__)
 
+# Cache for column existence checks: (cdm_name, schema, table, column) -> bool
+_column_exists_cache: dict[tuple[str, str, str, str], bool] = {}
+
+
+def _column_exists(conn, schema: str, table: str, column: str) -> bool:
+    """Check if a column exists in a table via information_schema (cached)."""
+    # Use the CDM connection's dsn as part of the cache key
+    dsn = conn.dsn if hasattr(conn, 'dsn') else str(id(conn))
+    cache_key = (dsn, schema, table, column)
+    if cache_key in _column_exists_cache:
+        return _column_exists_cache[cache_key]
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
+            (schema, table, column),
+        )
+        exists = cur.fetchone() is not None
+        cur.close()
+    except Exception:
+        exists = False
+    _column_exists_cache[cache_key] = exists
+    return exists
+
+
+def get_domain_config(conn, schema: str, domain: str) -> dict:
+    """Return DOMAIN_CONFIG for a domain, stripping optional columns that don't exist in the CDM.
+
+    This ensures columns like 'source_name' (drug_source_name, measurement_source_name)
+    that are not part of the standard OMOP CDM spec are only included when actually present.
+    """
+    from config import DOMAIN_CONFIG
+    cfg = DOMAIN_CONFIG.get(domain)
+    if not cfg:
+        return {}
+    cfg = dict(cfg)  # shallow copy to avoid mutating the global
+
+    # Check optional columns — source_name is the main one that may be absent
+    optional_cols = ["source_name"]
+    table = cfg.get("table", "")
+    for opt in optional_cols:
+        col_name = cfg.get(opt)
+        if col_name and not _column_exists(conn, schema, table, col_name):
+            _logger.info(
+                "Optional column %s.%s.%s not found — disabling '%s' for domain %s",
+                schema, table, col_name, opt, domain,
+            )
+            del cfg[opt]
+
+    return cfg
+
 
 def check_cdm_access(request: Request, cdm_name: str) -> None:
     """

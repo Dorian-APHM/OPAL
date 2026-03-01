@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 from config import DOMAIN_CONFIG
 from utils.sql_safety import safe_identifier
+from utils.cdm_helper import get_domain_config
 
 
 def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
@@ -34,10 +35,21 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
         cur.execute(psysql.SQL("SELECT COUNT(*) AS total FROM {}.{}").format(_s, _person))
         total_persons = int(cur.fetchone()["total"] or 0)
 
-        # Build a single UNION ALL query for all domain stats
+        # Build a single UNION ALL query — only for domains whose table exists in the CDM
         union_parts = []
         domain_order = []
-        for domain_name, cfg in DOMAIN_CONFIG.items():
+        for domain_name in DOMAIN_CONFIG:
+            cfg = get_domain_config(conn, schema, domain_name)
+            if not cfg:
+                continue
+            # Check table exists before including in UNION ALL
+            table_name = cfg["table"]
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s LIMIT 1",
+                (schema, table_name),
+            )
+            if not cur.fetchone():
+                continue
             table = safe_identifier(cfg["table"])
             person_id = safe_identifier(cfg["person_id"])
             concept_id = safe_identifier(cfg["concept_id"])
@@ -97,7 +109,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             unmapped_terms = total_terms - mapped_terms
             pct_terms_mapped = (mapped_terms / total_terms * 100) if total_terms > 0 else 0
 
-            cfg = DOMAIN_CONFIG[domain_name]
+            cfg = get_domain_config(conn, schema, domain_name)
             date_col_name = cfg.get("date_col")
             sparkline = []
             if date_col_name:
