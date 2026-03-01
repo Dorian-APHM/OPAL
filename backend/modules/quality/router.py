@@ -23,6 +23,7 @@ from utils.crypto import decrypt_password
 from modules.quality.engine import get_available_domains, run_domain_analysis
 from modules.quality.comparator import compare_snapshots
 from utils.csv_safety import csv_safe
+from utils.cdm_helper import get_cdm_connection
 from config import DEFAULT_OMOP_SCHEMA
 from utils.rate_limit import limiter
 from utils.cdm_helper import check_cdm_access
@@ -90,8 +91,17 @@ def _save_snapshot(db: Session, cdm_name: str, domain: str, results: dict) -> An
 
 
 @router.get("/domains")
-def list_domains():
-    """List all available analysis domains."""
+def list_domains(cdm_name: str | None = None, db: Session = Depends(get_db)):
+    """List available analysis domains. If cdm_name is provided, only returns
+    domains whose tables exist in the CDM schema."""
+    if cdm_name:
+        try:
+            conn, schema = get_cdm_connection(db, cdm_name)
+            domains = get_available_domains(conn=conn, omop_schema=schema)
+            conn.close()
+            return {"domains": domains}
+        except Exception:
+            pass
     return {"domains": get_available_domains()}
 
 

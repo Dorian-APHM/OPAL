@@ -8,7 +8,7 @@ import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.cdm_helper import check_cdm_access
+from utils.cdm_helper import check_cdm_access, get_domain_config
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -304,7 +304,10 @@ def get_concept_source_values(
     results = []
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            for domain_name, cfg in DOMAIN_CONFIG.items():
+            for domain_name in DOMAIN_CONFIG:
+                cfg = get_domain_config(conn, schema, domain_name)
+                if not cfg:
+                    continue
                 table = safe_identifier(cfg["table"])
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
@@ -372,15 +375,14 @@ def search_source_value(
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Build a UNION ALL across all relevant domains
-            domains_to_search = (
-                {domain: DOMAIN_CONFIG[domain]}
-                if domain and domain in DOMAIN_CONFIG
-                else DOMAIN_CONFIG
-            )
+            domain_names = [domain] if domain and domain in DOMAIN_CONFIG else list(DOMAIN_CONFIG.keys())
 
             union_parts = []
             params = []
-            for domain_name, cfg in domains_to_search.items():
+            for domain_name in domain_names:
+                cfg = get_domain_config(conn, schema, domain_name)
+                if not cfg:
+                    continue
                 table = safe_identifier(cfg["table"])
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
@@ -463,15 +465,14 @@ def export_source_value_search(
     conn, schema = _get_conn(db, cdm_name)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            domains_to_search = (
-                {domain: DOMAIN_CONFIG[domain]}
-                if domain and domain in DOMAIN_CONFIG
-                else DOMAIN_CONFIG
-            )
+            domain_names = [domain] if domain and domain in DOMAIN_CONFIG else list(DOMAIN_CONFIG.keys())
 
             union_parts = []
             params = []
-            for domain_name, cfg in domains_to_search.items():
+            for domain_name in domain_names:
+                cfg = get_domain_config(conn, schema, domain_name)
+                if not cfg:
+                    continue
                 table = safe_identifier(cfg["table"])
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
