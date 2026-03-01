@@ -238,7 +238,7 @@ export default function HomePage({ selectedCdm }: Props) {
                     {cohorts.map((c) => (
                       <div
                         key={c.id}
-                        className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
+                        className="flex items-center justify-between px-3 py-3 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
                         onClick={() => navigate('/cohorts', { state: { openCohortId: c.id } })}
                       >
                         <div className="min-w-0 flex-1">
@@ -275,7 +275,7 @@ export default function HomePage({ selectedCdm }: Props) {
                     {favorites.slice(0, 10).map((f) => (
                       <div
                         key={f.id}
-                        className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
+                        className="flex items-center justify-between px-3 py-3 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
                         onClick={() => navigateToFavorite(f)}
                       >
                         <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -367,7 +367,7 @@ export default function HomePage({ selectedCdm }: Props) {
                     {notifications.map((n) => (
                       <div
                         key={n.id}
-                        className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg transition-colors text-xs ${
+                        className={`flex items-start gap-2 px-2.5 py-2.5 rounded-lg transition-colors text-xs ${
                           n.link ? 'cursor-pointer hover:bg-emerald-accent/5' : ''
                         } ${!n.read ? 'bg-emerald-accent/[0.03]' : ''}`}
                         onClick={() => n.link && navigateToNotif(n)}
