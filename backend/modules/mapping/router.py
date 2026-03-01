@@ -708,10 +708,23 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 result_map[r["source_value"]] = r
             results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
 
+            # Build warnings about limited strategies
+            warnings = []
+            if not sn_col:
+                warnings.append("source_name_missing")
+            if not ref_map:
+                warnings.append("no_reference_codebook")
+            if enable_sapbert and not sapbert_map:
+                warnings.append("no_sapbert_embeddings")
+            has_source_names = any(t.get("source_name") for t in terms)
+            if sn_col and not has_source_names and not ref_map:
+                warnings.append("source_names_empty")
+
             with _suggestions_lock:
                 if task_id in _active_suggestions:
                     _active_suggestions[task_id]["status"] = "done"
                     _active_suggestions[task_id]["results"] = results
+                    _active_suggestions[task_id]["warnings"] = warnings
 
         except Exception as e:
             logger.exception("Background batch suggestion failed")
@@ -740,6 +753,7 @@ def suggest_status(task_id: str):
     resp: dict = {"task_id": task_id, "status": entry["status"], "domain": entry["domain"]}
     if entry["status"] == "done":
         resp["results"] = entry["results"]
+        resp["warnings"] = entry.get("warnings", [])
         # Clean up after delivering results
         with _suggestions_lock:
             _active_suggestions.pop(task_id, None)
