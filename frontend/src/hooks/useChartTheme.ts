@@ -43,19 +43,19 @@ const darkTheme: ChartTheme = {
 
 const lightTheme: ChartTheme = {
   grid: '#B8AF99',
-  axis: '#6B7A5C',
-  tooltipBg: '#C8BFA9',
+  axis: '#5E6D50',
+  tooltipBg: '#F5F0E6',
   tooltipBorder: '#B8AF99',
-  tooltipStyle: { backgroundColor: '#C8BFA9', border: '1px solid #B8AF99', borderRadius: 8 },
-  blue: '#2563EB',
-  emerald: '#059669',
-  red: '#DC2626',
-  orange: '#D97706',
-  yellow: '#B45309',
-  purple: '#7C3AED',
-  cyan: '#0891B2',
-  reference: '#8B9A7D',
-  label: '#5E6D50',
+  tooltipStyle: { backgroundColor: '#F5F0E6', border: '1px solid #B8AF99', borderRadius: 8 },
+  blue: '#1D4ED8',
+  emerald: '#047857',
+  red: '#B91C1C',
+  orange: '#B45309',
+  yellow: '#92400E',
+  purple: '#6D28D9',
+  cyan: '#0E7490',
+  reference: '#6B7A5C',
+  label: '#3D4A2E',
 };
 
 export function useChartTheme(): ChartTheme {

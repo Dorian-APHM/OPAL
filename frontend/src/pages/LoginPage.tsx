@@ -92,6 +92,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     error={errors.username}
+                    required
                   />
                   <div>
                     <Select
@@ -100,6 +101,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                       value={role}
                       onChange={setRole}
                       options={ROLES}
+                      required
                     />
                     {errors.role && <p className="text-xs text-red-400 mt-1">{errors.role}</p>}
                   </div>

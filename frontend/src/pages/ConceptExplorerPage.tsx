@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
 import {
-  Card, Input, Select, Button, Table, Tag, Switch, Tabs, Drawer, Alert, Empty, Spinner, Tooltip,
+  Card, Input, Select, Button, Table, Tag, Switch, Tabs, Drawer, Alert, Empty, Spinner, Tooltip, useToast,
 } from '../components/ui';
 import type { Column, TabItem } from '../components/ui';
 import {
@@ -78,6 +78,7 @@ const DOMAIN_NOMENCLATURE: Record<string, string> = {
 
 export default function ConceptExplorerPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
+  const toast = useToast();
   const isMobile = useIsMobile();
   const [query, setQuery] = useSessionState('concepts:query', '');
   const [domainFilter, setDomainFilter] = useSessionState('concepts:domainFilter', undefined as string | undefined);
@@ -150,6 +151,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       if (ctrl.signal.aborted) return;
       setConcepts([]);
       setTotal(0);
+      toast.error(t('common.error', 'An error occurred'));
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
       if (abortRef.current === ctrl) abortRef.current = null;
@@ -174,6 +176,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       if (ctrl.signal.aborted) return;
       setSourceResults([]);
       setSourceTotal(0);
+      toast.error(t('common.error', 'An error occurred'));
     } finally {
       if (!ctrl.signal.aborted) setSourceLoading(false);
       if (abortRef.current === ctrl) abortRef.current = null;
@@ -209,7 +212,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       setAncestors(hierRes.data.ancestors || []);
       setDescendants(hierRes.data.descendants || []);
       setSourceValues(svRes.data.source_values || []);
-    } catch { /* ignore */ }
+    } catch { toast.error(t('common.error', 'An error occurred')); }
     finally { setDetailLoading(false); }
   };
 
@@ -473,7 +476,10 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
   const detailContent = selectedConcept ? (
     detailLoading ? (
-      <div className="flex justify-center py-10"><Spinner /></div>
+      <div className="text-center py-10">
+        <Spinner size="large" />
+        <p className="text-sm text-text-muted mt-4">{t('concept.loading_details', 'Loading concept details...')}</p>
+      </div>
     ) : (
       <Tabs items={detailTabItems} />
     )

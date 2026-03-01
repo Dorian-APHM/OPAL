@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Clock, Heart, Code, FolderOpen,
   Bell, CheckCheck, ExternalLink,
 } from 'lucide-react';
-import { Card, Button, Tag, Empty, Tooltip, FadeIn, ScaleIn, CountUp, DashboardSkeleton } from '../components/ui';
+import { Card, Button, Tag, Empty, Tooltip, FadeIn, ScaleIn, CountUp, DashboardSkeleton, useToast } from '../components/ui';
 import { cohortApi, qualityApi, favoritesApi, notificationsApi } from '../api/client';
 import type { CohortSummary } from '../types';
 
@@ -46,6 +46,7 @@ function timeAgo(dateStr: string): string {
 export default function HomePage({ selectedCdm }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
   const [favorites, setFavorites] = useState<any[]>([]);
@@ -73,7 +74,7 @@ export default function HomePage({ selectedCdm }: Props) {
       await favoritesApi.remove(id);
       setFavorites(prev => prev.filter(f => f.id !== id));
     } catch {
-      // silently fail
+      toast.error(t('common.error', 'An error occurred'));
     }
   };
 
@@ -94,7 +95,9 @@ export default function HomePage({ selectedCdm }: Props) {
       await notificationsApi.markRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
       window.dispatchEvent(new Event('opal:badges-refresh'));
-    } catch {}
+    } catch {
+      toast.error(t('common.error', 'An error occurred'));
+    }
   };
 
   const markAllNotifsRead = async () => {
@@ -102,7 +105,9 @@ export default function HomePage({ selectedCdm }: Props) {
       await notificationsApi.markAllRead();
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
       window.dispatchEvent(new Event('opal:badges-refresh'));
-    } catch {}
+    } catch {
+      toast.error(t('common.error', 'An error occurred'));
+    }
   };
 
   const navigateToFavorite = (f: any) => {
