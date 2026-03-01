@@ -144,7 +144,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   return (
     <div>
       {/* Summary */}
-      <div className="grid grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         <Card><Statistic title={t('mapping.overall_rate', 'Overall Mapping Rate')} value={pctOverall.toFixed(1)} suffix="%" /></Card>
         <Card><Statistic title={t('mapping.total_terms', 'Total Terms')} value={totalTerms.toLocaleString()} /></Card>
         <Card><Statistic title={t('mapping.mapped', 'Mapped')} value={mappedTerms.toLocaleString()} valueStyle={{ color: '#10B981' }} /></Card>
@@ -188,7 +188,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             value={evoDomain}
             onChange={setEvoDomain}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
         }
         className="mb-4"
@@ -219,7 +219,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             value={strategyDomain ?? ''}
             onChange={(v) => setStrategyDomain(v || undefined)}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
             allowClear
             placeholder={t('mapping.all_domains', 'All domains')}
           />
@@ -291,19 +291,19 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
   return (
     <div>
       <Card size="small" className="mb-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Select
             value={domain}
             onChange={v => { setDomain(v); setPage(1); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
           <Input
             prefix={<Search className="h-4 w-4" />}
             placeholder={t('mapping.search_unmapped', 'Filter...')}
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
-            className="w-[250px]"
+            className="w-full sm:w-[250px]"
           />
           <Button
             icon={<Download className="h-4 w-4" />}
@@ -538,12 +538,12 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   return (
     <div>
       <Card size="small" className="mb-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Select
             value={domain}
             onChange={setDomain}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
           <NumberInput
             min={5}
@@ -799,7 +799,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
             value={domain}
             onChange={v => { setDomain(v); setSearchResults([]); setSelectedSource(null); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
           <Input
             prefix={<Search className="h-4 w-4" />}
@@ -807,7 +807,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleSearch(); }}
-            className="w-[300px]"
+            className="w-full sm:w-[300px]"
           />
           <Button variant="primary" onClick={handleSearch} loading={searchLoading}>
             {t('mapping.search', 'Search')}
@@ -846,20 +846,20 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
         >
           {/* Selected source summary */}
           <div className="bg-blue-500/8 border border-blue-500/25 rounded-lg px-4 py-2.5 mb-4">
-            <div className="grid grid-cols-12 gap-6">
-              <div className="col-span-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.source_value', 'Source Value')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.source_value}</div>
               </div>
-              <div className="col-span-4">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.source_name', 'Source Name')}</span>
                 <div className="text-sm text-text-bright">{selectedSource.source_name || '—'}</div>
               </div>
-              <div className="col-span-2">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.n_records', 'Records')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.n_records.toLocaleString()}</div>
               </div>
-              <div className="col-span-2">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.n_persons', 'Persons')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.n_persons.toLocaleString()}</div>
               </div>
@@ -870,7 +870,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           <div className="flex items-center gap-3 mb-3">
             <span className="text-text-bright text-sm">{t('mapping.enter_concept_id', 'Concept ID')} :</span>
             <NumberInput
-              className="w-[180px]"
+              className="w-full sm:w-[180px]"
               placeholder="e.g. 4329847"
               value={conceptIdInput ?? undefined}
               onChange={v => { setConceptIdInput(v); setConceptInfo(null); setConceptError(''); }}
@@ -892,24 +892,24 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           {/* Concept info display */}
           {conceptInfo && (
             <div className="bg-emerald-500/8 border border-emerald-500/25 rounded-lg px-4 py-2.5 mb-4">
-              <div className="grid grid-cols-12 gap-4">
-                <div className="col-span-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div>
                   <span className="text-text-dim text-[11px]">Concept ID</span>
                   <div className="font-semibold text-text-bright">{conceptInfo.concept_id}</div>
                 </div>
-                <div className="col-span-4">
+                <div>
                   <span className="text-text-dim text-[11px]">Concept Name</span>
                   <div className="font-semibold text-text-bright">{conceptInfo.concept_name}</div>
                 </div>
-                <div className="col-span-2">
+                <div>
                   <span className="text-text-dim text-[11px]">Vocabulary</span>
                   <div><Tag>{conceptInfo.vocabulary_id}</Tag></div>
                 </div>
-                <div className="col-span-1.5">
+                <div>
                   <span className="text-text-dim text-[11px]">Domain</span>
                   <div><Tag>{conceptInfo.domain_id}</Tag></div>
                 </div>
-                <div className="col-span-1.5">
+                <div>
                   <span className="text-text-dim text-[11px]">Standard</span>
                   <div>
                     {conceptInfo.standard_concept === 'S'
@@ -1087,7 +1087,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             value={filterDomain}
             onChange={v => { setFilterDomain(v); setPage(1); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[130px]"
+            className="w-full sm:w-[130px]"
             allowClear
             placeholder="All domains"
           />
@@ -1095,7 +1095,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             value={filterAction}
             onChange={v => { setFilterAction(v); setPage(1); }}
             options={actionOptions}
-            className="w-[120px]"
+            className="w-full sm:w-[120px]"
             allowClear
             placeholder="All actions"
           />
@@ -1112,7 +1112,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               value={applyDomain}
               onChange={setApplyDomain}
               options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-              className="w-[120px]"
+              className="w-full sm:w-[120px]"
             />
             <Button size="small" onClick={handleApplyPreview}>Preview</Button>
             <Button size="small" icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
@@ -1132,7 +1132,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               </span>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Statistic title={t('mapping.approved_decisions', 'Approved Decisions')} value={applyPreview.total_decisions} />
             <Statistic title={t('mapping.impacted_rows', 'Impacted Rows')} value={applyPreview.impacted_rows.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
             <Statistic title={t('mapping.impacted_persons', 'Impacted Persons')} value={applyPreview.impacted_persons.toLocaleString()} valueStyle={{ color: '#ef4444' }} />

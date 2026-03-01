@@ -159,17 +159,17 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
 
   return (
     <nav className="glass-nav fixed top-0 left-0 right-0 z-50 px-3 lg:px-4 py-2">
-      <div className="mx-auto flex items-center gap-3 max-w-[1920px]">
+      <div className="mx-auto flex items-center gap-2 lg:gap-3 max-w-[1920px]">
         {/* Logo */}
         <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center gap-2 no-underline shrink-0">
           <img src="/opal-logo.png" alt="OPAL" className="h-9 w-9 object-contain" />
-          <span className="text-lg font-bold text-text-bright tracking-tight hidden sm:inline">OPAL</span>
+          <span className="text-lg font-bold text-text-bright tracking-tight hidden md:inline">OPAL</span>
         </a>
 
-        <div className="w-px h-5 bg-glass-border hidden md:block shrink-0" />
+        <div className="w-px h-5 bg-glass-border hidden lg:block shrink-0" />
 
         {/* CDM Selector */}
-        <div className="hidden md:block w-56 shrink-0">
+        <div className="hidden lg:block w-36 shrink-0">
           <Select
             placeholder={t('cdm.select_cdm')}
             value={selectedCdm}
@@ -181,61 +181,62 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
         </div>
 
         {/* Desktop Navigation — icon + short label for main items */}
-        <div className="hidden lg:flex items-center gap-1 flex-1 justify-center">
+        <div className="hidden lg:flex items-center gap-0 flex-1 justify-center min-w-0 overflow-hidden">
           {mainItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.key);
             const badge = routeBadges[item.key] || 0;
 
             return (
-              <button
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                className={`
-                  relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium
-                  transition-all duration-200 cursor-pointer bg-transparent border-none whitespace-nowrap
-                  ${active
-                    ? 'text-emerald-accent bg-emerald-accent/10'
-                    : 'text-text-dim hover:text-emerald-accent hover:bg-surface-light'
-                  }
-                `}
-              >
-                <span className="relative">
-                  <Icon className={`h-4 w-4 shrink-0 ${active ? 'drop-shadow-[0_0_6px_rgba(16,185,129,0.5)]' : ''}`} />
-                  <NotifDot count={badge} />
-                </span>
-                <span>{item.short}</span>
-                {active && (
-                  <span className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-emerald-accent shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
-                )}
-              </button>
+              <Tooltip key={item.key} title={item.short} placement="bottom">
+                <button
+                  onClick={() => navigate(item.key)}
+                  className={`
+                    relative flex items-center gap-1 px-1.5 py-1.5 rounded-lg text-[13px] font-medium
+                    transition-all duration-200 cursor-pointer bg-transparent border-none whitespace-nowrap shrink-0
+                    ${active
+                      ? 'text-emerald-accent bg-emerald-accent/10'
+                      : 'text-text-dim hover:text-emerald-accent hover:bg-surface-light'
+                    }
+                  `}
+                >
+                  <span className="relative">
+                    <Icon className={`h-4 w-4 shrink-0 ${active ? 'drop-shadow-[0_0_6px_rgba(16,185,129,0.5)]' : ''}`} />
+                    <NotifDot count={badge} />
+                  </span>
+                  <span className="hidden 2xl:inline">{item.short}</span>
+                  {active && (
+                    <span className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full bg-emerald-accent shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
+                  )}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
 
         {/* Right side: search + lang + user */}
-        <div className="flex items-center gap-2 shrink-0 ml-auto lg:ml-0">
+        <div className="flex items-center gap-1 shrink-0 ml-auto lg:ml-0">
           {/* Global Search */}
-          <div className="hidden lg:block w-44">
+          <div className="hidden 2xl:block w-44">
             <GlobalSearch selectedCdm={selectedCdm} />
           </div>
 
           {/* Language toggle */}
-          <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'}>
-            <button onClick={toggleLang} className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
+          <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="bottom">
+            <button onClick={toggleLang} className="hidden sm:block text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
               <Globe className="h-4 w-4" />
             </button>
           </Tooltip>
 
           {/* Theme toggle */}
-          <Tooltip title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
-            <button onClick={toggleTheme} className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
+          <Tooltip title={theme === 'dark' ? 'Light mode' : 'Dark mode'} placement="bottom">
+            <button onClick={toggleTheme} className="hidden sm:block text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
           </Tooltip>
 
           {/* Notification bell with ring animation on new notifs */}
-          <Tooltip title="Notifications">
+          <Tooltip title="Notifications" placement="bottom">
             <button
               onClick={() => setNotifCenterOpen(true)}
               className="relative text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5"
@@ -329,7 +330,7 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
       {/* Mobile Navigation Drawer — all items */}
       {mobileOpen && (
         <div className="lg:hidden mt-3 pt-3 border-t border-glass-border">
-          <div className="mb-3 md:hidden">
+          <div className="mb-3">
             <Select
               placeholder={t('cdm.select_cdm')}
               value={selectedCdm}
@@ -365,6 +366,16 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
                 </button>
               );
             })}
+          </div>
+          {/* Lang & theme toggles for small screens */}
+          <div className="flex items-center gap-3 mt-3 pt-3 border-t border-glass-border sm:hidden">
+            <button onClick={toggleLang} className="flex items-center gap-2 text-sm text-text-muted hover:text-emerald-accent cursor-pointer bg-transparent border-none">
+              <Globe className="h-4 w-4" /> {i18n.language === 'fr' ? 'Français' : 'English'}
+            </button>
+            <button onClick={toggleTheme} className="flex items-center gap-2 text-sm text-text-muted hover:text-emerald-accent cursor-pointer bg-transparent border-none">
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {theme === 'dark' ? 'Light' : 'Dark'}
+            </button>
           </div>
         </div>
       )}
