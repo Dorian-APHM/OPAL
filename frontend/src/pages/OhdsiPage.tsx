@@ -431,7 +431,10 @@ export default function OhdsiPage({ selectedCdm }: Props) {
 
         {/* File list */}
         {loadingFiles ? (
-          <div className="flex justify-center py-6"><Spinner /></div>
+          <div className="text-center py-6">
+            <Spinner />
+            <p className="text-sm text-text-muted mt-2">{t('ohdsi.loading_files', 'Loading files...')}</p>
+          </div>
         ) : files.length === 0 ? (
           <div className="text-center py-6 text-text-dim text-sm">{t('ohdsi.no_files')}</div>
         ) : (

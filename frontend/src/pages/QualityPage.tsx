@@ -149,7 +149,9 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
     try {
       await conformityApi.cancel(analysisId);
       toast.info(t('common.cancelled', 'Cancelled'));
-    } catch {}
+    } catch {
+      toast.error(t('common.error', 'An error occurred'));
+    }
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
     setRunning(false);
