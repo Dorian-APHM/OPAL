@@ -286,7 +286,16 @@
     "ref_loaded": "Loaded references",
     "ref_entries_loaded": "entries loaded",
     "ref_codes": "codes",
-    "ref_enriched": "suggestions enriched"
+    "ref_enriched": "suggestions enriched",
+    "write_confirm_title": "Confirmation required",
+    "write_confirm_cancel": "Cancel",
+    "write_confirm_submit": "Confirm write",
+    "write_confirm_message": "You will write <strong>{{count}} mappings</strong> to the <code>source_to_concept_map</code> table of CDM <strong>{{cdm}}</strong>.",
+    "write_confirm_impact": "This will impact <strong>{{rows}} rows</strong> and <strong>{{persons}} patients</strong>.",
+    "write_confirm_type_cdm": "To confirm, type the exact CDM name below:",
+    "write_confirm_mismatch": "CDM name does not match",
+    "write_warning": "This action will directly modify the source_to_concept_map table of the CDM. This operation is difficult to reverse.",
+    "export_stcm_instead": "Export as CSV (recommended)"
   },
   "common": {
     "save": "Save",

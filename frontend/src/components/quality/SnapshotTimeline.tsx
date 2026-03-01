@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useTranslation } from 'react-i18next';
 import { qualityApi } from '../../api/client';
 import useIsMobile from '../../hooks/useIsMobile';
+import { useChartTheme } from '../../hooks/useChartTheme';
 import { Card, Select, Empty, Spinner, Statistic, Tag } from '../ui';
 
 interface TimelinePoint {
@@ -26,6 +27,7 @@ const COLORS = ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444'
 
 export default function SnapshotTimeline({ selectedCdm }: Props) {
   const { t } = useTranslation();
+  const ct = useChartTheme();
   const isMobile = useIsMobile();
   const [timelines, setTimelines] = useState<Record<string, TimelinePoint[]>>({});
   const [loading, setLoading] = useState(false);
@@ -138,11 +140,11 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
       {chartData.length > 1 ? (
         <ResponsiveContainer width="100%" height={isMobile ? 200 : 300}>
           <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="date" />
-            <YAxis yAxisId="left" />
-            <YAxis yAxisId="right" orientation="right" domain={[0, 100]} />
-            <Tooltip />
+            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+            <XAxis dataKey="date" tick={{ fill: ct.axis }} stroke={ct.axis} />
+            <YAxis yAxisId="left" tick={{ fill: ct.axis }} stroke={ct.axis} />
+            <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fill: ct.axis }} stroke={ct.axis} />
+            <Tooltip contentStyle={ct.tooltipStyle} />
             <Legend />
             {(isDashboard || isPerson) && (
               <Line yAxisId="left" type="monotone" dataKey="total_persons" name={t('quality.total_persons')} stroke={COLORS[0]} strokeWidth={2} dot />
@@ -184,7 +186,7 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
                   <span className="font-semibold text-xs text-text-bright">{t(`domains.${dom}`, dom)}</span>
                   <ResponsiveContainer width="100%" height={40}>
                     <LineChart data={data}>
-                      <Line type="monotone" dataKey={mainMetric} stroke="#3B82F6" strokeWidth={1.5} dot={false} />
+                      <Line type="monotone" dataKey={mainMetric} stroke={ct.blue} strokeWidth={1.5} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </Card>
