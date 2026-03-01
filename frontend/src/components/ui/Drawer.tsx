@@ -44,7 +44,7 @@ export function Drawer({ open, onClose, title, children, width = 'max-w-md', pla
                 {title && (
                   <div className="flex items-center justify-between px-6 py-4 border-b border-glass-border shrink-0">
                     <DialogTitle className="text-base font-semibold text-text-bright">{title}</DialogTitle>
-                    <button onClick={onClose} className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none">
+                    <button onClick={onClose} aria-label="Close" className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none">
                       <X className="h-5 w-5" />
                     </button>
                   </div>

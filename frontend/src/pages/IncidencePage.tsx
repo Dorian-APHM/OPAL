@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
+import { useChartTheme } from '../hooks/useChartTheme';
 import { BarChart3, Calculator } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -13,6 +14,7 @@ import type { Column } from '../components/ui';
 export default function IncidencePage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const ct = useChartTheme();
   const [cohorts, setCohorts] = useSessionState<CohortSummary[]>('incidence:cohorts', []);
   const [targetId, setTargetId] = useSessionState<number | null>('incidence:targetId', null);
   const [outcomeId, setOutcomeId] = useSessionState<number | null>('incidence:outcomeId', null);
@@ -243,11 +245,11 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
                     label: Object.values(s.strata_values || {}).join(' / '),
                     rate: (s.incidence_rate || 0) * 1000,
                   }))}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" />
-                    <YAxis label={{ value: 'IR / 1000 PY', angle: -90, position: 'insideLeft' }} />
-                    <Tooltip />
-                    <Bar dataKey="rate" fill="#3B82F6" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                    <XAxis dataKey="label" stroke={ct.axis} />
+                    <YAxis label={{ value: 'IR / 1000 PY', angle: -90, position: 'insideLeft' }} stroke={ct.axis} />
+                    <Tooltip contentStyle={ct.tooltipStyle} />
+                    <Bar dataKey="rate" fill={ct.blue} />
                   </BarChart>
                 </ResponsiveContainer>
               </Card>
