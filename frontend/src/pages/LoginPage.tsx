@@ -43,16 +43,26 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-deep-base relative">
-      {/* Background glow */}
+    <div className="flex items-center justify-center min-h-screen bg-deep-base relative overflow-hidden">
+      {/* Background pattern — subtle grid */}
+      <div className="fixed inset-0 pointer-events-none opacity-[0.03]" style={{
+        backgroundImage: 'radial-gradient(circle, currentColor 1px, transparent 1px)',
+        backgroundSize: '32px 32px',
+      }} />
+      {/* Background glow — primary */}
       <div className="fixed top-[30%] left-1/2 w-[90vw] max-w-[600px] h-[400px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(16,185,129,0.12)_0%,transparent_70%)] pointer-events-none" />
+      {/* Background glow — secondary accent */}
+      <div className="fixed bottom-[10%] right-[10%] w-[300px] h-[300px] bg-[radial-gradient(ellipse,rgba(59,130,246,0.06)_0%,transparent_70%)] pointer-events-none" />
 
-      <Card className="w-full max-w-[460px] mx-4" hoverable={false}>
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center mb-3">
-            <img src="/opal-logo.svg" alt="OPAL" className="h-16 w-16 object-contain" />
+      <Card className="w-full max-w-[460px] mx-4 opal-card-accent" hoverable={false}>
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center mb-4">
+            <div className="relative">
+              <img src="/opal-logo.svg" alt="OPAL" className="h-20 w-20 object-contain relative z-10" />
+              <div className="absolute inset-0 bg-emerald-accent/10 rounded-full blur-xl scale-150" />
+            </div>
           </div>
-          <h2 className="text-2xl font-bold text-text-bright mb-1">OPAL</h2>
+          <h2 className="text-3xl font-bold text-text-bright mb-1.5 tracking-tight">OPAL</h2>
           <p className="text-sm text-text-muted">OMOP Platform for Analytics & Lineage</p>
         </div>
 

@@ -639,7 +639,7 @@ export default function QualityPage({ selectedCdm }: Props) {
 
           {/* Batch analysis */}
           <Card size="small">
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold text-text-bright">{t('quality.run_batch')}</span>
                 <button
