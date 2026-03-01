@@ -76,7 +76,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
 
       <Card size="small" className="mb-4">
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <span className="text-sm font-semibold text-text-bright block mb-1">
                 {t('estimation.target_cohort', 'Target Cohort')}
@@ -101,7 +101,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <span className="text-sm font-semibold text-text-bright block mb-1">
                 {t('estimation.time_unit', 'Time Unit')}
@@ -164,7 +164,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
       {result && !computing && (
         <>
           {/* Summary stats */}
-          <div className="grid grid-cols-4 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <Card size="small">
               <Statistic title="N" value={result.summary.n} />
             </Card>

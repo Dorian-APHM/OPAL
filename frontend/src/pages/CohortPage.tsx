@@ -359,22 +359,23 @@ export default function CohortPage({ selectedCdm }: Props) {
   }
 
   return (
-    <div className="h-[calc(100vh-60px)] flex flex-col">
+    <div className="min-h-[calc(100vh-60px)] lg:h-[calc(100vh-60px)] flex flex-col">
       {/* Header */}
       <Card size="small" className="mb-2" hoverable={false}>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             placeholder={t('cohort.cohort_name', 'Cohort name...')}
             value={cohortName}
             onChange={e => setCohortName(e.target.value)}
-            className="!w-[250px]"
+            className="w-full sm:!w-[250px]"
           />
           <Input
             placeholder={t('cohort.description', 'Description (optional)')}
             value={cohortDesc}
             onChange={e => setCohortDesc(e.target.value)}
-            className="flex-1"
+            className="flex-1 min-w-[150px]"
           />
+          <div className="flex items-center gap-2">
           <Button icon={<Plus className="h-3.5 w-3.5" />} size="small" onClick={handleNew}>
             {t('cohort.new', 'New')}
           </Button>
@@ -395,13 +396,14 @@ export default function CohortPage({ selectedCdm }: Props) {
               )}
             </span>
           </Button>
+          </div>
         </div>
       </Card>
 
       {/* Three-panel layout */}
-      <div className="grid grid-cols-12 gap-2 flex-1 overflow-hidden">
+      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-2 flex-1">
         {/* Left: Criteria Panel */}
-        <div className="col-span-2 h-full overflow-auto flex flex-col gap-1">
+        <div className="lg:col-span-2 h-full overflow-auto flex flex-col gap-1">
           {/* Inclusion / Exclusion toggle */}
           <div className="flex rounded-lg overflow-hidden border border-glass-border shrink-0">
             <button
@@ -432,7 +434,7 @@ export default function CohortPage({ selectedCdm }: Props) {
         </div>
 
         {/* Center: Tabs — Builder / Characterization */}
-        <div className="col-span-8 h-full overflow-auto">
+        <div className="lg:col-span-8 h-full overflow-auto">
           <Tabs
             activeKey={activeTab}
             onChange={setActiveTab}
@@ -612,7 +614,7 @@ export default function CohortPage({ selectedCdm }: Props) {
         </div>
 
         {/* Right: Results Panel */}
-        <div className="col-span-2 h-full overflow-auto">
+        <div className="lg:col-span-2 h-full overflow-auto">
           <ResultsPanel
             cdmName={selectedCdm}
             criteria={toBackendCriteria(criteria)}
