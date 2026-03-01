@@ -21,10 +21,32 @@ from modules.quality.domains.clinical import run_clinical_domain_analysis
 logger = logging.getLogger(__name__)
 
 
-def get_available_domains() -> list[str]:
-    """Return list of all available analysis domains."""
+def get_available_domains(conn=None, omop_schema: str = "omop_cdm") -> list[str]:
+    """Return list of available analysis domains.
+
+    If a CDM connection is provided, only include clinical domains whose
+    tables actually exist in the CDM schema. This avoids showing domains
+    like Specimen, Note, or Payer_Plan_Period when the CDM doesn't have them.
+    """
     domains = [DASHBOARD_DOMAIN_NAME, PERSON_DOMAIN_NAME, OBSERVATION_PERIOD_DOMAIN_NAME]
-    domains.extend(list(DOMAIN_CONFIG.keys()))
+    if conn:
+        try:
+            cur = conn.cursor()
+            for domain_name, cfg in DOMAIN_CONFIG.items():
+                table = cfg["table"]
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_name = %s LIMIT 1",
+                    (omop_schema, table),
+                )
+                if cur.fetchone():
+                    domains.append(domain_name)
+            cur.close()
+        except Exception:
+            # Fallback: return all domains
+            domains.extend(list(DOMAIN_CONFIG.keys()))
+    else:
+        domains.extend(list(DOMAIN_CONFIG.keys()))
     return domains
 
 

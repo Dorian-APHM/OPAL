@@ -25,7 +25,7 @@ from modules.mapping.suggest import suggest_mappings, suggest_batch
 from utils.csv_safety import csv_safe
 from utils.sql_safety import safe_identifier
 from utils.rate_limit import limiter
-from utils.cdm_helper import check_cdm_access
+from utils.cdm_helper import check_cdm_access, get_domain_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
@@ -293,7 +293,7 @@ def list_unmapped(
 
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[domain]
+    cfg = get_domain_config(conn, schema, domain)
     table = safe_identifier(cfg["table"])
     sv_col = safe_identifier(cfg["source_value"])
     concept_col = safe_identifier(cfg["concept_id"])
@@ -377,7 +377,7 @@ def export_unmapped(
 
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[domain]
+    cfg = get_domain_config(conn, schema, domain)
     table = safe_identifier(cfg["table"])
     sv_col = safe_identifier(cfg["source_value"])
     concept_col = safe_identifier(cfg["concept_id"])
@@ -569,7 +569,7 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     # Gather all data needed by the worker while we still have the DB session
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[req.domain]
+    cfg = get_domain_config(conn, schema, req.domain)
     approved_svs = [
         r[0] for r in
         db.query(MappingDecision.source_value)
@@ -978,7 +978,7 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[req.domain]
+    cfg = get_domain_config(conn, schema, req.domain)
     table = safe_identifier(cfg["table"])
     full_table = f"{schema}.{table}"
     sv_col = safe_identifier(cfg["source_value"])

@@ -340,8 +340,8 @@ export default function QualityPage({ selectedCdm }: Props) {
   }, []);
 
   useEffect(() => {
-    qualityApi.domains().then((res) => setDomains(res.data.domains));
-  }, []);
+    qualityApi.domains(selectedCdm || undefined).then((res) => setDomains(res.data.domains));
+  }, [selectedCdm]);
 
   useEffect(() => {
     if (!selectedCdm) { setAnalyzedDomains(new Set()); return; }
