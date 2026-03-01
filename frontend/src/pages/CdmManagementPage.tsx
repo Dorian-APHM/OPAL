@@ -387,7 +387,7 @@ export default function CdmManagementPage() {
               <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.host')}</label>
               <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} />
             </div>
-            <div className="w-32">
+            <div className="w-full md:w-32">
               <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')}</label>
               <NumberInput value={dbPort ?? undefined} onChange={(v) => setDbPort(v)} min={1} max={65535} />
             </div>
@@ -486,7 +486,7 @@ export default function CdmManagementPage() {
             value={accessCdm}
             onChange={(v) => setAccessCdm(v || null)}
             placeholder="Select CDM..."
-            className="w-64"
+            className="w-full md:w-64"
           />
 
           {grantMode === 'user' ? (
@@ -496,7 +496,7 @@ export default function CdmManagementPage() {
               value={accessUser}
               onChange={(v) => setAccessUser(v || null)}
               placeholder="Select user..."
-              className="w-64"
+              className="w-full md:w-64"
             />
           ) : (
             <Select
@@ -509,7 +509,7 @@ export default function CdmManagementPage() {
               value={accessGroup}
               onChange={(v) => setAccessGroup(v || null)}
               placeholder="Select group..."
-              className="w-64"
+              className="w-full md:w-64"
             />
           )}
 

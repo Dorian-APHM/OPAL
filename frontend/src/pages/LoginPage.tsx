@@ -45,9 +45,9 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
   return (
     <div className="flex items-center justify-center min-h-screen bg-deep-base relative">
       {/* Background glow */}
-      <div className="fixed top-[30%] left-1/2 w-[600px] h-[400px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(16,185,129,0.12)_0%,transparent_70%)] pointer-events-none" />
+      <div className="fixed top-[30%] left-1/2 w-[90vw] max-w-[600px] h-[400px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(16,185,129,0.12)_0%,transparent_70%)] pointer-events-none" />
 
-      <Card className="w-[460px]" hoverable={false}>
+      <Card className="w-full max-w-[460px] mx-4" hoverable={false}>
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center mb-3">
             <img src="/opal-logo.png" alt="OPAL" className="h-16 w-16 object-contain" />
