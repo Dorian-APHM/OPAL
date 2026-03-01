@@ -117,8 +117,8 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) return;
-    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains)).catch(() => {});
-    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies)).catch(() => {});
+    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load domains')));
+    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load vocabularies')));
   }, [selectedCdm]);
 
   const doSearch = useCallback(async (p: number = 1) => {
@@ -142,7 +142,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         setCountsLoading(true);
         conceptApi.counts(selectedCdm, ids)
           .then(cRes => { if (!ctrl.signal.aborted) setConceptCounts(cRes.data.counts); })
-          .catch(() => {})
+          .catch(() => toast.error(t('concepts.counts_failed', 'Failed to load concept counts')))
           .finally(() => { if (!ctrl.signal.aborted) setCountsLoading(false); });
       } else {
         setConceptCounts({});

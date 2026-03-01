@@ -863,7 +863,7 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
     cohortApi.sqlSchema(cdmName).then(res => {
       setSchema(res.data.tables);
       setSchemaName(res.data.schema);
-    }).catch(() => {});
+    }).catch(() => toast.error(t('cohort.schema_failed', 'Failed to load SQL schema')));
   }, [cdmName]);
 
   const handleExecute = async () => {
