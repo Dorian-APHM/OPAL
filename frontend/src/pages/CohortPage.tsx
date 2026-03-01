@@ -799,15 +799,15 @@ export default function CohortPage({ selectedCdm }: Props) {
                 <ul className="divide-y divide-border-subtle">
                   {shareInfo.shares.map((s, i) => (
                     <li key={i} className="py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
                         {s.type === 'user' ? (
-                          <User className="h-3.5 w-3.5 text-text-muted" />
+                          <User className="h-3.5 w-3.5 text-text-muted flex-shrink-0" />
                         ) : (
-                          <Users className="h-3.5 w-3.5 text-text-muted" />
+                          <Users className="h-3.5 w-3.5 text-text-muted flex-shrink-0" />
                         )}
-                        <span className="text-sm text-text-bright">{s.target}</span>
+                        <span className="text-sm text-text-bright truncate">{s.target}</span>
                         <Tag>{s.type}</Tag>
-                        <span className="text-xs text-text-dim">
+                        <span className="text-xs text-text-dim truncate">
                           {t('cohort.shared_by', 'by')} {s.shared_by}
                         </span>
                       </div>

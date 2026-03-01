@@ -379,7 +379,7 @@ export default function CdmManagementPage() {
       <Card title={t('cdm.register')} className="mb-6">
         <div className="max-w-xl space-y-4">
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.name')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.name')} <span className="text-red-400">*</span></label>
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="flex items-start gap-4">
@@ -388,7 +388,7 @@ export default function CdmManagementPage() {
               <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} required />
             </div>
             <div className="w-full md:w-32">
-              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')}</label>
+              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')} <span className="text-red-400">*</span></label>
               <NumberInput value={dbPort ?? undefined} onChange={(v) => setDbPort(v)} min={1} max={65535} />
             </div>
           </div>
@@ -401,11 +401,10 @@ export default function CdmManagementPage() {
             <Input value={dbUser} onChange={(e) => setDbUser(e.target.value)} required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.password')}</label>
-            <Input type="password" value={dbPassword} onChange={(e) => setDbPassword(e.target.value)} />
+            <Input label={t('cdm.password')} type="password" value={dbPassword} onChange={(e) => setDbPassword(e.target.value)} required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.schema')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.schema')} <span className="text-red-400">*</span></label>
             <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
           </div>
           <div className="flex items-center gap-2">
