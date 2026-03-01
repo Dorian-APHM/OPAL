@@ -29,7 +29,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
 
   useEffect(() => {
     if (!selectedCdm) return;
-    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => {});
+    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => toast.error(t('common.error', 'Failed to load cohorts')));
   }, [selectedCdm]);
 
   const compute = async () => {

@@ -96,7 +96,7 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
           setAnalysisId(null);
         }
       })
-      .catch(() => {});
+      .catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
 
     return () => {
       mountedRef.current = false;
@@ -342,8 +342,8 @@ export default function QualityPage({ selectedCdm }: Props) {
   }, []);
 
   useEffect(() => {
-    qualityApi.domains().then((res) => setDomains(res.data.domains));
-  }, []);
+    qualityApi.domains(selectedCdm || undefined).then((res) => setDomains(res.data.domains));
+  }, [selectedCdm]);
 
   useEffect(() => {
     if (!selectedCdm) { setAnalyzedDomains(new Set()); return; }
@@ -373,7 +373,7 @@ export default function QualityPage({ selectedCdm }: Props) {
           startBatchPolling(active.analysis_id, active.domains);
         }
       })
-      .catch(() => {});
+      .catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
   }, [selectedCdm]);
 
   // Poll for batch analysis completion when we've reconnected
@@ -410,7 +410,7 @@ export default function QualityPage({ selectedCdm }: Props) {
             if (selectedCdm) {
               qualityApi.timeline(selectedCdm).then((r) => {
                 if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines)));
-              }).catch(() => {});
+              }).catch(() => toast.error(t('quality.timeline_failed', 'Failed to refresh timeline')));
             }
             // Reload current snapshot if viewing an analyzed domain
             if (selectedDomain) {
@@ -419,7 +419,7 @@ export default function QualityPage({ selectedCdm }: Props) {
             }
           }
         })
-        .catch(() => {});
+        .catch(() => {}); // polling — silent
     }, 2000);
   }, [selectedCdm, selectedDomain, t, toast]);
 

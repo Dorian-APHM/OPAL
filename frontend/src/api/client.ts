@@ -211,7 +211,7 @@ export const cdmApi = {
 
 // Quality endpoints
 export const qualityApi = {
-  domains: () => api.get<{ domains: string[] }>('/quality/domains'),
+  domains: (cdmName?: string) => api.get<{ domains: string[] }>('/quality/domains', { params: cdmName ? { cdm_name: cdmName } : {} }),
   analyze: (cdmName: string, domain: string) =>
     api.post('/quality/analyze', { cdm_name: cdmName, domain }),
   analyzeBatch: (cdmName: string, domains: string[]) =>
