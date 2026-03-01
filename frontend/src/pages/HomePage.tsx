@@ -147,7 +147,7 @@ export default function HomePage({ selectedCdm }: Props) {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <div className="py-3 flex flex-col" style={{ height: 'calc(100vh - 56px - 16px)' }}>
+    <div className="py-3 flex flex-col overflow-y-auto" style={{ height: 'calc(100vh - 56px - 16px)' }}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-3 flex-shrink-0">
         <LayoutDashboard className="h-6 w-6 text-emerald-accent" />
@@ -208,13 +208,13 @@ export default function HomePage({ selectedCdm }: Props) {
           )}
 
           {/* Main content: 2 columns — capped height so overview breathes */}
-          <FadeIn delay={0.15} className="grid grid-cols-1 md:grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0', maxHeight: 'calc(100vh - 56px - 16px - 160px)' }}>
+          <FadeIn delay={0.15} className="grid grid-cols-1 md:grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0' }}>
             {/* Left column: Recent Cohorts + Favorites */}
             <div className="flex flex-col gap-2 min-h-0">
               <Card
                 size="small"
                 className="flex flex-col overflow-hidden flex-1 min-h-0"
-                bodyClassName="!p-3 !pt-2"
+                bodyClassName="!p-3 !pt-2 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Users className="h-4 w-4 text-emerald-accent" />
@@ -241,8 +241,8 @@ export default function HomePage({ selectedCdm }: Props) {
                         className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
                         onClick={() => navigate('/cohorts', { state: { openCohortId: c.id } })}
                       >
-                        <div>
-                          <div className="text-sm font-medium text-text-bright">{c.name}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-text-bright truncate">{c.name}</div>
                           <div className="flex items-center gap-1.5 text-xs text-text-dim">
                             <Clock className="h-3 w-3" />
                             <span>v{c.latest_version}</span>
@@ -260,7 +260,7 @@ export default function HomePage({ selectedCdm }: Props) {
               <Card
                 size="small"
                 className="flex flex-col overflow-hidden flex-1 min-h-0"
-                bodyClassName="!p-3 !pt-2"
+                bodyClassName="!p-3 !pt-2 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Star className="h-4 w-4 text-yellow-400" />
@@ -278,14 +278,14 @@ export default function HomePage({ selectedCdm }: Props) {
                         className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
                         onClick={() => navigateToFavorite(f)}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-text-dim">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <span className="text-text-dim flex-shrink-0">
                             {f.item_type === 'cohort' ? <Users className="h-4 w-4" /> :
                              f.item_type === 'query' ? <Code className="h-4 w-4" /> :
                              <Heart className="h-4 w-4" />}
                           </span>
-                          <div>
-                            <div className="text-sm font-medium text-text-bright">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-text-bright truncate">
                               {f.item_label || f.item_id}
                             </div>
                             <span className="text-xs text-text-dim">{f.item_type}</span>
@@ -340,7 +340,7 @@ export default function HomePage({ selectedCdm }: Props) {
               <Card
                 size="small"
                 className="flex flex-col overflow-hidden flex-1 min-h-0"
-                bodyClassName="!p-3 !pt-2"
+                bodyClassName="!p-3 !pt-2 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Bell className="h-4 w-4 text-emerald-accent" />
