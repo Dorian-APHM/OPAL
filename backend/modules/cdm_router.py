@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 CDM management API endpoints — CRUD for CDM connections.
 """
@@ -18,6 +20,7 @@ from db.omop_connector import test_omop_connection, invalidate_pool
 from utils.crypto import encrypt_password, decrypt_password
 from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA
+from utils.rate_limit import limiter
 
 router = APIRouter(prefix="/api/cdm", tags=["cdm"])
 
@@ -189,7 +192,8 @@ def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(ge
 
 
 @router.post("/test")
-def test_connection(req: CdmTestRequest):
+@limiter.limit("5/minute")
+def test_connection(req: CdmTestRequest, request: Request):
     """Test a CDM database connection without saving it."""
     result = test_omop_connection(req.db_host, req.db_port, req.db_name, req.db_user, req.db_password)
     if not result["success"]:
@@ -198,7 +202,8 @@ def test_connection(req: CdmTestRequest):
 
 
 @router.post("/{cdm_name}/test")
-def test_saved_connection(cdm_name: str, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def test_saved_connection(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     """Test connectivity of a saved CDM."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
     if not cdm:
