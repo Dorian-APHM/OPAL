@@ -87,7 +87,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         setResultsSchema(res.data.omop_schema);
         setVocabSchema(res.data.omop_schema);
       }
-    }).catch(() => {});
+    }).catch(() => toast.error('Failed to load CDM settings'));
     setCdmSourceName(selectedCdm);
   }, [selectedCdm]);
 
@@ -201,7 +201,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         if (status === 'running') {
           startSSE(key);
         }
-      }).catch(() => {});
+      }).catch(() => toast.error(`Failed to recover logs for ${key}`));
     });
     return () => {
       // Cleanup SSE connections on unmount

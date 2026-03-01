@@ -92,6 +92,7 @@ export default function MappingPage({ selectedCdm }: Props) {
 
 function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const ct = useChartTheme();
   const [data, setData] = useState<MappingDomainStat[]>([]);
   const [decisions, setDecisions] = useState<Record<string, number>>({});
@@ -105,7 +106,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
     setLoading(true);
     mappingApi.dashboard(cdmName)
       .then(r => { setData(r.data.domains); setDecisions(r.data.decisions_summary); })
-      .catch(() => {})
+      .catch(() => toast.error(t('mapping.load_failed', 'Failed to load mapping dashboard')))
       .finally(() => setLoading(false));
   }, [cdmName]);
 
@@ -341,6 +342,8 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const toast = useToast();
   const [domain, setDomain] = useSessionState('mapping:suggest:domain', 'Condition');
   const [results, setResults] = useSessionState<SuggestionResult[]>('mapping:suggest:results', []);
+  const [suggestWarnings, setSuggestWarnings] = useSessionState<string[]>('mapping:suggest:warnings', []);
+  const [hasRun, setHasRun] = useSessionState('mapping:suggest:hasRun', false);
   const [loading, setLoading] = useSessionState('mapping:suggest:loading', false);
   const [taskId, setTaskId] = useSessionState<string | null>('mapping:suggest:taskId', null);
   const [limit, setLimit] = useSessionState('mapping:suggest:limit', 20);
@@ -360,12 +363,29 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         .then(res => {
           if (!mountedRef.current) return;
           if (res.data.status === 'done') {
-            setResults(res.data.results || []);
+            const r = res.data.results || [];
+            const w: string[] = res.data.warnings || [];
+            setResults(r);
+            setSuggestWarnings(w);
             setLoading(false);
             setTaskId(null);
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
-            toast.success(t('common.success'));
+            if (r.length > 0) {
+              toast.success(t('mapping.suggestions_found', '{{count}} terms with suggestions', { count: r.length }));
+            } else {
+              toast.info(t('mapping.no_unmapped_found', 'No unmapped terms found for this domain'));
+            }
+            // Show warnings about limited strategies
+            if (w.includes('source_name_missing')) {
+              toast.warning(t('mapping.warn_no_source_name', 'No source_name column — relationship/ingredient/keyword strategies disabled'));
+            }
+            if (w.includes('no_reference_codebook')) {
+              toast.warning(t('mapping.warn_no_ref', 'No reference codebook uploaded — code descriptions unavailable'));
+            }
+            if (w.includes('no_sapbert_embeddings')) {
+              toast.warning(t('mapping.warn_no_sapbert', 'No SapBERT embeddings — semantic matching disabled'));
+            }
           } else if (res.data.status === 'error') {
             toast.error(res.data.error || t('common.error'));
             setLoading(false);
@@ -411,7 +431,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
             startPolling(active.task_id);
           }
         })
-        .catch(() => {});
+        .catch(() => toast.error(t('mapping.load_failed', 'Failed to check suggestion status')));
     }
 
     return () => {
@@ -438,6 +458,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const runBatch = () => {
     setLoading(true);
     setResults([]);
+    setHasRun(true);
     mappingApi.suggestBatch(cdmName, domain, limit, {
       enable_fuzzy: enableFuzzy,
       enable_keyword: enableKeyword,
@@ -598,13 +619,39 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         </div>
       </Card>
 
+      {suggestWarnings.length > 0 && !loading && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setSuggestWarnings([])}
+          className="mb-3"
+          message={
+            <div className="space-y-1">
+              {suggestWarnings.includes('source_name_missing') && (
+                <div>{t('mapping.warn_no_source_name', 'No source_name column found — relationship, ingredient, and keyword strategies are disabled. Only exact match and fuzzy search are available.')}</div>
+              )}
+              {suggestWarnings.includes('no_reference_codebook') && (
+                <div>{t('mapping.warn_no_ref', 'No reference codebook uploaded for this domain — code descriptions are unavailable. Upload one in the Reference tab to improve suggestions.')}</div>
+              )}
+              {suggestWarnings.includes('no_sapbert_embeddings') && (
+                <div>{t('mapping.warn_no_sapbert', 'No SapBERT embeddings available — semantic matching is disabled.')}</div>
+              )}
+            </div>
+          }
+        />
+      )}
+
       {loading ? (
         <div className="text-center py-10">
           <Spinner size="large" />
           <p className="text-sm text-text-muted mt-4">{t('mapping.loading_suggestions', 'Generating suggestions...')}</p>
         </div>
       ) : results.length === 0 ? (
-        <Empty description={t('mapping.no_suggestions', 'Click Generate to get mapping suggestions')} />
+        <Empty description={hasRun
+          ? t('mapping.all_mapped', 'No unmapped terms found — all source values in this domain are already mapped.')
+          : t('mapping.no_suggestions', 'Click Generate to get mapping suggestions')
+        } />
       ) : (
         <div className="flex flex-col gap-2">
           {results.map(r => (
@@ -779,7 +826,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       if (search.trim()) {
         mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
           .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
-          .catch(() => {});
+          .catch(() => toast.error(t('mapping.refresh_failed', 'Failed to refresh results')));
       }
     } catch (e: any) {
       toast.error(e.response?.data?.detail || t('mapping.decision_failed', 'Decision failed'));

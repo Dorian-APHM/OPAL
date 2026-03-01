@@ -58,8 +58,8 @@ export default function HomePage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     setLoading(true);
     Promise.all([
-      cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts.slice(0, 5))).catch(() => {}),
-      favoritesApi.list().then(r => setFavorites(r.data.favorites)).catch(() => {}),
+      cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts.slice(0, 5))).catch(() => toast.error(t('dashboard.load_failed', 'Failed to load cohorts'))),
+      favoritesApi.list().then(r => setFavorites(r.data.favorites)).catch(() => toast.error(t('dashboard.load_failed', 'Failed to load favorites'))),
       qualityApi.getLatestSnapshot(selectedCdm, 'Dashboard')
         .then(r => setQualitySummary(r.data.results))
         .catch(() => setQualitySummary(null)),

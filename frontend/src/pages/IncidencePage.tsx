@@ -27,7 +27,7 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
 
   useEffect(() => {
     if (!selectedCdm) return;
-    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => {});
+    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => toast.error(t('common.error', 'Failed to load cohorts')));
   }, [selectedCdm]);
 
   const compute = async () => {
