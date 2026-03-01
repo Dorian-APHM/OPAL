@@ -121,7 +121,12 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       .catch(() => setStrategyData([]));
   }, [cdmName, strategyDomain]);
 
-  if (loading) return <Spinner />;
+  if (loading) return (
+    <div className="text-center py-16">
+      <Spinner size="large" />
+      <p className="text-sm text-text-muted mt-4">{t('mapping.loading', 'Loading mapping dashboard...')}</p>
+    </div>
+  );
 
   const totalTerms = data.reduce((s, d) => s + d.total_terms, 0);
   const mappedTerms = data.reduce((s, d) => s + d.mapped_terms, 0);
@@ -593,7 +598,12 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         </div>
       </Card>
 
-      {loading ? <Spinner /> : results.length === 0 ? (
+      {loading ? (
+        <div className="text-center py-10">
+          <Spinner size="large" />
+          <p className="text-sm text-text-muted mt-4">{t('mapping.loading_suggestions', 'Generating suggestions...')}</p>
+        </div>
+      ) : results.length === 0 ? (
         <Empty description={t('mapping.no_suggestions', 'Click Generate to get mapping suggestions')} />
       ) : (
         <div className="flex flex-col gap-2">
@@ -722,7 +732,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     setConceptError('');
     mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
       .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
-      .catch(() => { setSearchResults([]); setSearchTotal(0); })
+      .catch(() => { setSearchResults([]); setSearchTotal(0); toast.error(t('common.error', 'An error occurred')); })
       .finally(() => setSearchLoading(false));
   }, [cdmName, domain, search]);
 
