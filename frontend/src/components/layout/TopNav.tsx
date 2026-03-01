@@ -161,9 +161,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
     <nav className="glass-nav fixed top-0 left-0 right-0 z-50 px-3 lg:px-4 py-2">
       <div className="mx-auto flex items-center gap-2 lg:gap-3 max-w-[1920px]">
         {/* Logo */}
-        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center gap-2 no-underline shrink-0">
-          <img src="/opal-logo.svg" alt="OPAL" className="h-9 w-9 object-contain" />
-          <span className="text-lg font-bold text-text-bright tracking-tight hidden md:inline">OPAL</span>
+        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center no-underline shrink-0">
+          <img src="/opal-logo.svg" alt="OPAL" className="h-9 w-auto object-contain" />
         </a>
 
         <div className="w-px h-5 bg-glass-border hidden lg:block shrink-0" />

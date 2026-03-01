@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, TextArea, NumberInput,
-  Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, useToast,
+  Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, Alert, useToast,
 } from '../components/ui';
 import type { TabItem, Column } from '../components/ui';
 import {
@@ -364,7 +364,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
           if (!mountedRef.current) return;
           if (res.data.status === 'done') {
             const r = res.data.results || [];
-            const w: string[] = res.data.warnings || [];
+            const w: string[] = (res.data as any).warnings || [];
             setResults(r);
             setSuggestWarnings(w);
             setLoading(false);
@@ -1236,10 +1236,10 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             }
           >
             <div className="mb-4">
-              <span className="text-text-bright" dangerouslySetInnerHTML={{ __html: t('mapping.write_confirm_message', { count: applyPreview.total_decisions, cdm: cdmName }) }} />
+              <span className="text-text-bright">{t('mapping.write_confirm_message_pre', 'You will write')} <strong>{applyPreview.total_decisions} {t('mapping.write_confirm_message_mappings', 'mappings')}</strong> {t('mapping.write_confirm_message_mid', 'to the')} <code>source_to_concept_map</code> {t('mapping.write_confirm_message_post', 'table of CDM')} <strong>{cdmName}</strong>.</span>
             </div>
             <div className="mb-4">
-              <span className="text-text-bright" dangerouslySetInnerHTML={{ __html: t('mapping.write_confirm_impact', { rows: applyPreview.impacted_rows.toLocaleString(), persons: applyPreview.impacted_persons.toLocaleString() }) }} />
+              <span className="text-text-bright">{t('mapping.write_confirm_impact_pre', 'This will impact')} <strong>{applyPreview.impacted_rows.toLocaleString()} {t('mapping.write_confirm_impact_rows', 'rows')}</strong> {t('mapping.write_confirm_impact_mid', 'and')} <strong>{applyPreview.impacted_persons.toLocaleString()} {t('mapping.write_confirm_impact_patients', 'patients')}</strong>.</span>
             </div>
             <div className="bg-yellow-500/10 border border-yellow-500/25 rounded px-3 py-2 mb-4">
               <span className="text-yellow-400 text-xs">{t('mapping.write_confirm_type_cdm')}</span>
