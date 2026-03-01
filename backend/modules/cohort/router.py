@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Cohort module API endpoints.
 
@@ -865,6 +867,7 @@ def get_sql_schema(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.post("/sql/execute")
+@limiter.limit("10/minute")
 def execute_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(get_db)):
     """
     Execute a raw read-only SQL query against a CDM.

@@ -44,7 +44,7 @@ if SECRET_KEY in _INSECURE_KEYS:
     )
     if not SECRET_KEY:
         SECRET_KEY = "change-me-in-production"
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 
 if ENVIRONMENT == "production" and not AUTH_ENABLED:
     raise RuntimeError(
