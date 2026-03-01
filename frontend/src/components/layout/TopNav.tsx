@@ -27,7 +27,7 @@ const mainNav = [
   { key: '/', icon: Home, labelKey: 'app.home', labelDefault: 'Home', short: 'Home' },
   { key: '/quality', icon: LayoutDashboard, labelKey: 'app.quality', short: 'Quality' },
   { key: '/cohorts', icon: Users, labelKey: 'app.cohorts', short: 'Cohorts' },
-  { key: '/data-management', icon: HardDrive, labelKey: 'app.data_management', labelDefault: 'Data', short: 'Data' },
+  { key: '/data-management', icon: HardDrive, labelKey: 'app.data_management', labelDefault: 'Data Export', short: 'Data Export' },
   { key: '/mapping', icon: GitCompareArrows, labelKey: 'app.mapping', short: 'Mapping' },
   { key: '/concepts', icon: BookOpen, labelKey: 'app.concepts', short: 'Concepts' },
   { key: '/ohdsi', icon: FlaskConical, labelKey: 'app.ohdsi', labelDefault: 'OHDSI', short: 'OHDSI' },
@@ -162,7 +162,7 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
       <div className="mx-auto flex items-center gap-2 lg:gap-3 max-w-[1920px]">
         {/* Logo */}
         <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center gap-2 no-underline shrink-0">
-          <img src="/opal-logo.png" alt="OPAL" className="h-9 w-9 object-contain" />
+          <img src="/opal-logo.svg" alt="OPAL" className="h-9 w-9 object-contain" />
           <span className="text-lg font-bold text-text-bright tracking-tight hidden md:inline">OPAL</span>
         </a>
 
@@ -181,7 +181,7 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
         </div>
 
         {/* Desktop Navigation — icon + short label for main items */}
-        <div className="hidden lg:flex items-center gap-0 flex-1 justify-center min-w-0 overflow-hidden">
+        <div className="hidden lg:flex items-center gap-0 flex-1 justify-center min-w-0">
           {mainItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.key);
