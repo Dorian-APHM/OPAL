@@ -209,7 +209,7 @@ code, pre, .opal-mono {
 [data-theme="light"],
 [data-theme="light"] html,
 [data-theme="light"] body {
-  background: #EDE7D9 !important;
+  background: #D5CDBC !important;
   color: #2D3B1E;
 }
 
@@ -240,7 +240,7 @@ code, pre, .opal-mono {
   background: rgba(143, 174, 107, 0.45);
 }
 [data-theme="light"] ::-webkit-scrollbar-track {
-  background: #EDE7D9;
+  background: #D5CDBC;
 }
 
 [data-theme="light"] :focus-visible {
@@ -330,16 +330,16 @@ code, pre, .opal-mono {
 
 /* ── Light: card shadows ───────────────────────────────── */
 [data-theme="light"] .opal-card-shadow {
-  box-shadow: 3px 3px 10px #CFC8B6, -2px -2px 6px #E8E2D3;
+  box-shadow: 3px 3px 10px #B8AF99, -2px -2px 6px #DDD6C7;
 }
 [data-theme="light"] .opal-card-hoverable:hover {
-  box-shadow: 4px 4px 16px #C5BEAC, -3px -3px 8px #E8E2D3, 0 0 20px rgba(143, 174, 107, 0.10);
+  box-shadow: 4px 4px 16px #C5BEAC, -3px -3px 8px #DDD6C7, 0 0 20px rgba(143, 174, 107, 0.10);
 }
 
 /* ── Light: Tailwind color overrides for inline emerald/shadow ─ */
 /* Neumorphic shadows → soft cream shadows */
 [data-theme="light"] .shadow-\[10px_10px_20px_\#080b13\2c -5px_-5px_15px_\#1c2539\] {
-  box-shadow: 3px 3px 10px #CFC8B6, -2px -2px 6px #E8E2D3 !important;
+  box-shadow: 3px 3px 10px #B8AF99, -2px -2px 6px #DDD6C7 !important;
 }
 [data-theme="light"] .shadow-\[2px_0_12px_rgba\(0\2c 0\2c 0\2c 0\.3\)\] {
   box-shadow: 2px 0 12px rgba(45, 59, 30, 0.06) !important;
