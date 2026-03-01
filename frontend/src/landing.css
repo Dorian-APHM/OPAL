@@ -158,11 +158,11 @@ body {
    Activated via data-theme="light" on <html>.
    ═══════════════════════════════════════════════════════════ */
 [data-theme="light"] {
-  /* Core surfaces — saturated cream, clearly not white */
-  --color-deep-base: #EDE7D9;
-  --color-surface: #E0D9C8;
-  --color-surface-light: #E8E2D3;
-  --color-surface-dark: #CFC8B6;
+  /* Core surfaces — warmer, more contrast between bg and cards */
+  --color-deep-base: #D5CDBC;
+  --color-surface: #C8BFA9;
+  --color-surface-light: #DDD6C7;
+  --color-surface-dark: #B8AF99;
 
   /* Brand — sage green */
   --color-emerald-accent: #8FAE6B;
@@ -181,7 +181,7 @@ body {
   --color-border-glow: rgba(143, 174, 107, 0.30);
 
   /* Glass */
-  --color-glass-bg: rgba(237, 231, 217, 0.85);
+  --color-glass-bg: rgba(213, 205, 188, 0.85);
   --color-glass-border: rgba(45, 59, 30, 0.12);
 }
 

@@ -50,7 +50,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
       <Card className="w-full max-w-[460px] mx-4" hoverable={false}>
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center mb-3">
-            <img src="/opal-logo.png" alt="OPAL" className="h-16 w-16 object-contain" />
+            <img src="/opal-logo.svg" alt="OPAL" className="h-16 w-16 object-contain" />
           </div>
           <h2 className="text-2xl font-bold text-text-bright mb-1">OPAL</h2>
           <p className="text-sm text-text-muted">OMOP Platform for Analytics & Lineage</p>
