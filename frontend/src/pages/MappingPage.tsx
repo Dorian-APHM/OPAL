@@ -15,6 +15,7 @@ import {
   ResponsiveContainer, LineChart, Line, Legend,
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
+import { useChartTheme } from '../hooks/useChartTheme';
 import { useAuth } from '../auth/KeycloakContext';
 import { useNotifDots } from '../hooks/useNotifDots';
 import type {
@@ -91,6 +92,7 @@ export default function MappingPage({ selectedCdm }: Props) {
 
 function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   const { t } = useTranslation();
+  const ct = useChartTheme();
   const [data, setData] = useState<MappingDomainStat[]>([]);
   const [decisions, setDecisions] = useState<Record<string, number>>({});
   const [evolution, setEvolution] = useState<MappingEvolutionPoint[]>([]);
@@ -155,13 +157,13 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       <Card title={t('mapping.rates_by_domain', 'Mapping Rates by Domain')} className="mb-4">
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="domain" stroke="#64748b" />
-            <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke="#64748b" />
-            <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+            <XAxis dataKey="domain" stroke={ct.axis} />
+            <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+            <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
             <Legend />
-            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill="#3B82F6" />
-            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill="#10B981" />
+            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill={ct.blue} />
+            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill={ct.emerald} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -170,11 +172,11 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       <Card title={t('mapping.unmapped_volume', 'Unmapped Volume (by records)')} className="mb-4">
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="domain" stroke="#64748b" />
-            <YAxis stroke="#64748b" />
-            <RechartsTooltip formatter={(v: number) => v.toLocaleString()} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
-            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill="#ef4444" />
+            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+            <XAxis dataKey="domain" stroke={ct.axis} />
+            <YAxis stroke={ct.axis} />
+            <RechartsTooltip formatter={(v: number) => v.toLocaleString()} contentStyle={ct.tooltipStyle} />
+            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill={ct.red} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -196,13 +198,13 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
         {evolution.length > 0 ? (
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={evolution}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="version" label={{ value: 'Version', position: 'insideBottom', offset: -5 }} stroke="#64748b" />
-              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke="#64748b" />
-              <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+              <XAxis dataKey="version" label={{ value: 'Version', position: 'insideBottom', offset: -5 }} stroke={ct.axis} />
+              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+              <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
               <Legend />
-              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke="#3B82F6" strokeWidth={2} />
-              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke="#10B981" strokeWidth={2} />
+              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke={ct.blue} strokeWidth={2} />
+              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke={ct.emerald} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
@@ -229,14 +231,14 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
           <>
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={strategyData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} stroke="#64748b" />
-                <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} stroke="#64748b" />
-                <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+                <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} stroke={ct.axis} />
+                <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
                 <Legend />
-                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill="#10B981" stackId="a" />
-                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill="#f59e0b" stackId="a" />
-                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill="#ef4444" stackId="a" />
+                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill={ct.emerald} stackId="a" />
+                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill={ct.orange} stackId="a" />
+                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill={ct.red} stackId="a" />
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3">
@@ -1128,7 +1130,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-red-400" />
               <span className="font-semibold text-red-400">
-                {t('mapping.write_warning', 'Cette action va modifier directement la table source_to_concept_map du CDM. Cette opération est difficilement réversible.')}
+                {t('mapping.write_warning', 'This action will directly modify the source_to_concept_map table of the CDM. This operation is difficult to reverse.')}
               </span>
             </div>
           </div>
@@ -1144,7 +1146,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               </Button>
             )}
             <Button size="small" icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
-              {t('mapping.export_stcm_instead', 'Exporter en CSV (recommandé)')}
+              {t('mapping.export_stcm_instead', 'Export as CSV (recommended)')}
             </Button>
             <Button size="small" onClick={() => { setApplyPreview(null); setWriteConfirmOpen(false); setWriteConfirmText(''); }}>
               {t('common.close', 'Close')}
@@ -1157,13 +1159,13 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             title={
               <span className="flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-red-400" />
-                <span className="font-semibold text-red-400">Confirmation requise</span>
+                <span className="font-semibold text-red-400">{t('mapping.write_confirm_title')}</span>
               </span>
             }
             footer={
               <>
                 <Button onClick={() => { setWriteConfirmOpen(false); setWriteConfirmText(''); }}>
-                  Annuler
+                  {t('mapping.write_confirm_cancel')}
                 </Button>
                 <Button
                   variant="danger"
@@ -1171,25 +1173,25 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
                   disabled={writeConfirmText !== cdmName}
                   onClick={() => handleApply(true)}
                 >
-                  Confirmer l&apos;écriture
+                  {t('mapping.write_confirm_submit')}
                 </Button>
               </>
             }
           >
             <div className="mb-4">
-              <span className="text-text-bright">Vous allez écrire <strong>{applyPreview.total_decisions} mappings</strong> dans la table <span className="font-mono text-sm bg-surface-light px-1.5 py-0.5 rounded">source_to_concept_map</span> du CDM <strong className="text-red-400">{cdmName}</strong>.</span>
+              <span className="text-text-bright" dangerouslySetInnerHTML={{ __html: t('mapping.write_confirm_message', { count: applyPreview.total_decisions, cdm: cdmName }) }} />
             </div>
             <div className="mb-4">
-              <span className="text-text-bright">Cela impactera <strong className="text-red-400">{applyPreview.impacted_rows.toLocaleString()} lignes</strong> et <strong className="text-red-400">{applyPreview.impacted_persons.toLocaleString()} patients</strong>.</span>
+              <span className="text-text-bright" dangerouslySetInnerHTML={{ __html: t('mapping.write_confirm_impact', { rows: applyPreview.impacted_rows.toLocaleString(), persons: applyPreview.impacted_persons.toLocaleString() }) }} />
             </div>
             <div className="bg-yellow-500/10 border border-yellow-500/25 rounded px-3 py-2 mb-4">
-              <span className="text-yellow-400 text-xs">Pour confirmer, tapez le nom exact du CDM ci-dessous :</span>
+              <span className="text-yellow-400 text-xs">{t('mapping.write_confirm_type_cdm')}</span>
             </div>
             <Input
               placeholder={cdmName}
               value={writeConfirmText}
               onChange={e => setWriteConfirmText(e.target.value)}
-              error={writeConfirmText && writeConfirmText !== cdmName ? 'CDM name does not match' : undefined}
+              error={writeConfirmText && writeConfirmText !== cdmName ? t('mapping.write_confirm_mismatch') : undefined}
             />
           </Modal>
         </Card>
