@@ -236,7 +236,10 @@ def run_clinical_domain_analysis(
     if domain_name not in DOMAIN_CONFIG:
         raise ValueError(f"Unknown clinical domain: {domain_name}")
 
-    cfg = DOMAIN_CONFIG[domain_name]
+    from utils.cdm_helper import get_domain_config
+    cfg = get_domain_config(conn, omop_schema, domain_name)
+    if not cfg:
+        raise ValueError(f"Unknown clinical domain: {domain_name}")
     table = safe_identifier(cfg["table"])
     person_id = safe_identifier(cfg["person_id"])
     date_col = safe_identifier(cfg["date_col"])

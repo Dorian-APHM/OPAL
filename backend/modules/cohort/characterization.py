@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from config import DOMAIN_CONFIG
+from utils.cdm_helper import get_domain_config
 from modules.cohort.sql_builder import build_cohort_sql
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ def run_characterization(
         # ── 3. Domain prevalence ──
         domain_prev: list[dict] = []
         for domain_name in _CHAR_DOMAINS:
-            cfg = DOMAIN_CONFIG.get(domain_name)
+            cfg = get_domain_config(conn, omop_schema, domain_name)
             if not cfg:
                 _report(domain_name)
                 continue
@@ -120,7 +121,7 @@ def run_characterization(
             cur.execute("SAVEPOINT sp_meas")
             results["measurement_stats"] = _query_measurement_stats(
                 cur, omop_schema, top_n, results["cohort_size"],
-                visit_level=effective_visit_level,
+                visit_level=effective_visit_level, conn=conn,
             )
             cur.execute("RELEASE SAVEPOINT sp_meas")
         except Exception as e:
@@ -134,7 +135,7 @@ def run_characterization(
             cur.execute("SAVEPOINT sp_visit")
             results["visit_types"] = _query_visit_types(
                 cur, omop_schema, results["cohort_size"],
-                visit_level=effective_visit_level,
+                visit_level=effective_visit_level, conn=conn,
             )
             cur.execute("RELEASE SAVEPOINT sp_visit")
         except Exception as e:
@@ -360,10 +361,10 @@ def _query_domain_prevalence(
 
 def _query_measurement_stats(
     cur, schema: str, top_n: int, cohort_size: int,
-    visit_level: bool = False,
+    visit_level: bool = False, conn=None,
 ) -> list[dict]:
     """Top measurements with value statistics (mean, SD, median, range)."""
-    mcfg = DOMAIN_CONFIG.get("Measurement")
+    mcfg = get_domain_config(conn, schema, "Measurement") if conn else DOMAIN_CONFIG.get("Measurement")
     if not mcfg:
         return []
 
@@ -430,10 +431,10 @@ def _query_measurement_stats(
 
 def _query_visit_types(
     cur, schema: str, cohort_size: int,
-    visit_level: bool = False,
+    visit_level: bool = False, conn=None,
 ) -> list[dict]:
     """Distribution of visit types in the cohort."""
-    vcfg = DOMAIN_CONFIG.get("Visit")
+    vcfg = get_domain_config(conn, schema, "Visit") if conn else DOMAIN_CONFIG.get("Visit")
     if not vcfg:
         return []
 
