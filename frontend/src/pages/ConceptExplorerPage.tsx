@@ -485,9 +485,9 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         {t('concept.title')} — {selectedCdm}
       </h3>
 
-      <div className="grid grid-cols-24 gap-4">
+      <div className="flex flex-col lg:flex-row gap-4">
         {/* Search panel */}
-        <div className={selectedConcept && !isMobile ? 'col-span-14' : 'col-span-24'} style={{ gridColumn: selectedConcept && !isMobile ? 'span 14' : 'span 24' }}>
+        <div className={selectedConcept && !isMobile ? 'lg:w-[58%]' : 'w-full'}>
           <Card size="small" className="mb-4">
             {/* Search mode toggle */}
             <div className="flex mb-3">
@@ -609,7 +609,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
         {/* Detail panel -- desktop: inline side panel */}
         {selectedConcept && !isMobile && (
-          <div style={{ gridColumn: 'span 10' }}>
+          <div className="lg:w-[42%]">
             <Card
               size="small"
               title={

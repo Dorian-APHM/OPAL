@@ -159,7 +159,7 @@ export default function HomePage({ selectedCdm }: Props) {
           {/* Domain Overview — prominent grid */}
           {dashData?.domains && (
             <FadeIn className="flex-shrink-0">
-              <div className="grid grid-cols-5 xl:grid-cols-9 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-9 gap-2">
                 {/* Total persons — highlighted */}
                 <ScaleIn>
                   <div className="flex flex-col justify-center px-4 py-3 rounded-2xl bg-surface border border-emerald-accent/30 shadow-[0_0_15px_rgba(16,185,129,0.08)] h-full">
@@ -203,7 +203,7 @@ export default function HomePage({ selectedCdm }: Props) {
           )}
 
           {/* Main content: 2 columns — capped height so overview breathes */}
-          <FadeIn delay={0.15} className="grid grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0', maxHeight: 'calc(100vh - 56px - 16px - 160px)' }}>
+          <FadeIn delay={0.15} className="grid grid-cols-1 md:grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0', maxHeight: 'calc(100vh - 56px - 16px - 160px)' }}>
             {/* Left column: Recent Cohorts + Favorites */}
             <div className="flex flex-col gap-2 min-h-0">
               <Card

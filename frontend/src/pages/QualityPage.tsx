@@ -570,20 +570,22 @@ export default function QualityPage({ selectedCdm }: Props) {
   const analysisContent = (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-2xl font-bold text-text-bright">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <h3 className="text-xl sm:text-2xl font-bold text-text-bright">
           {t('quality.title')} — {selectedCdm}
         </h3>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             icon={<LineChart className="h-4 w-4" />}
             variant={showTimeline ? 'primary' : 'default'}
             onClick={() => setShowTimeline(!showTimeline)}
+            size="small"
           >
             {t('quality.timeline_title')}
           </Button>
           <Button
             icon={<Download className="h-4 w-4" />}
+            size="small"
             onClick={() => authDownload(
               compareMode && compareCdm
                 ? qualityApi.comparisonReportUrl(selectedCdm, compareCdm, i18n.language, selectedDomain || undefined)
@@ -599,9 +601,9 @@ export default function QualityPage({ selectedCdm }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-3">
+      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-3">
         {/* Left panel */}
-        <div className="col-span-12 lg:col-span-2 space-y-3">
+        <div className="w-full lg:col-span-2 space-y-3">
           {/* Domain selector */}
           <Card size="small">
             <div className="space-y-3">
@@ -715,7 +717,7 @@ export default function QualityPage({ selectedCdm }: Props) {
         </div>
 
         {/* Main content */}
-        <div className="col-span-12 lg:col-span-10">
+        <div className="w-full lg:col-span-10">
           {showTimeline && (
             <div className="mb-4">
               <SnapshotTimeline selectedCdm={selectedCdm} />
