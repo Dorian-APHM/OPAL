@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 CDM Access Control endpoints.
 
@@ -39,37 +41,32 @@ def _require_clear_all(request: Request):
 
 def _user_has_cdm_access(cdm_name: str, username: str, db: Session) -> bool:
     """Check if a user has access to a CDM via direct grant or group membership."""
+    from sqlalchemy import exists, and_
+
     # Direct user grant
-    user_access = db.query(CdmAccess).filter(
-        CdmAccess.cdm_name == cdm_name,
-        CdmAccess.username == username,
-    ).first()
-    if user_access:
-        return True
+    direct = exists().where(
+        and_(CdmAccess.cdm_name == cdm_name, CdmAccess.username == username)
+    )
 
-    # Group grant: check if user belongs to any group that has access
-    group_grants = db.query(CdmGroupAccess.group_name).filter(
-        CdmGroupAccess.cdm_name == cdm_name,
-    ).all()
-    if group_grants:
-        group_names = [g.group_name for g in group_grants]
-        member = db.query(UserGroupMember).filter(
-            UserGroupMember.group_name.in_(group_names),
+    # Group grant: single EXISTS with JOIN instead of N+1 queries
+    via_group = exists().where(
+        and_(
+            CdmGroupAccess.cdm_name == cdm_name,
+            UserGroupMember.group_name == CdmGroupAccess.group_name,
             UserGroupMember.username == username,
-        ).first()
-        if member:
-            return True
+        )
+    )
 
-    return False
+    return db.query(direct | via_group).scalar()
 
 
 def _cdm_has_acl(cdm_name: str, db: Session) -> bool:
     """Check if a CDM has any access control (user or group)."""
-    has_user_acl = db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).first()
-    if has_user_acl:
-        return True
-    has_group_acl = db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).first()
-    return bool(has_group_acl)
+    from sqlalchemy import exists, and_
+
+    has_acl = exists().where(and_(CdmAccess.cdm_name == cdm_name)) | \
+              exists().where(and_(CdmGroupAccess.cdm_name == cdm_name))
+    return db.query(has_acl).scalar()
 
 
 def check_cdm_access(cdm_name: str, request: Request, db: Session) -> None:
