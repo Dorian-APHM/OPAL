@@ -465,7 +465,7 @@ export default function QualityPage({ selectedCdm }: Props) {
     }
     if (batchPollRef.current) { clearInterval(batchPollRef.current); batchPollRef.current = null; }
     setBatchLoading(false);
-    setBatchProgress(null);
+    setBatchProgress(0);
     toast.info(t('common.cancelled', 'Cancelled'));
   };
 
