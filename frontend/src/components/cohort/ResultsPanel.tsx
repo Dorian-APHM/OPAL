@@ -150,7 +150,10 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
         }
       >
         {attritionLoading ? (
-          <div className="text-center py-5"><Spinner /></div>
+          <div className="text-center py-5">
+            <Spinner />
+            <p className="text-sm text-text-muted mt-2">{t('cohort.loading_attrition', 'Loading attrition data...')}</p>
+          </div>
         ) : attrition.length > 0 ? (
           <ResponsiveContainer width="100%" height={Math.max(150, attrition.length * 30)}>
             <BarChart data={attritionChartData} layout="vertical" margin={{ left: 10, right: 10 }}>

@@ -384,8 +384,8 @@ export default function CdmManagementPage() {
           </div>
           <div className="flex items-start gap-4">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.host')}</label>
-              <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} />
+              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.host')} <span className="text-red-400">*</span></label>
+              <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} required />
             </div>
             <div className="w-full md:w-32">
               <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')}</label>
@@ -393,12 +393,12 @@ export default function CdmManagementPage() {
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.database')}</label>
-            <Input value={dbName} onChange={(e) => setDbName(e.target.value)} />
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.database')} <span className="text-red-400">*</span></label>
+            <Input value={dbName} onChange={(e) => setDbName(e.target.value)} required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.user')}</label>
-            <Input value={dbUser} onChange={(e) => setDbUser(e.target.value)} />
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.user')} <span className="text-red-400">*</span></label>
+            <Input value={dbUser} onChange={(e) => setDbUser(e.target.value)} required />
           </div>
           <div>
             <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.password')}</label>

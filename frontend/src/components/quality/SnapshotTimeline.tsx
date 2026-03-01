@@ -49,7 +49,14 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
   }, [selectedCdm]);
 
   if (loading) {
-    return <Card><div className="text-center py-10"><Spinner /></div></Card>;
+    return (
+      <Card>
+        <div className="text-center py-10">
+          <Spinner size="large" />
+          <p className="text-sm text-text-muted mt-4">{t('quality.loading_timeline', 'Loading snapshot timeline...')}</p>
+        </div>
+      </Card>
+    );
   }
 
   const domainKeys = Object.keys(timelines);

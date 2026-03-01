@@ -22,7 +22,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(({
 
   return (
     <div className="w-full">
-      {label && <label htmlFor={inputId} className="block text-xs font-medium text-text-muted mb-1.5">{label}</label>}
+      {label && <label htmlFor={inputId} className="block text-xs font-medium text-text-muted mb-1.5">{label}{props.required && <span className="text-red-400 ml-0.5">*</span>}</label>}
       <div className={`
         flex items-center gap-2 bg-deep-base border rounded-[10px] px-3 py-2
         transition-all duration-200
@@ -65,7 +65,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(({
 
   return (
     <div className="w-full">
-      {label && <label htmlFor={textareaId} className="block text-xs font-medium text-text-muted mb-1.5">{label}</label>}
+      {label && <label htmlFor={textareaId} className="block text-xs font-medium text-text-muted mb-1.5">{label}{props.required && <span className="text-red-400 ml-0.5">*</span>}</label>}
       <textarea
         ref={ref}
         id={textareaId}
@@ -111,7 +111,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(({
 
   return (
     <div className="w-full">
-      {label && <label htmlFor={inputId} className="block text-xs font-medium text-text-muted mb-1.5">{label}</label>}
+      {label && <label htmlFor={inputId} className="block text-xs font-medium text-text-muted mb-1.5">{label}{props.required && <span className="text-red-400 ml-0.5">*</span>}</label>}
       <input
         ref={ref}
         id={inputId}

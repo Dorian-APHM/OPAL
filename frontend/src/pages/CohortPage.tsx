@@ -53,6 +53,7 @@ export default function CohortPage({ selectedCdm }: Props) {
   // Cohort state (persisted across navigation)
   const [cohortName, setCohortName] = useSessionState('cohort:name', '');
   const [cohortDesc, setCohortDesc] = useSessionState('cohort:desc', '');
+  const [nameError, setNameError] = useState('');
   const [criteria, setCriteria] = useSessionState<CohortCriteria>('cohort:criteria', emptyCriteria());
   const [savedCohortId, setSavedCohortId] = useSessionState<number | undefined>('cohort:savedId', undefined as number | undefined);
 
@@ -149,6 +150,7 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   const handleSave = async () => {
     if (!selectedCdm || !cohortName.trim()) {
+      setNameError(t('cohort.name_required', 'Cohort name is required'));
       toast.warning(t('cohort.enter_name', 'Please enter a cohort name'));
       return;
     }
@@ -364,10 +366,12 @@ export default function CohortPage({ selectedCdm }: Props) {
       <Card size="small" className="mb-2" hoverable={false}>
         <div className="flex flex-wrap items-center gap-2">
           <Input
-            placeholder={t('cohort.cohort_name', 'Cohort name...')}
+            placeholder={t('cohort.cohort_name_placeholder', 'Cohort name (required)...')}
             value={cohortName}
-            onChange={e => setCohortName(e.target.value)}
+            onChange={e => { setCohortName(e.target.value); setNameError(''); }}
             className="w-full sm:!w-[250px]"
+            required
+            error={nameError}
           />
           <Input
             placeholder={t('cohort.description', 'Description (optional)')}
@@ -480,7 +484,10 @@ export default function CohortPage({ selectedCdm }: Props) {
                       }
                     >
                       {sampleLoading ? (
-                        <div className="text-center py-5"><Spinner /></div>
+                        <div className="text-center py-5">
+                          <Spinner />
+                          <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sample', 'Loading sample patients...')}</p>
+                        </div>
                       ) : samplePatients.length > 0 ? (
                         <Table
                           size="small"
@@ -728,7 +735,10 @@ export default function CohortPage({ selectedCdm }: Props) {
         width="max-w-md"
       >
         {shareLoading ? (
-          <div className="flex justify-center py-8"><Spinner /></div>
+          <div className="text-center py-8">
+            <Spinner />
+            <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sharing', 'Loading sharing settings...')}</p>
+          </div>
         ) : shareInfo ? (
           <div className="space-y-4">
             {/* Public toggle */}
