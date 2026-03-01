@@ -8,6 +8,7 @@ import pytest
 # Override DATABASE_URL before importing any app modules
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["TESTING"] = "1"
+os.environ["AUTH_ENABLED"] = "false"
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.testclient import TestClient
