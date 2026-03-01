@@ -880,7 +880,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
 
           {/* Concept ID input */}
           <div className="flex items-center gap-3 mb-3">
-            <span className="text-text-bright text-sm">{t('mapping.enter_concept_id', 'Concept ID')} :</span>
+            <span className="text-text-bright text-sm">{t('mapping.enter_concept_id', 'Concept ID')} <span className="text-red-400">*</span> :</span>
             <NumberInput
               className="w-full sm:w-[180px]"
               placeholder="e.g. 4329847"

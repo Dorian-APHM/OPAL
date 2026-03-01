@@ -183,7 +183,7 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
       >
         <div className="space-y-3 mb-4">
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1">{t('concept_sets.name', 'Name')} *</label>
+            <label className="block text-xs font-medium text-text-muted mb-1">{t('concept_sets.name', 'Name')} <span className="text-red-400">*</span></label>
             <Input value={formName} onChange={(e) => setFormName(e.target.value)} />
           </div>
           <div>

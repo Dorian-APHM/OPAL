@@ -318,19 +318,19 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         <Card title={t('ohdsi.configuration')} size="small" className="mb-4 md:mb-0">
           <div className="flex flex-col gap-3">
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.results_schema')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.results_schema')} <span className="text-red-400">*</span></span>
               <Input value={resultsSchema} onChange={(e) => setResultsSchema(e.target.value)} />
             </div>
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.vocab_schema')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.vocab_schema')} <span className="text-red-400">*</span></span>
               <Input value={vocabSchema} onChange={(e) => setVocabSchema(e.target.value)} />
             </div>
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.cdm_version')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.cdm_version')} <span className="text-red-400">*</span></span>
               <Input value={cdmVersion} onChange={(e) => setCdmVersion(e.target.value)} />
             </div>
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.source_name')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.source_name')} <span className="text-red-400">*</span></span>
               <Input value={cdmSourceName} onChange={(e) => setCdmSourceName(e.target.value)} />
             </div>
           </div>
