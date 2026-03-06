@@ -5,8 +5,28 @@ Translates a structured cohort criteria JSON into optimized PostgreSQL
 using CTEs, temporal joins, and concept_ancestor expansion.
 """
 import logging
+import re
 
 from config import DOMAIN_CONFIG
+
+# Strict pattern for OMOP schema names: only alphanumeric and underscores
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Strict ISO date pattern
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_identifier(name: str) -> str:
+    """Validate and return a safe SQL identifier (schema/table/column name)."""
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
+
+
+def _validate_date_string(date_str: str) -> str:
+    """Validate that a string is a safe ISO date (YYYY-MM-DD)."""
+    if not _DATE_RE.match(date_str):
+        raise ValueError(f"Invalid date format: {date_str!r}. Expected YYYY-MM-DD.")
+    return date_str
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +57,7 @@ def build_cohort_sql(
     the output includes visit_occurrence_id alongside person_id — useful for
     visit-level characterization.
     """
+    _validate_identifier(omop_schema)
     ctes: list[str] = []
     cte_names: list[str] = []
     cte_counter = [0]
@@ -651,9 +672,11 @@ def _build_criterion_cte(
         date_from = temporal.get("date_from")
         date_to = temporal.get("date_to")
         if date_from:
-            wheres.append(f"t.{date_col} >= '{date_from}'")
+            _validate_date_string(date_from)
+            wheres.append(f"t.{date_col} >= DATE '{date_from}'")
         if date_to:
-            wheres.append(f"t.{date_col} <= '{date_to}'")
+            _validate_date_string(date_to)
+            wheres.append(f"t.{date_col} <= DATE '{date_to}'")
 
     # Value constraints (mainly for Measurement)
     if value:
@@ -665,7 +688,9 @@ def _build_criterion_cte(
                 wheres.append(f"t.value_as_number BETWEEN {float(val_num)} AND {float(val_high)}")
             else:
                 op_map = {">": ">", "<": "<", ">=": ">=", "<=": "<=", "=": "="}
-                sql_op = op_map.get(val_op, ">")
+                sql_op = op_map.get(val_op)
+                if sql_op is None:
+                    raise ValueError(f"Invalid value operator: {val_op!r}")
                 wheres.append(f"t.value_as_number {sql_op} {float(val_num)}")
         val_concept = value.get("value_as_concept_id")
         if val_concept is not None:

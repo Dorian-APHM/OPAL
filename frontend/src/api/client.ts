@@ -39,6 +39,30 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Unified error response interceptor
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response) {
+      const { status, data } = error.response;
+      const detail = data?.detail || data?.message || data?.error;
+      if (detail && typeof detail === 'string') {
+        error.message = detail;
+      }
+      if (status === 401) {
+        error.message = 'Session expired. Please log in again.';
+      } else if (status === 504) {
+        error.message = detail || 'Query timed out. Try a simpler query.';
+      } else if (status === 502) {
+        error.message = detail || 'External database connection error.';
+      }
+    } else if (error.code === 'ERR_NETWORK') {
+      error.message = 'Network error. Please check your connection.';
+    }
+    return Promise.reject(error);
+  },
+);
+
 /** Get current auth token (for fetch/download calls outside axios) */
 export function getAuthToken(): string | undefined {
   return _getToken?.();
