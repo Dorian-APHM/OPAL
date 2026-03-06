@@ -29,6 +29,7 @@ from modules.cohort.sql_builder import (
     build_detailed_sample_sql,
     build_export_sql,
 )
+from modules.cohort.characterization import run_characterization
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
@@ -583,6 +584,33 @@ def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=cohort_patients.csv"},
     )
+
+
+class CharacterizationRequest(BaseModel):
+    cdm_name: str
+    criteria: dict
+    top_n: int = 25
+
+
+@router.post("/characterize")
+def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_db)):
+    """
+    Run Table 1 characterization for a cohort definition.
+    Returns demographics, domain prevalence, measurement stats, visit types,
+    and observation period statistics.
+    """
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+    schema = _get_omop_schema(db, cdm)
+
+    try:
+        result = run_characterization(conn, req.criteria, schema, top_n=req.top_n)
+    except Exception as e:
+        logger.exception("Characterization failed")
+        raise HTTPException(status_code=500, detail=f"Characterization error: {e}")
+    finally:
+        conn.close()
+
+    return result
 
 
 @router.post("/{cohort_id}/execute")
