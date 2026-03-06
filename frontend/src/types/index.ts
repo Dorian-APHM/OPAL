@@ -522,6 +522,21 @@ export interface MappingDomainStat {
   snapshot_date: string | null;
 }
 
+/** Strategy confidence statistics */
+export interface StrategyStats {
+  strategy: string;
+  total_decisions: number;
+  approved: number;
+  modified: number;
+  rejected: number;
+  approval_rate: number;
+  rejection_rate: number;
+  modification_rate: number;
+  avg_confidence: number | null;
+  avg_confidence_approved: number | null;
+  avg_confidence_rejected: number | null;
+}
+
 /** Mapping dashboard response */
 export interface MappingDashboardData {
   cdm_name: string;

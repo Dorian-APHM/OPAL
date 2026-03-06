@@ -586,6 +586,124 @@ def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
     )
 
 
+class RawSqlRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    sql: str = Field(..., min_length=1, max_length=50000)
+    limit: int = Field(default=1000, ge=1, le=10000)
+
+
+@router.post("/sql/execute")
+def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+    """
+    Execute a raw read-only SQL query against a CDM.
+    Only SELECT statements are allowed.
+    """
+    import re
+    sql_stripped = req.sql.strip().rstrip(";")
+
+    # Only allow SELECT statements (block DML/DDL)
+    first_keyword = re.split(r"\s+", sql_stripped, maxsplit=1)[0].upper()
+    if first_keyword not in ("SELECT", "WITH", "EXPLAIN"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SELECT, WITH (CTE), and EXPLAIN queries are allowed",
+        )
+
+    # Block dangerous keywords anywhere in the query
+    sql_upper = sql_stripped.upper()
+    blocked = ["INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ",
+                "TRUNCATE ", "GRANT ", "REVOKE ", "COPY ", "\\\\"]
+    for kw in blocked:
+        if kw in sql_upper:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Forbidden keyword detected: {kw.strip()}",
+            )
+
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+
+    # Wrap in a read-only transaction for safety
+    try:
+        conn.set_session(readonly=True, autocommit=False)
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Apply LIMIT if not already present
+            if "LIMIT" not in sql_upper:
+                final_sql = f"{sql_stripped}\nLIMIT {req.limit}"
+            else:
+                final_sql = sql_stripped
+            cur.execute(final_sql)
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            rows = [dict(r) for r in cur.fetchall()]
+            # Convert non-serializable types
+            for row in rows:
+                for k, v in row.items():
+                    if hasattr(v, 'isoformat'):
+                        row[k] = v.isoformat()
+                    elif isinstance(v, (bytes, memoryview)):
+                        row[k] = str(v)
+    except Exception as e:
+        logger.exception("Raw SQL execution failed")
+        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+    finally:
+        conn.close()
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "row_count": len(rows),
+        "truncated": len(rows) >= req.limit,
+    }
+
+
+@router.post("/sql/export")
+def export_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+    """Execute a raw SQL query and return results as CSV."""
+    import re
+    sql_stripped = req.sql.strip().rstrip(";")
+
+    first_keyword = re.split(r"\s+", sql_stripped, maxsplit=1)[0].upper()
+    if first_keyword not in ("SELECT", "WITH"):
+        raise HTTPException(status_code=400, detail="Only SELECT/WITH queries allowed")
+
+    sql_upper = sql_stripped.upper()
+    blocked = ["INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ",
+                "TRUNCATE ", "GRANT ", "REVOKE ", "COPY ", "\\\\"]
+    for kw in blocked:
+        if kw in sql_upper:
+            raise HTTPException(status_code=400, detail=f"Forbidden keyword: {kw.strip()}")
+
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+
+    try:
+        conn.set_session(readonly=True, autocommit=False)
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql_stripped)
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+    finally:
+        conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([
+            v.isoformat() if hasattr(v, 'isoformat') else v
+            for v in (row[c] for c in columns)
+        ])
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=sql_export.csv"},
+    )
+
+
 class CharacterizationRequest(BaseModel):
     cdm_name: str
     criteria: dict
