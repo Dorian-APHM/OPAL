@@ -342,6 +342,93 @@ export interface SamplePatient {
   observation_period_end_date: string | null;
 }
 
+// ──── Characterization (Table 1) types ────
+
+/** Demographics section of characterization */
+export interface CharacterizationDemographics {
+  age: {
+    n: number;
+    mean_age: number | null;
+    std_age: number | null;
+    min_age: number | null;
+    max_age: number | null;
+    q1_age: number | null;
+    median_age: number | null;
+    q3_age: number | null;
+  };
+  age_groups: { age_group: string; count: number }[];
+  gender: { label: string; concept_id: number | null; count: number }[];
+  race: { label: string; concept_id: number | null; count: number }[];
+  ethnicity: { label: string; concept_id: number | null; count: number }[];
+}
+
+/** Top concept in a domain */
+export interface CharacterizationConcept {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  vocabulary_id: string;
+  n_persons: number;
+  n_records: number;
+  pct_persons: number;
+}
+
+/** Domain prevalence section */
+export interface CharacterizationDomainPrevalence {
+  domain: string;
+  patients_with_data: number;
+  pct_with_data: number;
+  top_concepts: CharacterizationConcept[];
+  error?: string;
+}
+
+/** Measurement value stats */
+export interface CharacterizationMeasurementStat {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  n_persons: number;
+  pct_persons: number;
+  mean_value: number | null;
+  std_value: number | null;
+  median_value: number | null;
+  min_value: number | null;
+  max_value: number | null;
+  unit: string;
+}
+
+/** Visit type distribution */
+export interface CharacterizationVisitType {
+  concept_id: number;
+  concept_name: string;
+  n_persons: number;
+  n_records: number;
+  pct_persons: number;
+}
+
+/** Observation period stats */
+export interface CharacterizationObsPeriod {
+  n_periods: number;
+  n_persons: number;
+  mean_days: number | null;
+  std_days: number | null;
+  min_days: number | null;
+  max_days: number | null;
+  median_days: number | null;
+  earliest_start: string | null;
+  latest_end: string | null;
+}
+
+/** Full characterization result */
+export interface CharacterizationResult {
+  cohort_size: number;
+  demographics: CharacterizationDemographics;
+  domain_prevalence: CharacterizationDomainPrevalence[];
+  measurement_stats: CharacterizationMeasurementStat[];
+  visit_types: CharacterizationVisitType[];
+  observation_period: CharacterizationObsPeriod;
+}
+
 // ──── Phase 3: Mapping types ────
 
 /** Domain mapping stats from dashboard */
