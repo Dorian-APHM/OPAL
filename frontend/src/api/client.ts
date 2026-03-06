@@ -187,17 +187,18 @@ export const cohortApi = {
     api.get<{ domains: { name: string; table: string }[] }>('/cohorts/domains'),
   exportDirect: (cdmName: string, criteria: CohortCriteria) =>
     api.post('/cohorts/export/direct', { cdm_name: cdmName, criteria }, { responseType: 'blob' }),
-  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, signal?: AbortSignal) =>
-    api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25 }, { signal }),
+  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, signal?: AbortSignal, visitLevel?: boolean) =>
+    api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25, visit_level: visitLevel || false }, { signal }),
   saveCharacterization: (cohortId: number, characterization: CharacterizationResult) =>
     api.put(`/cohorts/${cohortId}/characterization`, { characterization }),
   getCharacterization: (cohortId: number) =>
     api.get<{ characterization: CharacterizationResult | null; characterized_at: string | null; version: number }>(`/cohorts/${cohortId}/characterization`),
-  compare: (cdmName: string, cohortIdA: number, cohortIdB: number) =>
+  compare: (cdmName: string, cohortIdA: number, cohortIdB: number, visitLevel?: boolean) =>
     api.post<CohortComparisonResult>('/cohorts/compare', {
       cdm_name: cdmName,
       cohort_id_a: cohortIdA,
       cohort_id_b: cohortIdB,
+      visit_level: visitLevel || false,
     }),
 };
 
