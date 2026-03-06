@@ -2,26 +2,28 @@ services:
   opal-backend:
     build: ./backend
     container_name: opal-backend
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-opal}:${POSTGRES_PASSWORD:-opal}@opal-db:5432/${POSTGRES_DB:-opal}
-      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - DATABASE_URL=postgresql://opal:opal@opal-db:5432/opal
+      - AUTH_ENABLED=true
       - KEYCLOAK_URL=http://opal-keycloak:8080
-      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-opal}
-      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-opal-frontend}
-      - SECRET_KEY=${SECRET_KEY}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
-      - OHDSI_IMAGE_PREFIX=${OHDSI_IMAGE_PREFIX:-ohdsi-docker}
-      - OHDSI_HOST_OUTPUT_DIR=${OHDSI_HOST_OUTPUT_DIR:-}
-      - OHDSI_HOST_SCRIPTS_DIR=${OHDSI_HOST_SCRIPTS_DIR:-}
-      - OHDSI_HOST_JDBC_DIR=${OHDSI_HOST_JDBC_DIR:-/data/jdbc_drivers}
+      - KEYCLOAK_REALM=opal
+      - KEYCLOAK_CLIENT_ID=opal-frontend
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - CORS_ORIGINS=http://10.64.48.194:3000,http://10.64.48.194:5173,http://localhost:3000,http://localhost:5173
+      - OHDSI_IMAGE_PREFIX=ohdsi-docker
+      - OHDSI_HOST_OUTPUT_DIR=/data/Dorian/apps/OPAL/opal/ohdsi_output
+      - OHDSI_HOST_SCRIPTS_DIR=/data/ohdsi_quality_tool/ohdsi-docker/scripts
+      - OHDSI_HOST_JDBC_DIR=/data/jdbc_drivers
     depends_on:
       opal-db:
         condition: service_healthy
     volumes:
       - opal_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - /data/ohdsi_quality_tool/ohdsi-docker/scripts:/app/ohdsi_scripts:ro
+      - /data/jdbc_drivers:/app/jdbc_drivers:ro
       - ./ohdsi_output:/app/ohdsi_output
       - ./backend/logs:/app/logs
     healthcheck:
@@ -36,7 +38,7 @@ services:
     build: ./frontend
     container_name: opal-frontend
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - "3000:80"
     depends_on:
       opal-backend:
         condition: service_healthy
@@ -51,16 +53,16 @@ services:
   opal-db:
     image: postgres:16-alpine
     container_name: opal-db
-    expose:
-      - "5432"
+    ports:
+      - "5434:5432"
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-opal}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-opal}
-      - POSTGRES_DB=${POSTGRES_DB:-opal}
+      - POSTGRES_USER=opal
+      - POSTGRES_PASSWORD=opal
+      - POSTGRES_DB=opal
     volumes:
       - opal_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opal}"]
+      test: ["CMD-SHELL", "pg_isready -U opal"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -70,15 +72,15 @@ services:
     image: quay.io/keycloak/keycloak:24.0
     container_name: opal-keycloak
     environment:
-      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
-      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      - KC_HOSTNAME=${KC_HOSTNAME:-localhost}
-      - KC_HOSTNAME_PORT=${KC_HOSTNAME_PORT:-8080}
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_HOSTNAME=10.64.48.194
+      - KC_HOSTNAME_PORT=8080
       - KC_HOSTNAME_STRICT_HTTPS=false
       - KC_HTTP_ENABLED=true
     command: start-dev --import-realm
     ports:
-      - "${KEYCLOAK_PORT:-8080}:8080"
+      - "8080:8080"
     volumes:
       - ./keycloak/opal-realm.json:/opt/keycloak/data/import/opal-realm.json:ro
       - ./keycloak/themes/opal:/opt/keycloak/themes/opal:ro
