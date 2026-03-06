@@ -3,8 +3,11 @@ OPAL — Configuration.
 
 All settings are loaded from environment variables with sensible defaults.
 """
+import logging
 import os
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -15,7 +18,15 @@ DATA_DIR.mkdir(exist_ok=True)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://opal:opal@opal-db:5432/opal")
 
 # Security
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY or SECRET_KEY == "change-me-in-production":
+    _logger.warning(
+        "SECRET_KEY is not set or uses the insecure default. "
+        "Set a strong SECRET_KEY environment variable for production. "
+        "Generate one with: openssl rand -hex 32"
+    )
+    if not SECRET_KEY:
+        SECRET_KEY = "change-me-in-production"
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "opal")

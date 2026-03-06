@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
@@ -29,16 +29,16 @@ router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 # ──── Request models ────
 
 class SuggestRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    source_value: str
-    source_name: str = ""
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    source_value: str = Field(..., min_length=1, max_length=1000)
+    source_name: str = Field(default="", max_length=1000)
 
 
 class SuggestBatchRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    limit: int = 20
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    limit: int = Field(default=20, ge=1, le=200)
     enable_fuzzy: bool = True
     enable_keyword: bool = True
     enable_contextual: bool = True
@@ -46,30 +46,30 @@ class SuggestBatchRequest(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    source_value: str
-    source_name: str = ""
-    action: str  # approved, modified, rejected
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    source_value: str = Field(..., min_length=1, max_length=1000)
+    source_name: str = Field(default="", max_length=1000)
+    action: str = Field(..., pattern=r"^(approved|modified|rejected)$")
     target_concept_id: int | None = None
-    target_concept_name: str = ""
-    target_vocabulary_id: str = ""
-    suggestion_source: str = ""
-    confidence_score: float | None = None
-    reason: str = ""
+    target_concept_name: str = Field(default="", max_length=500)
+    target_vocabulary_id: str = Field(default="", max_length=100)
+    suggestion_source: str = Field(default="", max_length=50)
+    confidence_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    reason: str = Field(default="", max_length=5000)
 
 
 class BulkDecisionRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    action: str  # approved, rejected
-    min_confidence: float = 80.0
-    source_values: list[str] | None = None
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., pattern=r"^(approved|rejected)$")
+    min_confidence: float = Field(default=80.0, ge=0.0, le=100.0)
+    source_values: list[str] | None = Field(default=None, max_length=1000)
 
 
 class ApplyMappingRequest(BaseModel):
-    cdm_name: str
-    domain: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
     write_to_cdm: bool = False
 
 

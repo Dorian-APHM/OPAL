@@ -2,7 +2,7 @@
 CDM management API endpoints — CRUD for CDM connections.
 """
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.app_db import get_db
@@ -15,39 +15,39 @@ router = APIRouter(prefix="/api/cdm", tags=["cdm"])
 
 
 class CdmCreateRequest(BaseModel):
-    name: str
-    db_host: str
-    db_port: int = 5432
-    db_name: str
-    db_user: str
-    db_password: str
-    omop_schema: str = DEFAULT_OMOP_SCHEMA
+    name: str = Field(..., min_length=1, max_length=255)
+    db_host: str = Field(..., min_length=1, max_length=255)
+    db_port: int = Field(default=5432, ge=1, le=65535)
+    db_name: str = Field(..., min_length=1, max_length=255)
+    db_user: str = Field(..., min_length=1, max_length=255)
+    db_password: str = Field(..., min_length=1, max_length=1000)
+    omop_schema: str = Field(default=DEFAULT_OMOP_SCHEMA, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class CdmTestRequest(BaseModel):
-    db_host: str
-    db_port: int = 5432
-    db_name: str
-    db_user: str
-    db_password: str
+    db_host: str = Field(..., min_length=1, max_length=255)
+    db_port: int = Field(default=5432, ge=1, le=65535)
+    db_name: str = Field(..., min_length=1, max_length=255)
+    db_user: str = Field(..., min_length=1, max_length=255)
+    db_password: str = Field(..., min_length=1, max_length=1000)
 
 
 class CdmUpdateRequest(BaseModel):
-    db_host: str | None = None
-    db_port: int | None = None
-    db_name: str | None = None
-    db_user: str | None = None
-    db_password: str | None = None
-    omop_schema: str | None = None
+    db_host: str | None = Field(default=None, max_length=255)
+    db_port: int | None = Field(default=None, ge=1, le=65535)
+    db_name: str | None = Field(default=None, max_length=255)
+    db_user: str | None = Field(default=None, max_length=255)
+    db_password: str | None = Field(default=None, max_length=1000)
+    omop_schema: str | None = Field(default=None, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class SettingsUpdateRequest(BaseModel):
-    omop_schema: str | None = None
-    top_unmapped_terms: int | None = None
-    top_concepts: int | None = None
-    max_records_per_person: int | None = None
-    max_observation_months: int | None = None
-    comparison_alert_threshold: float | None = None
+    omop_schema: str | None = Field(default=None, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    top_unmapped_terms: int | None = Field(default=None, ge=1, le=1000)
+    top_concepts: int | None = Field(default=None, ge=1, le=1000)
+    max_records_per_person: int | None = Field(default=None, ge=1, le=10000)
+    max_observation_months: int | None = Field(default=None, ge=1, le=1200)
+    comparison_alert_threshold: float | None = Field(default=None, ge=0.0, le=100.0)
 
 
 @router.get("/")
@@ -187,6 +187,11 @@ def update_cdm_settings(cdm_name: str, req: SettingsUpdateRequest, db: Session =
     if not settings:
         settings = AnalysisSettings(cdm_name=cdm_name)
         db.add(settings)
+        try:
+            db.flush()
+        except Exception:
+            db.rollback()
+            settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
 
     if req.omop_schema is not None:
         settings.omop_schema = req.omop_schema
