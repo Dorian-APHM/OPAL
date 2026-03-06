@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -14,7 +14,7 @@ import psycopg2
 
 from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
 from audit.logger import AUDIT_LOG_DIR
-from db.app_db import engine
+from db.app_db import engine, get_db
 from db.models import Base
 
 # Configure logging
@@ -267,8 +267,6 @@ def export_audit_csv(
                     continue
         d += timedelta(days=1)
 
-    from audit.logger import AUDIT_LOG_DIR  # noqa: already imported above
-
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
@@ -452,9 +450,8 @@ def _get_keycloak_admin_token() -> str | None:
 # ──── Access Requests (self-service sign-up) ────
 
 @app.post("/api/access-requests")
-def submit_access_request(request: Request, body: dict):
+def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
     """Submit a new access request (public, no auth required)."""
-    from db.app_db import SessionLocal
     from db.models import AccessRequest
 
     required = ["username", "email", "first_name", "last_name", "requested_role"]
@@ -466,166 +463,147 @@ def submit_access_request(request: Request, body: dict):
     if role not in ("admin", "omop-dim", "chercheur", "medecin"):
         return JSONResponse(status_code=400, content={"detail": f"Invalid role: {role}"})
 
-    db = SessionLocal()
-    try:
-        existing = db.query(AccessRequest).filter(
-            AccessRequest.username == body["username"]
-        ).first()
-        if existing:
-            return JSONResponse(status_code=409, content={"detail": "A request for this username already exists"})
+    existing = db.query(AccessRequest).filter(
+        AccessRequest.username == body["username"]
+    ).first()
+    if existing:
+        return JSONResponse(status_code=409, content={"detail": "A request for this username already exists"})
 
-        req = AccessRequest(
-            username=body["username"].strip(),
-            email=body["email"].strip(),
-            first_name=body["first_name"].strip(),
-            last_name=body["last_name"].strip(),
-            requested_role=role,
-        )
-        db.add(req)
-        db.commit()
-        return {"status": "ok", "id": req.id}
-    finally:
-        db.close()
+    req = AccessRequest(
+        username=body["username"].strip(),
+        email=body["email"].strip(),
+        first_name=body["first_name"].strip(),
+        last_name=body["last_name"].strip(),
+        requested_role=role,
+    )
+    db.add(req)
+    db.commit()
+    return {"status": "ok", "id": req.id}
 
 
 @app.get("/api/admin/access-requests")
-def list_access_requests(request: Request, status_filter: str = "pending"):
+def list_access_requests(request: Request, status_filter: str = "pending", db=Depends(get_db)):
     """List access requests (admin only)."""
-    from db.app_db import SessionLocal
     from db.models import AccessRequest
 
-    db = SessionLocal()
-    try:
-        q = db.query(AccessRequest)
-        if status_filter != "all":
-            q = q.filter(AccessRequest.status == status_filter)
-        requests_list = q.order_by(AccessRequest.created_at.desc()).all()
-        return {
-            "requests": [
-                {
-                    "id": r.id,
-                    "username": r.username,
-                    "email": r.email,
-                    "first_name": r.first_name,
-                    "last_name": r.last_name,
-                    "requested_role": r.requested_role,
-                    "status": r.status,
-                    "reviewed_by": r.reviewed_by,
-                    "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
-                }
-                for r in requests_list
-            ]
-        }
-    finally:
-        db.close()
+    q = db.query(AccessRequest)
+    if status_filter != "all":
+        q = q.filter(AccessRequest.status == status_filter)
+    requests_list = q.order_by(AccessRequest.created_at.desc()).all()
+    return {
+        "requests": [
+            {
+                "id": r.id,
+                "username": r.username,
+                "email": r.email,
+                "first_name": r.first_name,
+                "last_name": r.last_name,
+                "requested_role": r.requested_role,
+                "status": r.status,
+                "reviewed_by": r.reviewed_by,
+                "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in requests_list
+        ]
+    }
 
 
 @app.post("/api/admin/access-requests/{request_id}/approve")
-def approve_access_request(request_id: int, request: Request):
+def approve_access_request(request_id: int, request: Request, db=Depends(get_db)):
     """Approve an access request: create Keycloak user with temporary password."""
     import requests as http_requests
     from datetime import datetime, timezone
-    from db.app_db import SessionLocal
     from db.models import AccessRequest
 
-    db = SessionLocal()
+    ar = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
+    if not ar:
+        return JSONResponse(status_code=404, content={"detail": "Request not found"})
+    if ar.status != "pending":
+        return JSONResponse(status_code=400, content={"detail": f"Request already {ar.status}"})
+
+    # Create Keycloak user
+    token = _get_keycloak_admin_token()
+    if not token:
+        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Create user with temporary password = username
+    user_payload = {
+        "username": ar.username,
+        "email": ar.email,
+        "firstName": ar.first_name,
+        "lastName": ar.last_name,
+        "enabled": True,
+        "credentials": [{
+            "type": "password",
+            "value": ar.username,
+            "temporary": True,
+        }],
+    }
     try:
-        ar = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
-        if not ar:
-            return JSONResponse(status_code=404, content={"detail": "Request not found"})
-        if ar.status != "pending":
-            return JSONResponse(status_code=400, content={"detail": f"Request already {ar.status}"})
+        resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
+        if resp.status_code == 409:
+            return JSONResponse(status_code=409, content={"detail": "User already exists in Keycloak"})
+        resp.raise_for_status()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Failed to create Keycloak user: {e}"})
 
-        # Create Keycloak user
-        token = _get_keycloak_admin_token()
-        if not token:
-            return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
+    # Get the created user ID from Location header
+    location = resp.headers.get("Location", "")
+    kc_user_id = location.rsplit("/", 1)[-1] if location else None
 
-        base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-        # Create user with temporary password = username
-        user_payload = {
-            "username": ar.username,
-            "email": ar.email,
-            "firstName": ar.first_name,
-            "lastName": ar.last_name,
-            "enabled": True,
-            "credentials": [{
-                "type": "password",
-                "value": ar.username,
-                "temporary": True,
-            }],
-        }
+    # Assign the requested role
+    if kc_user_id and ar.requested_role:
         try:
-            resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
-            if resp.status_code == 409:
-                return JSONResponse(status_code=409, content={"detail": "User already exists in Keycloak"})
-            resp.raise_for_status()
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"detail": f"Failed to create Keycloak user: {e}"})
-
-        # Get the created user ID from Location header
-        location = resp.headers.get("Location", "")
-        kc_user_id = location.rsplit("/", 1)[-1] if location else None
-
-        # Assign the requested role
-        if kc_user_id and ar.requested_role:
-            try:
-                role_resp = http_requests.get(
-                    f"{base}/roles/{ar.requested_role}", headers=headers, timeout=5
+            role_resp = http_requests.get(
+                f"{base}/roles/{ar.requested_role}", headers=headers, timeout=5
+            )
+            if role_resp.ok:
+                role_obj = role_resp.json()
+                http_requests.post(
+                    f"{base}/users/{kc_user_id}/role-mappings/realm",
+                    headers=headers, json=[role_obj], timeout=5,
                 )
-                if role_resp.ok:
-                    role_obj = role_resp.json()
-                    http_requests.post(
-                        f"{base}/users/{kc_user_id}/role-mappings/realm",
-                        headers=headers, json=[role_obj], timeout=5,
-                    )
-            except Exception:
-                logger.warning("Failed to assign role %s to new user %s", ar.requested_role, ar.username)
+        except Exception:
+            logger.warning("Failed to assign role %s to new user %s", ar.requested_role, ar.username)
 
-        # Update request status
-        user_info = getattr(request.state, "user", {})
-        ar.status = "approved"
-        ar.reviewed_by = user_info.get("preferred_username", "admin")
-        ar.reviewed_at = datetime.now(timezone.utc)
-        db.commit()
+    # Update request status
+    user_info = getattr(request.state, "user", {})
+    ar.status = "approved"
+    ar.reviewed_by = user_info.get("preferred_username", "admin")
+    ar.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
 
-        return {
-            "status": "ok",
-            "username": ar.username,
-            "keycloak_user_id": kc_user_id,
-            "temporary_password": ar.username,
-        }
-    finally:
-        db.close()
+    return {
+        "status": "ok",
+        "username": ar.username,
+        "keycloak_user_id": kc_user_id,
+        "temporary_password": ar.username,
+    }
 
 
 @app.post("/api/admin/access-requests/{request_id}/reject")
-def reject_access_request(request_id: int, request: Request):
+def reject_access_request(request_id: int, request: Request, db=Depends(get_db)):
     """Reject an access request."""
     from datetime import datetime, timezone
-    from db.app_db import SessionLocal
     from db.models import AccessRequest
 
-    db = SessionLocal()
-    try:
-        ar = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
-        if not ar:
-            return JSONResponse(status_code=404, content={"detail": "Request not found"})
-        if ar.status != "pending":
-            return JSONResponse(status_code=400, content={"detail": f"Request already {ar.status}"})
+    ar = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
+    if not ar:
+        return JSONResponse(status_code=404, content={"detail": "Request not found"})
+    if ar.status != "pending":
+        return JSONResponse(status_code=400, content={"detail": f"Request already {ar.status}"})
 
-        user_info = getattr(request.state, "user", {})
-        ar.status = "rejected"
-        ar.reviewed_by = user_info.get("preferred_username", "admin")
-        ar.reviewed_at = datetime.now(timezone.utc)
-        db.commit()
+    user_info = getattr(request.state, "user", {})
+    ar.status = "rejected"
+    ar.reviewed_by = user_info.get("preferred_username", "admin")
+    ar.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
 
-        return {"status": "ok", "id": ar.id}
-    finally:
-        db.close()
+    return {"status": "ok", "id": ar.id}
 
 
 @app.get("/api/health")
