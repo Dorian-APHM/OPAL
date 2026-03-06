@@ -30,6 +30,7 @@ from modules.cohort.sql_builder import (
     build_export_sql,
 )
 from modules.cohort.characterization import run_characterization
+from modules.cohort.comparison import compare_cohorts
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
@@ -610,6 +611,81 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
     finally:
         conn.close()
 
+    return result
+
+
+class CohortCompareRequest(BaseModel):
+    cdm_name: str
+    cohort_id_a: int
+    cohort_id_b: int
+
+
+@router.post("/compare")
+def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(get_db)):
+    """
+    Compare two saved cohorts using their characterization results.
+    Computes SMD (Standardized Mean Difference) for every variable.
+    If a cohort has no saved characterization, runs it on-the-fly.
+    """
+    # Load both cohorts
+    cohort_a = db.query(Cohort).filter(Cohort.id == req.cohort_id_a).first()
+    if not cohort_a:
+        raise HTTPException(status_code=404, detail=f"Cohort A (id={req.cohort_id_a}) not found")
+    cohort_b = db.query(Cohort).filter(Cohort.id == req.cohort_id_b).first()
+    if not cohort_b:
+        raise HTTPException(status_code=404, detail=f"Cohort B (id={req.cohort_id_b}) not found")
+
+    # Verify both belong to the requested CDM
+    for label, cohort in [("A", cohort_a), ("B", cohort_b)]:
+        if cohort.cdm_name != req.cdm_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cohort {label} belongs to CDM '{cohort.cdm_name}', not '{req.cdm_name}'",
+            )
+
+    # Get latest versions
+    ver_a = (
+        db.query(CohortVersion)
+        .filter(CohortVersion.cohort_id == req.cohort_id_a)
+        .order_by(CohortVersion.version.desc())
+        .first()
+    )
+    ver_b = (
+        db.query(CohortVersion)
+        .filter(CohortVersion.cohort_id == req.cohort_id_b)
+        .order_by(CohortVersion.version.desc())
+        .first()
+    )
+    if not ver_a or not ver_b:
+        raise HTTPException(status_code=404, detail="No version found for one of the cohorts")
+
+    # Get characterization for each, running on-the-fly if needed
+    char_a = ver_a.characterization_json
+    char_b = ver_b.characterization_json
+
+    conn = None
+    if not char_a or not char_b:
+        cdm, conn = _get_cdm_conn(db, req.cdm_name)
+        schema = _get_omop_schema(db, cdm)
+        try:
+            if not char_a:
+                char_a = run_characterization(conn, ver_a.criteria_json, schema)
+                ver_a.characterization_json = char_a
+                ver_a.characterized_at = datetime.utcnow()
+            if not char_b:
+                char_b = run_characterization(conn, ver_b.criteria_json, schema)
+                ver_b.characterization_json = char_b
+                ver_b.characterized_at = datetime.utcnow()
+            db.commit()
+        except Exception as e:
+            logger.exception("On-the-fly characterization failed during comparison")
+            raise HTTPException(status_code=500, detail=f"Characterization error: {e}")
+        finally:
+            conn.close()
+
+    result = compare_cohorts(char_a, char_b)
+    result["cohort_a_name"] = cohort_a.name
+    result["cohort_b_name"] = cohort_b.name
     return result
 
 

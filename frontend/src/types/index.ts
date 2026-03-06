@@ -429,6 +429,82 @@ export interface CharacterizationResult {
   observation_period: CharacterizationObsPeriod;
 }
 
+// ──── Cohort Comparison (SMD) types ────
+
+export interface CohortComparisonDemographicCategory {
+  label: string;
+  pct_a: number;
+  pct_b: number;
+  smd: number | null;
+}
+
+export interface CohortComparisonConcept {
+  concept_id: number;
+  concept_name: string;
+  pct_persons_a: number;
+  pct_persons_b: number;
+  smd: number | null;
+}
+
+export interface CohortComparisonDomain {
+  domain: string;
+  pct_with_data_a: number;
+  pct_with_data_b: number;
+  smd: number | null;
+  concepts: CohortComparisonConcept[];
+}
+
+export interface CohortComparisonMeasurement {
+  concept_id: number;
+  concept_name: string;
+  unit: string;
+  mean_a: number | null;
+  std_a: number | null;
+  mean_b: number | null;
+  std_b: number | null;
+  smd: number | null;
+  pct_persons_a: number;
+  pct_persons_b: number;
+  prevalence_smd: number | null;
+}
+
+export interface CohortComparisonVisitType {
+  concept_id: number;
+  concept_name: string;
+  pct_persons_a: number;
+  pct_persons_b: number;
+  smd: number | null;
+}
+
+export interface CohortComparisonVariable {
+  category: string;
+  variable: string;
+  smd: number | null;
+}
+
+export interface CohortComparisonResult {
+  cohort_a_name: string;
+  cohort_b_name: string;
+  cohort_a_size: number;
+  cohort_b_size: number;
+  demographics: {
+    age: { mean_a: number | null; std_a: number | null; mean_b: number | null; std_b: number | null; smd: number | null };
+    gender: CohortComparisonDemographicCategory[];
+    race: CohortComparisonDemographicCategory[];
+    ethnicity: CohortComparisonDemographicCategory[];
+    age_groups: (CohortComparisonDemographicCategory & { age_group: string })[];
+  };
+  domain_prevalence: CohortComparisonDomain[];
+  measurement_stats: CohortComparisonMeasurement[];
+  visit_types: CohortComparisonVisitType[];
+  observation_period: {
+    mean_days_a: number | null; std_days_a: number | null;
+    mean_days_b: number | null; std_days_b: number | null;
+    smd: number | null;
+  };
+  all_variables: CohortComparisonVariable[];
+}
+
 // ──── Phase 3: Mapping types ────
 
 /** Domain mapping stats from dashboard */

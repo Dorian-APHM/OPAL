@@ -17,6 +17,7 @@ import type {
   UnmappedItem,
   SuggestionResult,
   MappingDecisionEntry,
+  CohortComparisonResult,
 } from '../types';
 
 const api = axios.create({
@@ -192,6 +193,12 @@ export const cohortApi = {
     api.put(`/cohorts/${cohortId}/characterization`, { characterization }),
   getCharacterization: (cohortId: number) =>
     api.get<{ characterization: CharacterizationResult | null; characterized_at: string | null; version: number }>(`/cohorts/${cohortId}/characterization`),
+  compare: (cdmName: string, cohortIdA: number, cohortIdB: number) =>
+    api.post<CohortComparisonResult>('/cohorts/compare', {
+      cdm_name: cdmName,
+      cohort_id_a: cohortIdA,
+      cohort_id_b: cohortIdB,
+    }),
 };
 
 // Mapping endpoints
