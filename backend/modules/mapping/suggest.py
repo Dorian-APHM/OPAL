@@ -12,7 +12,6 @@ Proposes concept mappings for unmapped source values using 5 strategies
 """
 import logging
 import re
-from typing import Any
 
 from psycopg2.extras import DictCursor
 

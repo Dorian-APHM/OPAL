@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Card, Button, Select, Spin, Typography, Table, Tag, Space, Statistic,
-  Row, Col, Collapse, Descriptions, Alert, Empty, Tooltip, Switch, message,
+  Row, Col, Collapse, Descriptions, Alert, Empty, Tooltip, Switch,
 } from 'antd';
 import {
   SwapOutlined, DownloadOutlined, TeamOutlined,

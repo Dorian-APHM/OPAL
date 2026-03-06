@@ -3,7 +3,7 @@ SQLAlchemy models for the OPAL application database.
 """
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, Boolean, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()

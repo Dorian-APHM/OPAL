@@ -185,8 +185,6 @@ export const cohortApi = {
     api.get<{ vocabularies: { vocabulary_id: string; vocabulary_name: string }[] }>('/cohorts/concepts/vocabularies', { params: { cdm_name: cdmName } }),
   listDomains: () =>
     api.get<{ domains: { name: string; table: string }[] }>('/cohorts/domains'),
-  exportDirect: (cdmName: string, criteria: CohortCriteria) =>
-    api.post('/cohorts/export/direct', { cdm_name: cdmName, criteria }, { responseType: 'blob' }),
   characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, signal?: AbortSignal, visitLevel?: boolean) =>
     api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25, visit_level: visitLevel || false }, { signal }),
   saveCharacterization: (cohortId: number, characterization: CharacterizationResult) =>
@@ -251,17 +249,6 @@ export const mappingApi = {
     api.post(`/mapping/history/${decisionId}/rollback`),
   exportHistoryUrl: (cdmName: string, domain?: string) =>
     `/api/mapping/history/${cdmName}/export${domain ? `?domain=${domain}` : ''}`,
-  listReferences: () =>
-    api.get<{ references: { name: string; domain: string; count: number; uploaded_at: string | null }[] }>('/mapping/reference'),
-  uploadReference: (name: string, domain: string, file: File) => {
-    const form = new FormData();
-    form.append('name', name);
-    form.append('domain', domain);
-    form.append('file', file);
-    return api.post<{ name: string; domain: string; count: number }>('/mapping/reference/upload', form);
-  },
-  deleteReference: (name: string) =>
-    api.delete(`/mapping/reference/${name}`),
 };
 
 // Concept Explorer endpoints
@@ -329,11 +316,6 @@ export const ohdsiApi = {
     api.get<{ status: string; logs: string[]; offset: number }>(`/ohdsi/logs/${service}/history`),
   files: (path?: string) => api.get(`/ohdsi/files/${path || ''}`),
   fileUrl: (path: string) => `/api/ohdsi/files/${path}`,
-};
-
-// i18n
-export const i18nApi = {
-  getTranslations: (lang: string) => api.get(`/i18n/${lang}`),
 };
 
 export default api;

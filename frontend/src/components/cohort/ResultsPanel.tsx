@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Card, Statistic, Button, Typography, Space, Tag, Tooltip, Spin, Alert } from 'antd';
+import { Card, Statistic, Button, Typography, Space, Tooltip, Spin, Alert } from 'antd';
 import {
   PlayCircleOutlined, TeamOutlined, BarChartOutlined,
   DownloadOutlined, ThunderboltOutlined, StopOutlined,
@@ -12,7 +12,7 @@ import {
 import { cohortApi, authDownload } from '../../api/client';
 import type { CohortCriteria, AttritionStep } from '../../types';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 interface Props {
   cdmName: string;
@@ -66,27 +66,6 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       setError(e.response?.data?.detail || 'Attrition failed');
     } finally {
       setAttritionLoading(false);
-    }
-  };
-
-  const [exportLoading, setExportLoading] = useState(false);
-  const runExport = async () => {
-    if (!cdmName || !hasCriteria) return;
-    setExportLoading(true);
-    setError('');
-    try {
-      const resp = await cohortApi.exportDirect(cdmName, criteria);
-      const blob = new Blob([resp.data], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'cohort_patients.csv';
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Export failed');
-    } finally {
-      setExportLoading(false);
     }
   };
 
