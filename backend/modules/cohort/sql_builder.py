@@ -25,12 +25,18 @@ _DOMAIN_TABLE_MAP = {
 }
 
 
-def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
+def build_cohort_sql(
+    criteria: dict, omop_schema: str = "omop_cdm", include_visit_id: bool = False,
+) -> str:
     """
     Build a complete SQL query from a cohort criteria JSON object.
 
     Returns a SQL string that yields a list of person_id values matching
     the cohort definition.
+
+    When include_visit_id=True and sameVisit is enabled on the inclusion group,
+    the output includes visit_occurrence_id alongside person_id — useful for
+    visit-level characterization.
     """
     ctes: list[str] = []
     cte_names: list[str] = []
@@ -40,13 +46,20 @@ def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
         cte_counter[0] += 1
         return f"{prefix}_{cte_counter[0]}"
 
+    # Determine whether visit_occurrence_id will be in the output
+    has_same_visit = bool(
+        criteria.get("inclusion", {}).get("sameVisit", False)
+    )
+    visit_in_output = include_visit_id and has_same_visit
+
     # --- Build inclusion criteria ---
     inclusion = criteria.get("inclusion")
     inc_cte = None
     inc_attrition: list[dict] = []
     if inclusion and inclusion.get("criteria"):
         inc_cte, inc_parts = _build_group(
-            inclusion, omop_schema, ctes, cte_names, next_cte_name, "inc", inc_attrition
+            inclusion, omop_schema, ctes, cte_names, next_cte_name, "inc",
+            inc_attrition, keep_visit_id=visit_in_output,
         )
 
     # --- Build exclusion criteria ---
@@ -71,6 +84,8 @@ def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
         # No criteria at all — return all persons
         return f"SELECT person_id FROM {omop_schema}.person"
 
+    select_cols = "person_id, visit_occurrence_id" if visit_in_output else "person_id"
+
     final_parts = []
     if inc_cte:
         final_parts.append(inc_cte)
@@ -79,6 +94,18 @@ def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
 
     if len(final_parts) == 1:
         base = final_parts[0]
+    elif visit_in_output:
+        # Can't INTERSECT with different column counts; use WHERE IN instead
+        base_name = next_cte_name("base")
+        base_sql = (
+            f"{base_name} AS (\n"
+            f"  SELECT {select_cols} FROM {final_parts[0]}\n"
+            f"  WHERE person_id IN (SELECT person_id FROM {final_parts[1]})\n"
+            f")"
+        )
+        ctes.append(base_sql)
+        cte_names.append(base_name)
+        base = base_name
     else:
         # INTERSECT inclusion + demographics
         base_name = next_cte_name("base")
@@ -96,13 +123,21 @@ def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
     # Apply exclusion
     if exc_cte:
         final_name = next_cte_name("final")
-        final_sql = (
-            f"{final_name} AS (\n"
-            f"  SELECT person_id FROM {base}\n"
-            f"  EXCEPT\n"
-            f"  SELECT person_id FROM {exc_cte}\n"
-            f")"
-        )
+        if visit_in_output:
+            final_sql = (
+                f"{final_name} AS (\n"
+                f"  SELECT {select_cols} FROM {base}\n"
+                f"  WHERE person_id NOT IN (SELECT person_id FROM {exc_cte})\n"
+                f")"
+            )
+        else:
+            final_sql = (
+                f"{final_name} AS (\n"
+                f"  SELECT person_id FROM {base}\n"
+                f"  EXCEPT\n"
+                f"  SELECT person_id FROM {exc_cte}\n"
+                f")"
+            )
         ctes.append(final_sql)
         cte_names.append(final_name)
         result_cte = final_name
@@ -112,9 +147,9 @@ def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
     # Build the full WITH ... SELECT statement
     if ctes:
         with_clause = "WITH\n" + ",\n".join(ctes)
-        return f"{with_clause}\nSELECT person_id FROM {result_cte}"
+        return f"{with_clause}\nSELECT {select_cols} FROM {result_cte}"
     else:
-        return f"SELECT person_id FROM {result_cte}"
+        return f"SELECT {select_cols} FROM {result_cte}"
 
 
 def build_count_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
@@ -394,6 +429,7 @@ def _build_group(
     next_cte_name,
     prefix: str,
     attrition: list[dict],
+    keep_visit_id: bool = False,
 ) -> tuple[str, list[str]]:
     """
     Build CTEs for a logical group of criteria.
@@ -479,7 +515,8 @@ def _build_group(
             # JOIN on person_id + visit_occurrence_id for same-visit
             combined_name = next_cte_name(f"{prefix}_samevisit")
             first = group_ctes[0]
-            join_sql = f"  SELECT DISTINCT a.person_id\n  FROM {first} a\n"
+            sv_cols = "a.person_id, a.visit_occurrence_id" if keep_visit_id else "a.person_id"
+            join_sql = f"  SELECT DISTINCT {sv_cols}\n  FROM {first} a\n"
             for j, gc in enumerate(group_ctes[1:], 1):
                 alias = chr(ord('a') + j)
                 join_sql += f"  JOIN {gc} {alias} ON a.person_id = {alias}.person_id AND a.visit_occurrence_id = {alias}.visit_occurrence_id\n"
@@ -513,7 +550,8 @@ def _build_group(
             # JOIN on person_id + visit_occurrence_id for same-visit
             combined_name = next_cte_name(f"{prefix}_samevisit")
             first = part_names[0]
-            join_sql = f"  SELECT DISTINCT a.person_id\n  FROM {first} a\n"
+            sv_cols = "a.person_id, a.visit_occurrence_id" if keep_visit_id else "a.person_id"
+            join_sql = f"  SELECT DISTINCT {sv_cols}\n  FROM {first} a\n"
             for j, pn in enumerate(part_names[1:], 1):
                 alias = chr(ord('a') + j)
                 join_sql += f"  JOIN {pn} {alias} ON a.person_id = {alias}.person_id AND a.visit_occurrence_id = {alias}.visit_occurrence_id\n"

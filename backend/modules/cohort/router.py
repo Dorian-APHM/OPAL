@@ -591,6 +591,7 @@ class CharacterizationRequest(BaseModel):
     cdm_name: str
     criteria: dict
     top_n: int = 25
+    visit_level: bool = False
 
 
 @router.post("/characterize")
@@ -604,7 +605,10 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
     schema = _get_omop_schema(db, cdm)
 
     try:
-        result = run_characterization(conn, req.criteria, schema, top_n=req.top_n)
+        result = run_characterization(
+            conn, req.criteria, schema, top_n=req.top_n,
+            visit_level=req.visit_level,
+        )
     except Exception as e:
         logger.exception("Characterization failed")
         raise HTTPException(status_code=500, detail=f"Characterization error: {e}")
@@ -618,6 +622,7 @@ class CohortCompareRequest(BaseModel):
     cdm_name: str
     cohort_id_a: int
     cohort_id_b: int
+    visit_level: bool = False
 
 
 @router.post("/compare")
@@ -663,19 +668,30 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
     char_a = ver_a.characterization_json
     char_b = ver_b.characterization_json
 
+    # When visit_level is requested, always re-run characterization
+    # (saved results may be patient-level)
+    force_rerun = req.visit_level
     conn = None
-    if not char_a or not char_b:
+    if not char_a or not char_b or force_rerun:
         cdm, conn = _get_cdm_conn(db, req.cdm_name)
         schema = _get_omop_schema(db, cdm)
         try:
-            if not char_a:
-                char_a = run_characterization(conn, ver_a.criteria_json, schema)
-                ver_a.characterization_json = char_a
-                ver_a.characterized_at = datetime.utcnow()
-            if not char_b:
-                char_b = run_characterization(conn, ver_b.criteria_json, schema)
-                ver_b.characterization_json = char_b
-                ver_b.characterized_at = datetime.utcnow()
+            if not char_a or force_rerun:
+                char_a = run_characterization(
+                    conn, ver_a.criteria_json, schema,
+                    visit_level=req.visit_level,
+                )
+                if not req.visit_level:
+                    ver_a.characterization_json = char_a
+                    ver_a.characterized_at = datetime.utcnow()
+            if not char_b or force_rerun:
+                char_b = run_characterization(
+                    conn, ver_b.criteria_json, schema,
+                    visit_level=req.visit_level,
+                )
+                if not req.visit_level:
+                    ver_b.characterization_json = char_b
+                    ver_b.characterized_at = datetime.utcnow()
             db.commit()
         except Exception as e:
             logger.exception("On-the-fly characterization failed during comparison")
