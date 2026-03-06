@@ -49,6 +49,17 @@ if AUTH_ENABLED:
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
+# Lightweight migrations for new columns on existing tables
+from sqlalchemy import inspect as sa_inspect, text
+_insp = sa_inspect(engine)
+if _insp.has_table("cohort_versions"):
+    _cols = {c["name"] for c in _insp.get_columns("cohort_versions")}
+    with engine.begin() as _conn:
+        if "characterization_json" not in _cols:
+            _conn.execute(text("ALTER TABLE cohort_versions ADD COLUMN characterization_json JSON"))
+        if "characterized_at" not in _cols:
+            _conn.execute(text("ALTER TABLE cohort_versions ADD COLUMN characterized_at TIMESTAMP"))
+
 # Import and register routers
 from modules.cdm_router import router as cdm_router
 from modules.quality.router import router as quality_router
