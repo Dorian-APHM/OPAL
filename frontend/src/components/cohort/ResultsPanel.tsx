@@ -204,24 +204,17 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       {/* Export */}
       <Card size="small" title={<Space><DownloadOutlined />{t('cohort.export', 'Export')}</Space>}>
         <Space wrap>
-          <Button
-            size="small"
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={runExport}
-            loading={exportLoading}
-            disabled={!hasCriteria || !cdmName}
-          >
-            {t('cohort.export_patients', 'Export patients (CSV)')}
-          </Button>
           {savedCohortId && (
             <>
               <Button
                 size="small"
+                type="primary"
                 icon={<DownloadOutlined />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
               >
-                CSV (IDs only)
+                {criteria.inclusion.sameVisit
+                  ? 'CSV (Patient + Visit IDs)'
+                  : 'CSV (Patient IDs)'}
               </Button>
               <Button
                 size="small"
