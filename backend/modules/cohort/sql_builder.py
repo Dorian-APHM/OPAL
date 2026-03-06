@@ -1,0 +1,640 @@
+"""
+Cohort JSON → SQL translation engine.
+
+Translates a structured cohort criteria JSON into optimized PostgreSQL
+using CTEs, temporal joins, and concept_ancestor expansion.
+"""
+import logging
+from typing import Any
+
+from config import DOMAIN_CONFIG
+
+logger = logging.getLogger(__name__)
+
+# Mapping from domain names to OMOP table metadata
+_DOMAIN_TABLE_MAP = {
+    name: {
+        "table": cfg["table"],
+        "person_id": cfg["person_id"],
+        "concept_id": cfg["concept_id"],
+        "date_col": cfg["date_col"],
+        "source_value": cfg.get("source_value"),
+    }
+    for name, cfg in DOMAIN_CONFIG.items()
+}
+
+
+def build_cohort_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
+    """
+    Build a complete SQL query from a cohort criteria JSON object.
+
+    Returns a SQL string that yields a list of person_id values matching
+    the cohort definition.
+    """
+    ctes: list[str] = []
+    cte_names: list[str] = []
+    cte_counter = [0]
+
+    def next_cte_name(prefix: str = "cte") -> str:
+        cte_counter[0] += 1
+        return f"{prefix}_{cte_counter[0]}"
+
+    # --- Build inclusion criteria ---
+    inclusion = criteria.get("inclusion")
+    inc_cte = None
+    inc_attrition: list[dict] = []
+    if inclusion and inclusion.get("criteria"):
+        inc_cte, inc_parts = _build_group(
+            inclusion, omop_schema, ctes, cte_names, next_cte_name, "inc", inc_attrition
+        )
+
+    # --- Build exclusion criteria ---
+    exclusion = criteria.get("exclusion")
+    exc_cte = None
+    exc_attrition: list[dict] = []
+    if exclusion and exclusion.get("criteria"):
+        exc_cte, exc_parts = _build_group(
+            exclusion, omop_schema, ctes, cte_names, next_cte_name, "exc", exc_attrition
+        )
+
+    # --- Demographics filter ---
+    demo = criteria.get("demographics")
+    demo_cte = None
+    if demo:
+        demo_cte = _build_demographics_cte(
+            demo, omop_schema, ctes, cte_names, next_cte_name
+        )
+
+    # --- Assemble final query ---
+    if not inc_cte and not demo_cte:
+        # No criteria at all — return all persons
+        return f"SELECT person_id FROM {omop_schema}.person"
+
+    final_parts = []
+    if inc_cte:
+        final_parts.append(inc_cte)
+    if demo_cte:
+        final_parts.append(demo_cte)
+
+    if len(final_parts) == 1:
+        base = final_parts[0]
+    else:
+        # INTERSECT inclusion + demographics
+        base_name = next_cte_name("base")
+        base_sql = (
+            f"{base_name} AS (\n"
+            f"  SELECT person_id FROM {final_parts[0]}\n"
+            f"  INTERSECT\n"
+            f"  SELECT person_id FROM {final_parts[1]}\n"
+            f")"
+        )
+        ctes.append(base_sql)
+        cte_names.append(base_name)
+        base = base_name
+
+    # Apply exclusion
+    if exc_cte:
+        final_name = next_cte_name("final")
+        final_sql = (
+            f"{final_name} AS (\n"
+            f"  SELECT person_id FROM {base}\n"
+            f"  EXCEPT\n"
+            f"  SELECT person_id FROM {exc_cte}\n"
+            f")"
+        )
+        ctes.append(final_sql)
+        cte_names.append(final_name)
+        result_cte = final_name
+    else:
+        result_cte = base
+
+    # Build the full WITH ... SELECT statement
+    if ctes:
+        with_clause = "WITH\n" + ",\n".join(ctes)
+        return f"{with_clause}\nSELECT person_id FROM {result_cte}"
+    else:
+        return f"SELECT person_id FROM {result_cte}"
+
+
+def build_count_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
+    """Build a SQL query that returns only the count of matching patients."""
+    inner = build_cohort_sql(criteria, omop_schema)
+    return f"SELECT COUNT(DISTINCT person_id) AS patient_count FROM ({inner}) AS cohort"
+
+
+def build_attrition_sql(criteria: dict, omop_schema: str = "omop_cdm") -> list[dict]:
+    """
+    Build a list of SQL queries for attrition analysis.
+    Each step returns a cumulative count as criteria are added one by one.
+    Returns list of {step, label, sql} dicts.
+    """
+    steps = []
+    inclusion = criteria.get("inclusion", {})
+    exclusion = criteria.get("exclusion", {})
+    demographics = criteria.get("demographics")
+
+    # Step 0: all persons
+    steps.append({
+        "step": 0,
+        "label": "All persons",
+        "sql": f"SELECT COUNT(DISTINCT person_id) AS n FROM {omop_schema}.person",
+    })
+
+    # Accumulate inclusion criteria
+    inc_criteria = inclusion.get("criteria", [])
+    inc_operator = inclusion.get("operator", "AND")
+    for i, criterion in enumerate(inc_criteria):
+        partial = {
+            "operator": inc_operator,
+            "criteria": inc_criteria[: i + 1],
+        }
+        partial_full = {"inclusion": partial}
+        if demographics:
+            partial_full["demographics"] = demographics
+        sql = build_count_sql(partial_full, omop_schema)
+        label = _criterion_label(criterion)
+        steps.append({"step": i + 1, "label": f"+ {label}", "sql": sql})
+
+    # Exclusion criteria
+    exc_criteria = exclusion.get("criteria", [])
+    if exc_criteria:
+        for j, criterion in enumerate(exc_criteria):
+            partial_exc = {
+                "operator": exclusion.get("operator", "OR"),
+                "criteria": exc_criteria[: j + 1],
+            }
+            partial_full = {"inclusion": inclusion, "exclusion": partial_exc}
+            if demographics:
+                partial_full["demographics"] = demographics
+            sql = build_count_sql(partial_full, omop_schema)
+            label = _criterion_label(criterion)
+            base_step = len(inc_criteria) + 1
+            steps.append({"step": base_step + j, "label": f"- {label}", "sql": sql})
+
+    return steps
+
+
+def build_sample_sql(
+    criteria: dict, omop_schema: str = "omop_cdm", limit: int = 10
+) -> str:
+    """Build SQL to return a random sample of patient data from the cohort."""
+    inner = build_cohort_sql(criteria, omop_schema)
+    return (
+        f"WITH cohort AS ({inner})\n"
+        f"SELECT p.person_id, p.year_of_birth,\n"
+        f"       COALESCE(g.concept_name, 'UNKNOWN') AS gender,\n"
+        f"       COALESCE(r.concept_name, 'UNKNOWN') AS race,\n"
+        f"       op.observation_period_start_date,\n"
+        f"       op.observation_period_end_date\n"
+        f"FROM cohort c\n"
+        f"JOIN {omop_schema}.person p ON c.person_id = p.person_id\n"
+        f"LEFT JOIN {omop_schema}.concept g ON p.gender_concept_id = g.concept_id\n"
+        f"LEFT JOIN {omop_schema}.concept r ON p.race_concept_id = r.concept_id\n"
+        f"LEFT JOIN LATERAL (\n"
+        f"  SELECT observation_period_start_date, observation_period_end_date\n"
+        f"  FROM {omop_schema}.observation_period\n"
+        f"  WHERE person_id = c.person_id\n"
+        f"  ORDER BY observation_period_start_date DESC LIMIT 1\n"
+        f") op ON TRUE\n"
+        f"ORDER BY RANDOM()\n"
+        f"LIMIT {int(limit)}"
+    )
+
+
+def build_export_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
+    """Build SQL to export all patients with demographics (no limit, no random)."""
+    inner = build_cohort_sql(criteria, omop_schema)
+    return (
+        f"WITH cohort AS ({inner})\n"
+        f"SELECT p.person_id, p.year_of_birth,\n"
+        f"       COALESCE(g.concept_name, 'UNKNOWN') AS gender,\n"
+        f"       COALESCE(r.concept_name, 'UNKNOWN') AS race,\n"
+        f"       op.observation_period_start_date,\n"
+        f"       op.observation_period_end_date\n"
+        f"FROM cohort c\n"
+        f"JOIN {omop_schema}.person p ON c.person_id = p.person_id\n"
+        f"LEFT JOIN {omop_schema}.concept g ON p.gender_concept_id = g.concept_id\n"
+        f"LEFT JOIN {omop_schema}.concept r ON p.race_concept_id = r.concept_id\n"
+        f"LEFT JOIN LATERAL (\n"
+        f"  SELECT observation_period_start_date, observation_period_end_date\n"
+        f"  FROM {omop_schema}.observation_period\n"
+        f"  WHERE person_id = c.person_id\n"
+        f"  ORDER BY observation_period_start_date DESC LIMIT 1\n"
+        f") op ON TRUE\n"
+        f"ORDER BY p.person_id"
+    )
+
+
+# ----------------------------------------------------------------
+# Internal helpers
+# ----------------------------------------------------------------
+
+def _build_group(
+    group: dict,
+    omop_schema: str,
+    ctes: list[str],
+    cte_names: list[str],
+    next_cte_name,
+    prefix: str,
+    attrition: list[dict],
+) -> tuple[str, list[str]]:
+    """
+    Build CTEs for a logical group of criteria.
+
+    Supports per-criterion operators via 'operatorWithNext' field.
+    Criteria linked by OR are grouped into sub-groups (UNION),
+    then all groups are combined with AND (INTERSECT).
+
+    Falls back to the group-level 'operator' if criteria don't have
+    'operatorWithNext' (backward compatible).
+
+    Returns (result_cte_name, list_of_individual_cte_names).
+    """
+    criteria = group.get("criteria", [])
+
+    if not criteria:
+        # Check for legacy nested sub-groups
+        sub_groups = group.get("groups", [])
+        if not sub_groups:
+            return None, []
+        # Build sub-groups recursively
+        part_names = []
+        for i, sg in enumerate(sub_groups):
+            sub_cte, _ = _build_group(sg, omop_schema, ctes, cte_names, next_cte_name, f"{prefix}_g{i}", [])
+            if sub_cte:
+                part_names.append(sub_cte)
+        if not part_names:
+            return None, []
+        if len(part_names) == 1:
+            return part_names[0], part_names
+        operator = group.get("operator", "AND").upper()
+        set_op = "INTERSECT" if operator == "AND" else "UNION"
+        combined_name = next_cte_name(f"{prefix}_combined")
+        parts_sql = f"\n  {set_op}\n".join(f"  SELECT person_id FROM {n}" for n in part_names)
+        combined = f"{combined_name} AS (\n{parts_sql}\n)"
+        ctes.append(combined)
+        cte_names.append(combined_name)
+        return combined_name, part_names
+
+    # Same-visit mode: AND criteria must share visit_occurrence_id
+    same_visit = group.get("sameVisit", False)
+
+    # Check if criteria use per-criterion operators
+    has_per_criterion_ops = any(c.get("operatorWithNext") for c in criteria)
+
+    if has_per_criterion_ops:
+        # Group consecutive OR-linked criteria together
+        # Example: [A -OR- B -AND- C -OR- D] → groups: [[A,B], [C,D]]
+        # Each inner group uses UNION, outer groups use INTERSECT
+        or_groups: list[list[dict]] = [[]]
+        for i, criterion in enumerate(criteria):
+            or_groups[-1].append(criterion)
+            if i < len(criteria) - 1:
+                op = criterion.get("operatorWithNext", "AND").upper()
+                if op == "AND":
+                    or_groups.append([])  # start new group
+
+        group_ctes = []
+        select_cols = "person_id, visit_occurrence_id" if same_visit else "person_id"
+        for gi, or_group in enumerate(or_groups):
+            if len(or_group) == 1:
+                cte_name = next_cte_name(prefix)
+                cte = _build_criterion_cte(or_group[0], omop_schema, cte_name, ctes, cte_names, next_cte_name, include_visit_id=same_visit)
+                group_ctes.append(cte)
+            else:
+                # Multiple criteria in OR group → UNION them
+                sub_ctes = []
+                for c in or_group:
+                    cte_name = next_cte_name(prefix)
+                    cte = _build_criterion_cte(c, omop_schema, cte_name, ctes, cte_names, next_cte_name, include_visit_id=same_visit)
+                    sub_ctes.append(cte)
+                union_name = next_cte_name(f"{prefix}_or")
+                union_sql = f"\n  UNION\n".join(f"  SELECT {select_cols} FROM {n}" for n in sub_ctes)
+                union_cte = f"{union_name} AS (\n{union_sql}\n)"
+                ctes.append(union_cte)
+                cte_names.append(union_name)
+                group_ctes.append(union_name)
+
+        if len(group_ctes) == 1:
+            return group_ctes[0], group_ctes
+
+        if same_visit and len(group_ctes) >= 2:
+            # JOIN on person_id + visit_occurrence_id for same-visit
+            combined_name = next_cte_name(f"{prefix}_samevisit")
+            first = group_ctes[0]
+            join_sql = f"  SELECT DISTINCT a.person_id\n  FROM {first} a\n"
+            for j, gc in enumerate(group_ctes[1:], 1):
+                alias = chr(ord('a') + j)
+                join_sql += f"  JOIN {gc} {alias} ON a.person_id = {alias}.person_id AND a.visit_occurrence_id = {alias}.visit_occurrence_id\n"
+            combined = f"{combined_name} AS (\n{join_sql})"
+            ctes.append(combined)
+            cte_names.append(combined_name)
+            return combined_name, group_ctes
+        else:
+            # INTERSECT all groups (AND)
+            combined_name = next_cte_name(f"{prefix}_combined")
+            parts_sql = f"\n  INTERSECT\n".join(f"  SELECT person_id FROM {n}" for n in group_ctes)
+            combined = f"{combined_name} AS (\n{parts_sql}\n)"
+            ctes.append(combined)
+            cte_names.append(combined_name)
+            return combined_name, group_ctes
+    else:
+        # Legacy mode: all criteria use the same group operator
+        operator = group.get("operator", "AND").upper()
+        part_names = []
+        for criterion in criteria:
+            cte_name = next_cte_name(prefix)
+            sql = _build_criterion_cte(criterion, omop_schema, cte_name, ctes, cte_names, next_cte_name)
+            part_names.append(sql)
+
+        if len(part_names) == 0:
+            return None, []
+        if len(part_names) == 1:
+            return part_names[0], part_names
+
+        set_op = "INTERSECT" if operator == "AND" else "UNION"
+        combined_name = next_cte_name(f"{prefix}_combined")
+        parts_sql = f"\n  {set_op}\n".join(f"  SELECT person_id FROM {n}" for n in part_names)
+        combined = f"{combined_name} AS (\n{parts_sql}\n)"
+        ctes.append(combined)
+        cte_names.append(combined_name)
+        return combined_name, part_names
+
+
+def _build_criterion_cte(
+    criterion: dict,
+    omop_schema: str,
+    cte_name: str,
+    ctes: list[str],
+    cte_names: list[str],
+    next_cte_name,
+    include_visit_id: bool = False,
+) -> str:
+    """
+    Build a single criterion CTE that yields person_id values.
+    When include_visit_id=True, also yields visit_occurrence_id for same-visit joins.
+    Handles domain lookup, concept expansion, temporal/frequency/value constraints.
+    """
+    domain = criterion.get("domain", "")
+    concepts = criterion.get("concepts", [])
+    source_codes = criterion.get("source_codes", [])
+    temporal = criterion.get("temporal", {})
+    occurrence = criterion.get("occurrence", {})
+    value = criterion.get("value", {})
+
+    # Special case: nested cohort reference
+    if criterion.get("nested_cohort_sql"):
+        cte_sql = f"{cte_name} AS (\n  {criterion['nested_cohort_sql']}\n)"
+        ctes.append(cte_sql)
+        cte_names.append(cte_name)
+        return cte_name
+
+    # Get domain table info
+    if domain not in _DOMAIN_TABLE_MAP:
+        raise ValueError(f"Unknown domain: {domain}")
+
+    dmeta = _DOMAIN_TABLE_MAP[domain]
+    full_table = f"{omop_schema}.{dmeta['table']}"
+    pid_col = dmeta["person_id"]
+    concept_col = dmeta["concept_id"]
+    date_col = dmeta["date_col"]
+    source_value_col = dmeta.get("source_value")
+
+    # Build WHERE clauses
+    wheres: list[str] = []
+
+    # Concept filtering (with optional descendant expansion)
+    concept_filter = None
+    if concepts:
+        use_descendants = criterion.get("include_descendants", True)
+        if use_descendants:
+            concept_list = ", ".join(
+                str(int(c["concept_id"] if isinstance(c, dict) else c)) for c in concepts
+            )
+            ancestor_subq = (
+                f"SELECT descendant_concept_id FROM {omop_schema}.concept_ancestor "
+                f"WHERE ancestor_concept_id IN ({concept_list})"
+            )
+            concept_filter = f"t.{concept_col} IN ({ancestor_subq})"
+        else:
+            concept_list = ", ".join(
+                str(int(c["concept_id"] if isinstance(c, dict) else c)) for c in concepts
+            )
+            concept_filter = f"t.{concept_col} IN ({concept_list})"
+
+    # Source code filtering (direct match on source_value column)
+    source_filter = None
+    if source_codes and source_value_col:
+        escaped = ", ".join(
+            f"'{code.replace(chr(39), chr(39)+chr(39))}'" for code in source_codes
+        )
+        source_filter = f"t.{source_value_col} IN ({escaped})"
+
+    # Combine concept + source filters with OR
+    if concept_filter and source_filter:
+        wheres.append(f"({concept_filter} OR {source_filter})")
+    elif concept_filter:
+        wheres.append(concept_filter)
+    elif source_filter:
+        wheres.append(source_filter)
+
+    # Temporal constraints
+    temporal_type = temporal.get("type", "any_time")
+    if temporal_type == "absolute_window":
+        date_from = temporal.get("date_from")
+        date_to = temporal.get("date_to")
+        if date_from:
+            wheres.append(f"t.{date_col} >= '{date_from}'")
+        if date_to:
+            wheres.append(f"t.{date_col} <= '{date_to}'")
+
+    # Value constraints (mainly for Measurement)
+    if value:
+        val_op = value.get("operator")
+        val_num = value.get("value")
+        val_high = value.get("value_high")
+        if val_op and val_num is not None:
+            if val_op == "between" and val_high is not None:
+                wheres.append(f"t.value_as_number BETWEEN {float(val_num)} AND {float(val_high)}")
+            else:
+                op_map = {">": ">", "<": "<", ">=": ">=", "<=": "<=", "=": "="}
+                sql_op = op_map.get(val_op, ">")
+                wheres.append(f"t.value_as_number {sql_op} {float(val_num)}")
+        val_concept = value.get("value_as_concept_id")
+        if val_concept is not None:
+            wheres.append(f"t.value_as_concept_id = {int(val_concept)}")
+        unit_concept = value.get("unit_concept_id")
+        if unit_concept is not None:
+            wheres.append(f"t.unit_concept_id = {int(unit_concept)}")
+
+    where_clause = " AND ".join(wheres) if wheres else "TRUE"
+
+    # Visit column for same-visit joins
+    visit_select = ", t.visit_occurrence_id" if include_visit_id else ""
+
+    # Handle occurrence (frequency) constraints
+    occ_type = occurrence.get("type")
+    occ_count = occurrence.get("count", 1)
+
+    if occ_type and occ_type != "any":
+        # Need GROUP BY + HAVING for frequency
+        occ_op_map = {
+            "at_least": ">=",
+            "exactly": "=",
+            "at_most": "<=",
+        }
+        occ_op = occ_op_map.get(occ_type, ">=")
+
+        # Occurrence within a window
+        occ_window_days = occurrence.get("within_days")
+        if occ_window_days:
+            # Windowed frequency: N events within X days
+            inner_name = next_cte_name("occ_inner")
+            inner_sql = (
+                f"{inner_name} AS (\n"
+                f"  SELECT t.{pid_col} AS person_id, t.{date_col} AS event_date\n"
+                f"  FROM {full_table} t\n"
+                f"  WHERE {where_clause}\n"
+                f")"
+            )
+            ctes.append(inner_sql)
+            cte_names.append(inner_name)
+
+            cte_sql = (
+                f"{cte_name} AS (\n"
+                f"  SELECT DISTINCT a.person_id\n"
+                f"  FROM {inner_name} a\n"
+                f"  WHERE (\n"
+                f"    SELECT COUNT(*) FROM {inner_name} b\n"
+                f"    WHERE b.person_id = a.person_id\n"
+                f"      AND b.event_date BETWEEN a.event_date AND a.event_date + INTERVAL '{int(occ_window_days)} days'\n"
+                f"  ) {occ_op} {int(occ_count)}\n"
+                f")"
+            )
+        else:
+            cte_sql = (
+                f"{cte_name} AS (\n"
+                f"  SELECT t.{pid_col} AS person_id{visit_select}\n"
+                f"  FROM {full_table} t\n"
+                f"  WHERE {where_clause}\n"
+                f"  GROUP BY t.{pid_col}{visit_select}\n"
+                f"  HAVING COUNT(*) {occ_op} {int(occ_count)}\n"
+                f")"
+            )
+    else:
+        cte_sql = (
+            f"{cte_name} AS (\n"
+            f"  SELECT DISTINCT t.{pid_col} AS person_id{visit_select}\n"
+            f"  FROM {full_table} t\n"
+            f"  WHERE {where_clause}\n"
+            f")"
+        )
+
+    ctes.append(cte_sql)
+    cte_names.append(cte_name)
+
+    # Handle temporal relative constraints (within_days relative to index)
+    if temporal_type == "within_days" and temporal.get("relative_to") == "index":
+        # This requires the index event to be defined (first inclusion criterion)
+        # For now, we wrap with an additional temporal join CTE
+        days_before = temporal.get("days_before")
+        days_after = temporal.get("days_after")
+        if days_before or days_after:
+            temp_name = next_cte_name("temporal")
+            # The index event is the first event for each person in the criterion's domain
+            temp_conditions = []
+            if days_before:
+                temp_conditions.append(
+                    f"t.{date_col} >= (idx.index_date - INTERVAL '{int(days_before)} days')"
+                )
+            if days_after:
+                temp_conditions.append(
+                    f"t.{date_col} <= (idx.index_date + INTERVAL '{int(days_after)} days')"
+                )
+            temp_where = " AND ".join(temp_conditions)
+
+            temp_sql = (
+                f"{temp_name} AS (\n"
+                f"  SELECT DISTINCT t.{pid_col} AS person_id\n"
+                f"  FROM {full_table} t\n"
+                f"  JOIN (\n"
+                f"    SELECT person_id, MIN({date_col}) AS index_date\n"
+                f"    FROM {full_table}\n"
+                f"    WHERE {where_clause}\n"
+                f"    GROUP BY person_id\n"
+                f"  ) idx ON t.{pid_col} = idx.person_id\n"
+                f"  WHERE {where_clause} AND {temp_where}\n"
+                f")"
+            )
+            ctes.append(temp_sql)
+            cte_names.append(temp_name)
+            return temp_name
+
+    return cte_name
+
+
+def _build_demographics_cte(
+    demo: dict,
+    omop_schema: str,
+    ctes: list[str],
+    cte_names: list[str],
+    next_cte_name,
+) -> str:
+    """Build a CTE for demographic constraints (age, gender, race)."""
+    person_table = f"{omop_schema}.person"
+    wheres: list[str] = []
+
+    # Gender
+    gender = demo.get("gender")
+    if gender and isinstance(gender, list):
+        glist = ", ".join(str(int(g)) for g in gender)
+        wheres.append(f"p.gender_concept_id IN ({glist})")
+
+    # Race
+    race = demo.get("race")
+    if race and isinstance(race, list):
+        rlist = ", ".join(str(int(r)) for r in race)
+        wheres.append(f"p.race_concept_id IN ({rlist})")
+
+    # Ethnicity
+    ethnicity = demo.get("ethnicity")
+    if ethnicity and isinstance(ethnicity, list):
+        elist = ", ".join(str(int(e)) for e in ethnicity)
+        wheres.append(f"p.ethnicity_concept_id IN ({elist})")
+
+    # Age
+    age = demo.get("age")
+    if age:
+        age_min = age.get("min")
+        age_max = age.get("max")
+        # Calculate age based on year_of_birth vs current date
+        age_expr = "EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth"
+        if age_min is not None:
+            wheres.append(f"({age_expr}) >= {int(age_min)}")
+        if age_max is not None:
+            wheres.append(f"({age_expr}) <= {int(age_max)}")
+
+    if not wheres:
+        return None
+
+    where_clause = " AND ".join(wheres)
+    cte_name = next_cte_name("demo")
+    cte_sql = (
+        f"{cte_name} AS (\n"
+        f"  SELECT p.person_id\n"
+        f"  FROM {person_table} p\n"
+        f"  WHERE {where_clause}\n"
+        f")"
+    )
+    ctes.append(cte_sql)
+    cte_names.append(cte_name)
+    return cte_name
+
+
+def _criterion_label(criterion: dict) -> str:
+    """Generate a human-readable label for a criterion (used in attrition)."""
+    domain = criterion.get("domain", "?")
+    concepts = criterion.get("concepts", [])
+    if concepts:
+        return f"{domain} ({len(concepts)} concepts)"
+    return domain

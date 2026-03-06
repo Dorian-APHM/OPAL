@@ -1,0 +1,422 @@
+/** CDM connection configuration */
+export interface CdmConfig {
+  id: number;
+  name: string;
+  db_host: string;
+  db_port: number;
+  db_name: string;
+  db_user: string;
+  omop_schema: string;
+  created_at: string | null;
+}
+
+/** Analysis snapshot metadata */
+export interface SnapshotMeta {
+  id: number;
+  version: number;
+  created_at: string | null;
+}
+
+/** Full snapshot with results */
+export interface Snapshot extends SnapshotMeta {
+  cdm_name?: string;
+  domain?: string;
+  results: AnalysisResults;
+}
+
+/** Analysis results — varies by domain type */
+export type AnalysisResults = DashboardResults | PersonResults | ObsPeriodResults | ClinicalResults;
+
+/** Dashboard results */
+export interface DashboardResults {
+  domain: 'Dashboard';
+  table: string;
+  summary: {
+    total_persons: number;
+    domains: DomainStat[];
+  };
+}
+
+export interface DomainStat {
+  domain: string;
+  total_records: number;
+  distinct_persons: number;
+  pct_persons: number;
+  total_terms: number;
+  mapped_terms: number;
+  unmapped_terms: number;
+  pct_terms_mapped: number;
+  sparkline?: number[];
+  error?: string;
+}
+
+/** Person results */
+export interface PersonResults {
+  domain: 'Person';
+  table: string;
+  achilles_like: {
+    person_summary: {
+      total_persons: number;
+      gender_distribution: {
+        gender_concept_id: (number | null)[];
+        gender_name: string[];
+        count: number[];
+      };
+      birth_year_distribution: {
+        year_of_birth: number[];
+        count: number[];
+      };
+      race_distribution?: {
+        race_concept_id: (number | null)[];
+        race_name: string[];
+        count: number[];
+      };
+      ethnicity_distribution?: {
+        ethnicity_concept_id: (number | null)[];
+        ethnicity_name: string[];
+        count: number[];
+      };
+    };
+  };
+  mapping: Record<string, unknown>;
+}
+
+/** Observation Period results */
+export interface ObsPeriodResults {
+  domain: 'ObservationPeriod';
+  table: string;
+  achilles_like: {
+    age_at_first_observation: { age: number[]; count: number[] };
+    age_by_gender: {
+      rows: BoxPlotRow[];
+    };
+    observation_length_months: {
+      months: number[];
+      n_persons: number[];
+      cap_months: number;
+    };
+    duration_by_gender: {
+      rows: BoxPlotRow[];
+    };
+    cumulative_observation: {
+      months_threshold: number[];
+      pct_persons: number[];
+    };
+    continuous_observation_by_year: {
+      year: number[];
+      n_persons: number[];
+    };
+  };
+  mapping: Record<string, unknown>;
+}
+
+export interface BoxPlotRow {
+  gender_concept_id: string;
+  gender_name: string;
+  n: number;
+  mean_age?: number | null;
+  mean_months?: number | null;
+  p10: number | null;
+  p25: number | null;
+  median_age?: number | null;
+  median_months?: number | null;
+  p75: number | null;
+  p90: number | null;
+}
+
+/** Clinical domain results */
+export interface ClinicalResults {
+  domain: string;
+  table: string;
+  achilles_like: {
+    global: { total_rows: number; distinct_persons: number };
+    by_month: { month_start: string[]; count: number[] };
+    records_per_person: {
+      records_per_person: number[];
+      n_persons: number[];
+      max_bin: number;
+    };
+    top_concepts: ConceptRow[];
+  };
+  mapping: {
+    terms: MappingTerms;
+    rows: MappingRows;
+    top_unmapped_terms: UnmappedTerm[];
+  };
+}
+
+export interface ConceptRow {
+  concept_id: string;
+  concept_name: string;
+  source_value: string;
+  n_records: number;
+  n_persons: number;
+}
+
+export interface MappingTerms {
+  total_terms: number;
+  mapped_terms: number;
+  unmapped_terms: number;
+  pct_terms_mapped: number | null;
+}
+
+export interface MappingRows {
+  total_rows: number;
+  mapped_rows: number;
+  unmapped_rows: number;
+  pct_rows_mapped: number | null;
+}
+
+export interface UnmappedTerm {
+  source_value: string;
+  source_name?: string;
+  count: number;
+}
+
+/** Comparison result */
+export interface ComparisonResult {
+  domain: string;
+  diffs: Record<string, { a: unknown; b: unknown; pct_change: number | null }>;
+  alerts: ComparisonAlert[];
+  threshold: number;
+  snapshot_a: { id: number; cdm_name: string; version: number };
+  snapshot_b: { id: number; cdm_name: string; version: number };
+  results_a: AnalysisResults;
+  results_b: AnalysisResults;
+}
+
+export interface ComparisonAlert {
+  metric: string;
+  value_a: unknown;
+  value_b: unknown;
+  pct_change: number;
+  severity: 'warning' | 'critical';
+}
+
+/** Analysis settings */
+export interface AnalysisSettingsType {
+  cdm_name: string;
+  omop_schema: string;
+  top_unmapped_terms: number;
+  top_concepts: number;
+  max_records_per_person: number;
+  max_observation_months: number;
+  comparison_alert_threshold: number;
+}
+
+/** SSE batch progress event */
+export interface BatchProgressEvent {
+  type: 'progress' | 'done' | 'error';
+  domain?: string;
+  status?: 'running' | 'success' | 'error';
+  error?: string;
+  completed: number;
+  total: number;
+  message?: string;
+}
+
+// ──── Phase 2: Cohort types ────
+
+/** OMOP concept from the concept table */
+export interface OmopConcept {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  domain_id: string;
+  vocabulary_id: string;
+  concept_class_id: string;
+  standard_concept: string | null;
+}
+
+/** Temporal constraint for a criterion */
+export interface TemporalConstraint {
+  type: 'any_time' | 'absolute_window' | 'within_days' | 'during_visit';
+  date_from?: string;
+  date_to?: string;
+  days_before?: number;
+  days_after?: number;
+  relative_to?: 'index';
+}
+
+/** Occurrence (frequency) constraint */
+export interface OccurrenceConstraint {
+  type: 'any' | 'at_least' | 'exactly' | 'at_most';
+  count: number;
+  within_days?: number;
+}
+
+/** Value constraint (for Measurement) */
+export interface ValueConstraint {
+  operator: '>' | '<' | '>=' | '<=' | '=' | 'between';
+  value: number;
+  value_high?: number;
+  value_as_concept_id?: number;
+  unit_concept_id?: number;
+}
+
+/** A single criterion block in the query builder */
+export interface CohortCriterion {
+  id: string; // client-side UUID
+  domain: string;
+  concepts: OmopConcept[];
+  include_descendants: boolean;
+  source_codes: string[];
+  temporal: TemporalConstraint;
+  occurrence: OccurrenceConstraint;
+  value?: ValueConstraint;
+  operatorWithNext?: 'AND' | 'OR'; // operator linking to the NEXT criterion
+}
+
+/** Logical group of criteria (AND/OR) */
+export interface CriteriaGroup {
+  operator: 'AND' | 'OR';
+  criteria: CohortCriterion[];
+  groups?: CriteriaGroup[];
+  sameVisit?: boolean;
+}
+
+/** Demographic constraints */
+export interface DemographicConstraints {
+  age?: { min?: number; max?: number; at?: 'index' | 'current' };
+  gender?: number[];
+  race?: number[];
+  ethnicity?: number[];
+}
+
+/** Full cohort criteria JSON (sent to backend) */
+export interface CohortCriteria {
+  name?: string;
+  inclusion: CriteriaGroup;
+  exclusion: CriteriaGroup;
+  demographics?: DemographicConstraints;
+}
+
+/** Cohort summary from list endpoint */
+export interface CohortSummary {
+  id: number;
+  cdm_name: string;
+  name: string;
+  description: string;
+  created_at: string | null;
+  updated_at: string | null;
+  latest_version: number;
+  patient_count: number | null;
+}
+
+/** Cohort version detail */
+export interface CohortVersionDetail {
+  id: number;
+  version: number;
+  criteria_json: CohortCriteria;
+  generated_sql: string;
+  patient_count: number | null;
+  created_at: string | null;
+}
+
+/** Cohort full detail */
+export interface CohortDetail {
+  id: number;
+  cdm_name: string;
+  name: string;
+  description: string;
+  created_at: string | null;
+  updated_at: string | null;
+  versions: CohortVersionDetail[];
+}
+
+/** Attrition step result */
+export interface AttritionStep {
+  step: number;
+  label: string;
+  count: number | null;
+  error?: string;
+}
+
+/** Sample patient row */
+export interface SamplePatient {
+  person_id: number;
+  year_of_birth: number;
+  gender: string;
+  race: string;
+  observation_period_start_date: string | null;
+  observation_period_end_date: string | null;
+}
+
+// ──── Phase 3: Mapping types ────
+
+/** Domain mapping stats from dashboard */
+export interface MappingDomainStat {
+  domain: string;
+  total_terms: number;
+  mapped_terms: number;
+  unmapped_terms: number;
+  pct_terms_mapped: number;
+  total_rows: number;
+  mapped_rows: number;
+  unmapped_rows: number;
+  pct_rows_mapped: number;
+  version: number;
+  snapshot_date: string | null;
+}
+
+/** Mapping dashboard response */
+export interface MappingDashboardData {
+  cdm_name: string;
+  domains: MappingDomainStat[];
+  decisions_summary: Record<string, number>;
+}
+
+/** Mapping evolution point */
+export interface MappingEvolutionPoint {
+  version: number;
+  date: string | null;
+  pct_terms_mapped: number;
+  pct_rows_mapped: number;
+  total_terms: number;
+  unmapped_terms: number;
+}
+
+/** Unmapped term */
+export interface UnmappedItem {
+  source_value: string;
+  source_name: string;
+  n_records: number;
+  n_persons: number;
+}
+
+/** Mapping suggestion */
+export interface MappingSuggestion {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  vocabulary_id: string;
+  domain_id: string;
+  standard_concept: string | null;
+  confidence: number;
+  source: 'exact' | 'relationship' | 'fuzzy' | 'contextual';
+}
+
+/** Suggestion result for one term */
+export interface SuggestionResult {
+  source_value: string;
+  source_name: string;
+  suggestions: MappingSuggestion[];
+}
+
+/** Mapping decision (history entry) */
+export interface MappingDecisionEntry {
+  id: number;
+  domain: string;
+  source_value: string;
+  source_name: string;
+  action: 'approved' | 'modified' | 'rejected' | 'rolled_back';
+  target_concept_id: number | null;
+  target_concept_name: string;
+  target_vocabulary_id: string;
+  previous_concept_id: number | null;
+  suggestion_source: string;
+  confidence_score: number | null;
+  user: string;
+  reason: string;
+  created_at: string | null;
+}
