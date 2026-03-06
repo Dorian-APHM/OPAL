@@ -33,3 +33,4 @@ opal_data/
 *.png
 demo.html
 .claude/
+backend/test_opal.db
