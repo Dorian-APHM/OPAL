@@ -19,6 +19,7 @@ _DOMAIN_TABLE_MAP = {
         "concept_id": cfg["concept_id"],
         "date_col": cfg["date_col"],
         "source_value": cfg.get("source_value"),
+        "source_name": cfg.get("source_name"),
     }
     for name, cfg in DOMAIN_CONFIG.items()
 }
@@ -199,6 +200,162 @@ def build_sample_sql(
         f"ORDER BY RANDOM()\n"
         f"LIMIT {int(limit)}"
     )
+
+
+def build_detailed_sample_sql(
+    criteria: dict, omop_schema: str = "omop_cdm", limit: int = 10
+) -> tuple[str, list[dict]]:
+    """
+    Build SQL returning a detailed patient sample with per-criterion matched codes.
+
+    Returns (sql, columns_meta) where columns_meta describes the dynamic columns
+    so the frontend knows how to label them.
+    Each row has: person_id, year_of_birth, [visit_occurrence_id if sameVisit],
+    and for each inclusion criterion: crit_<i>_code, crit_<i>_value (if Measurement).
+    """
+    inner = build_cohort_sql(criteria, omop_schema)
+
+    inclusion = criteria.get("inclusion", {})
+    inc_criteria = inclusion.get("criteria", [])
+    same_visit = inclusion.get("sameVisit", False)
+
+    # Build LATERAL joins for each criterion
+    laterals = []
+    select_extra = []
+    columns_meta = []
+
+    for i, criterion in enumerate(inc_criteria):
+        domain = criterion.get("domain", "")
+        if domain not in _DOMAIN_TABLE_MAP:
+            continue
+
+        dmeta = _DOMAIN_TABLE_MAP[domain]
+        full_table = f"{omop_schema}.{dmeta['table']}"
+        pid_col = dmeta["person_id"]
+        concept_col = dmeta["concept_id"]
+        source_value_col = dmeta.get("source_value")
+        source_name_col = dmeta.get("source_name")
+        alias = f"cr{i}"
+
+        # Build WHERE for this criterion's concept/source filters
+        concepts = criterion.get("concepts", [])
+        source_codes = criterion.get("source_codes", [])
+        wheres = []
+
+        concept_filter = None
+        if concepts:
+            use_descendants = criterion.get("include_descendants", True)
+            concept_list = ", ".join(
+                str(int(c["concept_id"] if isinstance(c, dict) else c)) for c in concepts
+            )
+            if use_descendants:
+                ancestor_subq = (
+                    f"SELECT descendant_concept_id FROM {omop_schema}.concept_ancestor "
+                    f"WHERE ancestor_concept_id IN ({concept_list})"
+                )
+                concept_filter = f"t.{concept_col} IN ({ancestor_subq})"
+            else:
+                concept_filter = f"t.{concept_col} IN ({concept_list})"
+
+        source_filter = None
+        if source_codes and source_value_col:
+            escaped = ", ".join(
+                f"'{code.replace(chr(39), chr(39)+chr(39))}'" for code in source_codes
+            )
+            source_filter = f"t.{source_value_col} IN ({escaped})"
+
+        if concept_filter and source_filter:
+            wheres.append(f"({concept_filter} OR {source_filter})")
+        elif concept_filter:
+            wheres.append(concept_filter)
+        elif source_filter:
+            wheres.append(source_filter)
+
+        if not wheres:
+            continue
+
+        where_clause = " AND ".join(wheres)
+
+        # Build the select columns for this lateral
+        is_measurement = (domain == "Measurement")
+        lat_select = f"con.concept_code, con.concept_name"
+        if source_name_col:
+            lat_select += f", t.{source_name_col} AS source_name"
+        if source_value_col:
+            lat_select += f", t.{source_value_col} AS source_value"
+        if is_measurement:
+            lat_select += ", t.value_as_number, t.unit_source_value"
+        if same_visit:
+            lat_select += ", t.visit_occurrence_id"
+
+        lateral_sql = (
+            f"LEFT JOIN LATERAL (\n"
+            f"  SELECT {lat_select}\n"
+            f"  FROM {full_table} t\n"
+            f"  LEFT JOIN {omop_schema}.concept con ON t.{concept_col} = con.concept_id\n"
+            f"  WHERE t.{pid_col} = c.person_id AND {where_clause}\n"
+            f"  LIMIT 1\n"
+            f") {alias} ON TRUE"
+        )
+        laterals.append(lateral_sql)
+
+        # Label for this criterion
+        label = domain
+        if concepts:
+            names = [c.get("concept_name", "") if isinstance(c, dict) else str(c) for c in concepts[:2]]
+            label = ", ".join(n for n in names if n) or domain
+            if len(concepts) > 2:
+                label += f" +{len(concepts)-2}"
+        elif source_codes:
+            label = ", ".join(source_codes[:2])
+            if len(source_codes) > 2:
+                label += f" +{len(source_codes)-2}"
+
+        # source_code — label format: source_value then label (source_name > concept_name > ref codebook later)
+        # Build the label expression: prioritize source_name (local) over concept_name (OMOP)
+        if source_name_col:
+            label_expr = f"COALESCE({alias}.source_name, {alias}.concept_name)"
+        else:
+            label_expr = f"{alias}.concept_name"
+
+        if source_value_col:
+            select_extra.append(
+                f"COALESCE({alias}.source_value, {alias}.concept_code) || "
+                f"COALESCE(' — ' || NULLIF({label_expr}, ''), '') AS crit_{i}_code"
+            )
+        else:
+            select_extra.append(
+                f"{alias}.concept_code || "
+                f"COALESCE(' — ' || NULLIF({label_expr}, ''), '') AS crit_{i}_code"
+            )
+        columns_meta.append({"key": f"crit_{i}_code", "label": label, "domain": domain})
+
+        if is_measurement:
+            select_extra.append(
+                f"CAST({alias}.value_as_number AS TEXT) || "
+                f"COALESCE(' — ' || {alias}.unit_source_value, '') AS crit_{i}_value"
+            )
+            columns_meta.append({"key": f"crit_{i}_value", "label": f"{label} (value)", "domain": domain})
+
+        if same_visit:
+            # Only add visit_id once from the first criterion
+            if i == 0:
+                select_extra.insert(0, f"{alias}.visit_occurrence_id")
+                columns_meta.insert(0, {"key": "visit_occurrence_id", "label": "Visit ID", "domain": ""})
+
+    extra_cols = (", " + ", ".join(select_extra)) if select_extra else ""
+    lateral_joins = "\n".join(laterals)
+
+    sql = (
+        f"WITH cohort AS ({inner})\n"
+        f"SELECT p.person_id, p.year_of_birth{extra_cols}\n"
+        f"FROM (SELECT DISTINCT person_id FROM cohort) c\n"
+        f"JOIN {omop_schema}.person p ON c.person_id = p.person_id\n"
+        f"{lateral_joins}\n"
+        f"ORDER BY RANDOM()\n"
+        f"LIMIT {int(limit)}"
+    )
+    return sql, columns_meta
 
 
 def build_export_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:

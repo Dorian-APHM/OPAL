@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Card, Button, Input, Typography, Space, Modal, List, Tag, message,
-  Tooltip, Popconfirm, Row, Col, Empty,
+  Tooltip, Popconfirm, Row, Col, Empty, Table, Spin,
 } from 'antd';
 import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
-  PlusOutlined, PlayCircleOutlined, EditOutlined,
+  PlusOutlined, PlayCircleOutlined, EditOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -154,6 +154,28 @@ export default function CohortPage({ selectedCdm }: Props) {
     setSavedCohortId(undefined);
     setCohortName('');
     setCohortDesc('');
+    setSamplePatients([]);
+    setSampleColumns([]);
+  };
+
+  // Detailed sample state
+  const [samplePatients, setSamplePatients] = useState<Record<string, any>[]>([]);
+  const [sampleColumns, setSampleColumns] = useState<{ key: string; label: string; domain: string }[]>([]);
+  const [sampleLoading, setSampleLoading] = useState(false);
+
+  const runDetailedSample = async () => {
+    if (!selectedCdm) return;
+    const backendCriteria = toBackendCriteria(criteria);
+    setSampleLoading(true);
+    try {
+      const resp = await cohortApi.sampleDetailed(selectedCdm, backendCriteria, 10);
+      setSamplePatients(resp.data.patients);
+      setSampleColumns(resp.data.columns);
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || 'Sampling failed');
+    } finally {
+      setSampleLoading(false);
+    }
   };
 
   if (!selectedCdm) {
@@ -209,7 +231,7 @@ export default function CohortPage({ selectedCdm }: Props) {
           />
         </Col>
 
-        {/* Center: Query Canvas */}
+        {/* Center: Query Canvas + Sample */}
         <Col span={12} style={{ height: '100%', overflow: 'auto' }}>
           <QueryCanvas
             inclusion={criteria.inclusion}
@@ -220,6 +242,51 @@ export default function CohortPage({ selectedCdm }: Props) {
             onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
             onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
           />
+
+          {/* Detailed Sample */}
+          <Card
+            size="small"
+            style={{ marginTop: 8 }}
+            title={<Space><UserOutlined />{t('cohort.sample_patients', 'Sample Patients')}</Space>}
+            extra={
+              <Button
+                size="small"
+                onClick={runDetailedSample}
+                loading={sampleLoading}
+                disabled={criteria.inclusion.criteria.length === 0}
+              >
+                {t('cohort.sample', 'Sample')}
+              </Button>
+            }
+          >
+            {sampleLoading ? (
+              <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
+            ) : samplePatients.length > 0 ? (
+              <Table
+                size="small"
+                dataSource={samplePatients}
+                rowKey={(_, idx) => String(idx)}
+                pagination={false}
+                scroll={{ x: true }}
+                columns={[
+                  { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' },
+                  { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
+                  ...sampleColumns.map(col => ({
+                    title: col.label,
+                    dataIndex: col.key,
+                    key: col.key,
+                    width: col.key === 'visit_occurrence_id' ? 90 : 150,
+                    ellipsis: true,
+                    render: (v: any) => v != null ? String(v) : '—',
+                  })),
+                ]}
+              />
+            ) : (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t('cohort.click_sample', 'Click Sample to see random patients')}
+              </Typography.Text>
+            )}
+          </Card>
         </Col>
 
         {/* Right: Results Panel */}
