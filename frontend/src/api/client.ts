@@ -24,6 +24,7 @@ import type {
   AuditEntry,
   AuditStats,
   AdminUser,
+  AccessRequest,
 } from '../types';
 
 const api = axios.create({
@@ -393,6 +394,20 @@ export const adminApi = {
     api.delete(`/admin/users/${userId}/roles/${role}`),
   toggleUser: (userId: string, enabled: boolean) =>
     api.put(`/admin/users/${userId}/toggle`, { enabled }),
+  accessRequests: (statusFilter = 'pending') =>
+    api.get<{ requests: AccessRequest[] }>('/admin/access-requests', { params: { status_filter: statusFilter } }),
+  approveRequest: (id: number) =>
+    api.post(`/admin/access-requests/${id}/approve`),
+  rejectRequest: (id: number) =>
+    api.post(`/admin/access-requests/${id}/reject`),
+};
+
+// Public endpoint (no auth needed)
+export const publicApi = {
+  submitAccessRequest: (data: {
+    username: string; email: string;
+    first_name: string; last_name: string; requested_role: string;
+  }) => api.post('/access-requests', data),
 };
 
 export default api;
