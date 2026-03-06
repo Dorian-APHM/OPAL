@@ -15,6 +15,8 @@ import {
   MenuUnfoldOutlined,
   UserOutlined,
   LogoutOutlined,
+  AuditOutlined,
+  TeamOutlined as UsersOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../../api/client';
@@ -62,6 +64,8 @@ export default function Sidebar({
     { key: '/ohdsi', icon: <ExperimentOutlined />, label: t('app.ohdsi') },
     { key: '/cdm', icon: <DatabaseOutlined />, label: t('cdm.title') },
     { key: '/settings', icon: <SettingOutlined />, label: t('app.settings') },
+    { key: '/audit', icon: <AuditOutlined />, label: t('app.audit') },
+    { key: '/users', icon: <UsersOutlined />, label: t('app.users') },
   ];
 
   // Filter menu items based on user's role access

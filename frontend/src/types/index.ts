@@ -620,3 +620,40 @@ export interface MappingDecisionEntry {
   reason: string;
   created_at: string | null;
 }
+
+// ──── Audit types ────
+
+/** Audit log entry */
+export interface AuditEntry {
+  ts: string;
+  user: string;
+  roles: string[];
+  action: string;
+  method: string;
+  path: string;
+  status: number;
+  duration_ms: number;
+  ip: string;
+  params?: Record<string, string>;
+}
+
+/** Audit stats */
+export interface AuditStats {
+  total_events: number;
+  by_user: { user: string; count: number }[];
+  by_action: { action: string; count: number }[];
+}
+
+// ──── Admin user types ────
+
+/** Keycloak user */
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  enabled: boolean;
+  created_at: number | null;
+  roles: string[];
+}

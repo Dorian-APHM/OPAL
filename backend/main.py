@@ -8,11 +8,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 import psycopg2
 
-from config import CORS_ORIGINS, AUTH_ENABLED
+from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
+from audit.logger import AUDIT_LOG_DIR
 from db.app_db import engine
 from db.models import Base
 
@@ -124,32 +125,328 @@ def auth_me(request: Request):
 
 
 @app.get("/api/audit/logs")
-def get_audit_logs(request: Request, date: str | None = None, user: str | None = None, limit: int = 200):
-    """Return audit log entries (admin only, handled by role middleware)."""
+def get_audit_logs(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    date: str | None = None,
+    user: str | None = None,
+    action: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    """Return audit log entries with filtering and pagination (admin only)."""
     from audit.logger import AUDIT_LOG_DIR
     import json as _json
-    from datetime import date as _date
+    from datetime import date as _dt, timedelta
 
-    target_date = date or _date.today().isoformat()
-    log_file = AUDIT_LOG_DIR / f"{target_date}.jsonl"
-    if not log_file.exists():
-        return {"date": target_date, "entries": []}
+    # Determine date range
+    if date:
+        dates = [date]
+    else:
+        d_from = _dt.fromisoformat(date_from) if date_from else _dt.today()
+        d_to = _dt.fromisoformat(date_to) if date_to else d_from
+        dates = []
+        d = d_to
+        while d >= d_from:
+            dates.append(d.isoformat())
+            d -= timedelta(days=1)
 
     entries = []
-    for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-        if not line:
+    for dt_str in dates:
+        log_file = AUDIT_LOG_DIR / f"{dt_str}.jsonl"
+        if not log_file.exists():
             continue
-        try:
-            entry = _json.loads(line)
-            if user and entry.get("user") != user:
+        for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
+            if not line:
                 continue
-            entries.append(entry)
-        except _json.JSONDecodeError:
-            continue
+            try:
+                entry = _json.loads(line)
+                if user and entry.get("user") != user:
+                    continue
+                if action and not entry.get("action", "").startswith(action):
+                    continue
+                entries.append(entry)
+            except _json.JSONDecodeError:
+                continue
 
-    # Return most recent first, limited
-    entries.reverse()
-    return {"date": target_date, "entries": entries[:limit]}
+    entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
+    total = len(entries)
+    start = (page - 1) * page_size
+    return {
+        "entries": entries[start:start + page_size],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@app.get("/api/audit/stats")
+def get_audit_stats(request: Request, date_from: str | None = None, date_to: str | None = None):
+    """Return audit log summary stats for a date range."""
+    from audit.logger import AUDIT_LOG_DIR
+    import json as _json
+    from datetime import date as _dt, timedelta
+    from collections import Counter
+
+    d_from = _dt.fromisoformat(date_from) if date_from else _dt.today()
+    d_to = _dt.fromisoformat(date_to) if date_to else d_from
+
+    user_counts: Counter = Counter()
+    action_counts: Counter = Counter()
+    total = 0
+
+    d = d_from
+    while d <= d_to:
+        log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
+        if log_file.exists():
+            for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                    user_counts[entry.get("user", "unknown")] += 1
+                    action_counts[entry.get("action", "unknown")] += 1
+                    total += 1
+                except _json.JSONDecodeError:
+                    continue
+        d += timedelta(days=1)
+
+    return {
+        "total_events": total,
+        "by_user": [{"user": u, "count": c} for u, c in user_counts.most_common(50)],
+        "by_action": [{"action": a, "count": c} for a, c in action_counts.most_common(50)],
+    }
+
+
+@app.get("/api/audit/dates")
+def get_audit_dates(request: Request):
+    """Return list of dates that have audit log files."""
+    from audit.logger import AUDIT_LOG_DIR
+    dates = sorted(
+        [f.stem for f in AUDIT_LOG_DIR.glob("*.jsonl")],
+        reverse=True,
+    )
+    return {"dates": dates}
+
+
+@app.get("/api/audit/export")
+def export_audit_csv(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    user: str | None = None,
+    action: str | None = None,
+):
+    """Export audit logs as CSV."""
+    import csv
+    import io
+    import json as _json
+    from datetime import date as _dt, timedelta
+
+    d_from = _dt.fromisoformat(date_from) if date_from else _dt.today()
+    d_to = _dt.fromisoformat(date_to) if date_to else d_from
+
+    entries = []
+    d = d_from
+    while d <= d_to:
+        log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
+        if log_file.exists():
+            for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                    if user and entry.get("user") != user:
+                        continue
+                    if action and not entry.get("action", "").startswith(action):
+                        continue
+                    entries.append(entry)
+                except _json.JSONDecodeError:
+                    continue
+        d += timedelta(days=1)
+
+    from audit.logger import AUDIT_LOG_DIR  # noqa: already imported above
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
+    for e in entries:
+        writer.writerow([
+            e.get("ts", ""), e.get("user", ""), ",".join(e.get("roles", [])),
+            e.get("action", ""), e.get("method", ""), e.get("path", ""),
+            e.get("status", ""), e.get("duration_ms", ""), e.get("ip", ""),
+        ])
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=audit_logs.csv"},
+    )
+
+
+# ──── Admin: User Management (Keycloak proxy) ────
+
+@app.get("/api/admin/users")
+def list_users(request: Request):
+    """List Keycloak users with their roles (admin only)."""
+    import requests as http_requests
+    token = _get_keycloak_admin_token()
+    if not token:
+        return {"users": [], "error": "Keycloak admin unavailable"}
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        resp = http_requests.get(f"{base}/users?max=200", headers=headers, timeout=10)
+        resp.raise_for_status()
+        users = resp.json()
+    except Exception as e:
+        logger.warning("Failed to fetch Keycloak users: %s", e)
+        return {"users": [], "error": str(e)}
+
+    # Fetch role mappings for each user
+    result = []
+    for u in users:
+        user_id = u["id"]
+        try:
+            roles_resp = http_requests.get(
+                f"{base}/users/{user_id}/role-mappings/realm", headers=headers, timeout=5
+            )
+            user_roles = [r["name"] for r in roles_resp.json()] if roles_resp.ok else []
+        except Exception:
+            user_roles = []
+
+        result.append({
+            "id": user_id,
+            "username": u.get("username", ""),
+            "email": u.get("email", ""),
+            "first_name": u.get("firstName", ""),
+            "last_name": u.get("lastName", ""),
+            "enabled": u.get("enabled", False),
+            "created_at": u.get("createdTimestamp"),
+            "roles": user_roles,
+        })
+
+    return {"users": result}
+
+
+@app.post("/api/admin/users/{user_id}/roles")
+def assign_role(user_id: str, request: Request, body: dict):
+    """Assign a role to a Keycloak user."""
+    import requests as http_requests
+    role_name = body.get("role")
+    if not role_name:
+        return JSONResponse(status_code=400, content={"detail": "role is required"})
+
+    token = _get_keycloak_admin_token()
+    if not token:
+        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Get role representation
+    try:
+        role_resp = http_requests.get(f"{base}/roles/{role_name}", headers=headers, timeout=5)
+        role_resp.raise_for_status()
+        role_obj = role_resp.json()
+    except Exception:
+        return JSONResponse(status_code=404, content={"detail": f"Role '{role_name}' not found"})
+
+    # Assign role
+    try:
+        resp = http_requests.post(
+            f"{base}/users/{user_id}/role-mappings/realm",
+            headers=headers, json=[role_obj], timeout=5,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Failed to assign role: {e}"})
+
+    return {"status": "ok", "user_id": user_id, "role": role_name, "action": "assigned"}
+
+
+@app.delete("/api/admin/users/{user_id}/roles/{role_name}")
+def remove_role(user_id: str, role_name: str, request: Request):
+    """Remove a role from a Keycloak user."""
+    import requests as http_requests
+    token = _get_keycloak_admin_token()
+    if not token:
+        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    try:
+        role_resp = http_requests.get(f"{base}/roles/{role_name}", headers=headers, timeout=5)
+        role_resp.raise_for_status()
+        role_obj = role_resp.json()
+    except Exception:
+        return JSONResponse(status_code=404, content={"detail": f"Role '{role_name}' not found"})
+
+    try:
+        resp = http_requests.delete(
+            f"{base}/users/{user_id}/role-mappings/realm",
+            headers=headers, json=[role_obj], timeout=5,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Failed to remove role: {e}"})
+
+    return {"status": "ok", "user_id": user_id, "role": role_name, "action": "removed"}
+
+
+@app.put("/api/admin/users/{user_id}/toggle")
+def toggle_user(user_id: str, request: Request, body: dict):
+    """Enable or disable a Keycloak user."""
+    import requests as http_requests
+    enabled = body.get("enabled", True)
+    token = _get_keycloak_admin_token()
+    if not token:
+        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    try:
+        resp = http_requests.put(
+            f"{base}/users/{user_id}", headers=headers, json={"enabled": enabled}, timeout=5,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Failed to update user: {e}"})
+
+    return {"status": "ok", "user_id": user_id, "enabled": enabled}
+
+
+def _get_keycloak_admin_token() -> str | None:
+    """Get a Keycloak admin token using client credentials or admin password."""
+    import requests as http_requests
+    import os
+
+    admin_user = os.getenv("KEYCLOAK_ADMIN", "admin")
+    admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
+
+    try:
+        resp = http_requests.post(
+            f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
+            data={
+                "grant_type": "password",
+                "client_id": "admin-cli",
+                "username": admin_user,
+                "password": admin_pass,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("access_token")
+    except Exception as e:
+        logger.warning("Failed to get Keycloak admin token: %s", e)
+        return None
 
 
 @app.get("/api/health")
