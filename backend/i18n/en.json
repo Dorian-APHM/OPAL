@@ -6,7 +6,9 @@
     "mapping": "Mapping",
     "settings": "Settings",
     "concepts": "Concepts",
-    "language": "Language"
+    "language": "Language",
+    "audit": "Audit Log",
+    "users": "Users"
   },
   "cdm": {
     "title": "CDM Management",
@@ -142,5 +144,40 @@
     "search": "Search",
     "domain": "Domain",
     "vocabulary": "Vocabulary"
+  },
+  "audit": {
+    "title": "Audit Log",
+    "time": "Time",
+    "user": "User",
+    "action": "Action",
+    "method": "Method",
+    "path": "Path",
+    "status": "Status",
+    "duration": "Duration",
+    "total_events": "Total Events",
+    "active_users": "Active Users",
+    "action_types": "Action Types",
+    "filter_user": "Filter by user",
+    "filter_action": "Filter by action",
+    "refresh": "Refresh",
+    "entries": "entries",
+    "load_error": "Failed to load audit logs"
+  },
+  "admin": {
+    "user_management": "User Management",
+    "username": "Username",
+    "name": "Name",
+    "roles": "Roles",
+    "status": "Status",
+    "created": "Created",
+    "users": "users",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "role_assigned": "Role assigned",
+    "role_removed": "Role removed",
+    "user_enabled": "User enabled",
+    "user_disabled": "User disabled",
+    "no_users": "No users found",
+    "keycloak_warning": "Keycloak connection issue"
   }
 }
