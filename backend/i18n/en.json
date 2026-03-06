@@ -102,7 +102,20 @@
     "approve": "Approve",
     "reject": "Reject",
     "rollback": "Rollback",
-    "write_to_cdm": "Write to CDM"
+    "write_to_cdm": "Write to CDM",
+    "strategy_stats": "Strategy Performance",
+    "all_domains": "All domains",
+    "approval_rate": "Approval %",
+    "modification_rate": "Modification %",
+    "rejection_rate": "Rejection %",
+    "strategy": "Strategy",
+    "total_decisions": "Decisions",
+    "approved": "Approved",
+    "modified": "Modified",
+    "rejected": "Rejected",
+    "avg_confidence": "Avg Confidence",
+    "avg_conf_approved": "Avg Conf. (Approved)",
+    "no_strategy_data": "No mapping decisions yet"
   },
   "common": {
     "save": "Save",

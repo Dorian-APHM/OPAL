@@ -18,6 +18,7 @@ import type {
   SuggestionResult,
   MappingDecisionEntry,
   CohortComparisonResult,
+  StrategyStats,
 } from '../types';
 
 const api = axios.create({
@@ -174,8 +175,12 @@ export const qualityApi = {
     ),
   reportUrl: (cdmName: string, lang: string = 'en') =>
     `/api/quality/report/${cdmName}?lang=${lang}`,
+  reportPdfUrl: (cdmName: string, lang: string = 'en') =>
+    `/api/quality/report/${cdmName}/pdf?lang=${lang}`,
   comparisonReportUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
     `/api/quality/report/comparison?cdm_name_a=${encodeURIComponent(cdmNameA)}&cdm_name_b=${encodeURIComponent(cdmNameB)}&lang=${lang}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
+  comparisonReportPdfUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
+    `/api/quality/report/comparison/pdf?cdm_name_a=${encodeURIComponent(cdmNameA)}&cdm_name_b=${encodeURIComponent(cdmNameB)}&lang=${lang}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
 };
 
 // Cohort endpoints
@@ -222,12 +227,22 @@ export const cohortApi = {
       cohort_id_b: cohortIdB,
       visit_level: visitLevel || false,
     }),
+  executeSql: (cdmName: string, sql: string, limit?: number) =>
+    api.post<{ columns: string[]; rows: Record<string, any>[]; row_count: number; truncated: boolean }>(
+      '/cohorts/sql/execute', { cdm_name: cdmName, sql, limit: limit || 1000 }
+    ),
+  exportSql: (cdmName: string, sql: string) =>
+    api.post('/cohorts/sql/export', { cdm_name: cdmName, sql }, { responseType: 'blob' }),
 };
 
 // Mapping endpoints
 export const mappingApi = {
   dashboard: (cdmName: string) =>
     api.get<MappingDashboardData>(`/mapping/dashboard/${cdmName}`),
+  strategyStats: (cdmName: string, domain?: string) =>
+    api.get<{ cdm_name: string; domain: string | null; strategies: StrategyStats[]; total_decisions: number }>(
+      `/mapping/strategies/${cdmName}`, { params: domain ? { domain } : {} }
+    ),
   evolution: (cdmName: string, domain: string) =>
     api.get<{ evolution: MappingEvolutionPoint[] }>(`/mapping/dashboard/${cdmName}/evolution`, { params: { domain } }),
   unmapped: (cdmName: string, domain: string, page?: number, pageSize?: number, search?: string) =>

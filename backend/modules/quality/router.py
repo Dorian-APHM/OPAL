@@ -543,6 +543,116 @@ def generate_report(
     )
 
 
+@router.get("/report/{cdm_name}/pdf")
+def generate_pdf_report(
+    cdm_name: str,
+    lang: str = Query(default="en"),
+    db: Session = Depends(get_db),
+):
+    """Generate a PDF quality report for a CDM (latest snapshots for all domains)."""
+    from modules.quality.report_builder import build_html_report
+
+    all_domains = get_available_domains()
+    snapshots_data = {}
+    for dom in all_domains:
+        snap = (
+            db.query(AnalysisSnapshot)
+            .filter(AnalysisSnapshot.cdm_name == cdm_name, AnalysisSnapshot.domain == dom)
+            .order_by(AnalysisSnapshot.version.desc())
+            .first()
+        )
+        if snap:
+            snapshots_data[dom] = {
+                "version": snap.version,
+                "created_at": snap.created_at.isoformat() if snap.created_at else None,
+                "results": snap.results,
+            }
+
+    if not snapshots_data:
+        raise HTTPException(status_code=404, detail="No snapshots found for this CDM")
+
+    html = build_html_report(cdm_name, snapshots_data, lang=lang)
+
+    # Convert HTML to PDF
+    from xhtml2pdf import pisa
+    pdf_buffer = io.BytesIO()
+    pisa_status = pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
+    if pisa_status.err:
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    pdf_buffer.seek(0)
+
+    filename = f"opal_report_{cdm_name}.pdf"
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/report/comparison/pdf")
+def generate_comparison_pdf_report(
+    cdm_name_a: str,
+    cdm_name_b: str,
+    domain: str | None = Query(default=None),
+    lang: str = Query(default="en"),
+    db: Session = Depends(get_db),
+):
+    """Generate a PDF comparison report between two CDMs."""
+    from modules.quality.report_builder import build_comparison_html_report
+
+    target_domains = [domain] if domain else get_available_domains()
+
+    settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name_a).first()
+    threshold = settings.comparison_alert_threshold if settings else 5.0
+
+    comparisons = []
+    for dom in target_domains:
+        snap_a = (
+            db.query(AnalysisSnapshot)
+            .filter(AnalysisSnapshot.cdm_name == cdm_name_a, AnalysisSnapshot.domain == dom)
+            .order_by(AnalysisSnapshot.version.desc())
+            .first()
+        )
+        snap_b = (
+            db.query(AnalysisSnapshot)
+            .filter(AnalysisSnapshot.cdm_name == cdm_name_b, AnalysisSnapshot.domain == dom)
+            .order_by(AnalysisSnapshot.version.desc())
+            .first()
+        )
+        if snap_a and snap_b:
+            comp = compare_snapshots(snap_a.results, snap_b.results, threshold=threshold)
+            comparisons.append({
+                "domain": comp["domain"],
+                "diffs": comp["diffs"],
+                "alerts": comp["alerts"],
+                "threshold": comp["threshold"],
+                "snap_a": {"id": snap_a.id, "cdm_name": snap_a.cdm_name, "version": snap_a.version},
+                "snap_b": {"id": snap_b.id, "cdm_name": snap_b.cdm_name, "version": snap_b.version},
+                "results_a": snap_a.results,
+                "results_b": snap_b.results,
+            })
+
+    if not comparisons:
+        raise HTTPException(status_code=404, detail="No common snapshots found between the two CDMs")
+
+    html = build_comparison_html_report(cdm_name_a, cdm_name_b, comparisons, lang=lang)
+
+    from xhtml2pdf import pisa
+    pdf_buffer = io.BytesIO()
+    pisa_status = pisa.CreatePDF(io.StringIO(html), dest=pdf_buffer)
+    if pisa_status.err:
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    pdf_buffer.seek(0)
+
+    suffix = f"_{domain}" if domain else ""
+    filename = f"opal_comparison_{cdm_name_a}_vs_{cdm_name_b}{suffix}.pdf"
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.post("/compare")
 def compare_cdms(req: CompareRequest, db: Session = Depends(get_db)):
     """Compare analysis results between two CDMs or two snapshots."""
