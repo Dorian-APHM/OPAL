@@ -100,7 +100,7 @@ ACTION_MAP = [
 ]
 
 # Paths to skip (high-frequency, low-value)
-SKIP_PATHS = {"/api/health", "/api/i18n", "/api/auth", "/docs", "/openapi.json", "/", "/redoc"}
+SKIP_PATHS = {"/api/health", "/api/i18n", "/api/auth", "/api/access-requests", "/docs", "/openapi.json", "/", "/redoc"}
 
 
 def _resolve_action(method: str, path: str) -> str | None:
