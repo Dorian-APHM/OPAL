@@ -12,6 +12,7 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
   chercheur: ['/quality', '/cohorts', '/concepts'],
   medecin: ['/mapping', '/cohorts', '/concepts'],
 };
+// /audit and /users are implicitly admin-only since they're not in chercheur/medecin lists
 
 interface AuthContextType {
   authenticated: boolean;

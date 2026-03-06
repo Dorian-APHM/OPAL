@@ -12,6 +12,8 @@ const CdmManagementPage = lazy(() => import('./pages/CdmManagementPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ConceptExplorerPage = lazy(() => import('./pages/ConceptExplorerPage'));
 const OhdsiPage = lazy(() => import('./pages/OhdsiPage'));
+const AuditPage = lazy(() => import('./pages/AuditPage'));
+const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 
 const { Content } = Layout;
 
@@ -74,7 +76,7 @@ function ProtectedRoute({ path, children }: { path: string; children: React.Reac
   return hasPageAccess(path) ? <>{children}</> : <ForbiddenPage />;
 }
 
-const ALL_PAGES = ['/quality', '/cohorts', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings'];
+const ALL_PAGES = ['/quality', '/cohorts', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
 
 function DefaultRedirect() {
   const { hasPageAccess } = useAuth();
@@ -199,6 +201,14 @@ export default function App() {
               <Route
                 path="/ohdsi"
                 element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/audit"
+                element={<ProtectedRoute path="/audit"><PageSuspense><AuditPage /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/users"
+                element={<ProtectedRoute path="/users"><PageSuspense><UserManagementPage /></PageSuspense></ProtectedRoute>}
               />
               <Route path="*" element={<ForbiddenPage />} />
             </Routes>

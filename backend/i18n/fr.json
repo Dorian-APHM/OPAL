@@ -6,7 +6,9 @@
     "mapping": "Mapping",
     "settings": "Paramètres",
     "concepts": "Concepts",
-    "language": "Langue"
+    "language": "Langue",
+    "audit": "Journal d'audit",
+    "users": "Utilisateurs"
   },
   "cdm": {
     "title": "Gestion des CDM",
@@ -142,5 +144,40 @@
     "search": "Rechercher",
     "domain": "Domaine",
     "vocabulary": "Vocabulaire"
+  },
+  "audit": {
+    "title": "Journal d'audit",
+    "time": "Heure",
+    "user": "Utilisateur",
+    "action": "Action",
+    "method": "Méthode",
+    "path": "Chemin",
+    "status": "Statut",
+    "duration": "Durée",
+    "total_events": "Total événements",
+    "active_users": "Utilisateurs actifs",
+    "action_types": "Types d'actions",
+    "filter_user": "Filtrer par utilisateur",
+    "filter_action": "Filtrer par action",
+    "refresh": "Actualiser",
+    "entries": "entrées",
+    "load_error": "Échec du chargement des logs d'audit"
+  },
+  "admin": {
+    "user_management": "Gestion des utilisateurs",
+    "username": "Nom d'utilisateur",
+    "name": "Nom",
+    "roles": "Rôles",
+    "status": "Statut",
+    "created": "Créé le",
+    "users": "utilisateurs",
+    "enabled": "Activé",
+    "disabled": "Désactivé",
+    "role_assigned": "Rôle assigné",
+    "role_removed": "Rôle retiré",
+    "user_enabled": "Utilisateur activé",
+    "user_disabled": "Utilisateur désactivé",
+    "no_users": "Aucun utilisateur trouvé",
+    "keycloak_warning": "Problème de connexion Keycloak"
   }
 }

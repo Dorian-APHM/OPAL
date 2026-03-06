@@ -21,6 +21,9 @@ import type {
   StrategyStats,
   PatientJourneyEvent,
   PatientJourneyInfo,
+  AuditEntry,
+  AuditStats,
+  AdminUser,
 } from '../types';
 
 const api = axios.create({
@@ -357,6 +360,39 @@ export const ohdsiApi = {
     api.get<{ status: string; logs: string[]; offset: number }>(`/ohdsi/logs/${service}/history`),
   files: (path?: string) => api.get(`/ohdsi/files/${path || ''}`),
   fileUrl: (path: string) => `/api/ohdsi/files/${path}`,
+};
+
+// Audit endpoints (admin only)
+export const auditApi = {
+  logs: (params: {
+    date_from?: string; date_to?: string; date?: string;
+    user?: string; action?: string; page?: number; page_size?: number;
+  }) => api.get<{
+    entries: AuditEntry[]; total: number; page: number;
+    page_size: number; total_pages: number;
+  }>('/audit/logs', { params }),
+  stats: (params?: { date_from?: string; date_to?: string }) =>
+    api.get<AuditStats>('/audit/stats', { params }),
+  dates: () => api.get<{ dates: string[] }>('/audit/dates'),
+  exportUrl: (params: { date_from?: string; date_to?: string; user?: string; action?: string }) => {
+    const qs = new URLSearchParams();
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    if (params.user) qs.set('user', params.user);
+    if (params.action) qs.set('action', params.action);
+    return `/api/audit/export?${qs.toString()}`;
+  },
+};
+
+// Admin endpoints (admin only)
+export const adminApi = {
+  users: () => api.get<{ users: AdminUser[]; error?: string }>('/admin/users'),
+  assignRole: (userId: string, role: string) =>
+    api.post(`/admin/users/${userId}/roles`, { role }),
+  removeRole: (userId: string, role: string) =>
+    api.delete(`/admin/users/${userId}/roles/${role}`),
+  toggleUser: (userId: string, enabled: boolean) =>
+    api.put(`/admin/users/${userId}/toggle`, { enabled }),
 };
 
 export default api;
