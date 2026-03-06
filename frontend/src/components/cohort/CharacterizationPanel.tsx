@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Card, Button, Spin, Typography, Table, Tag, Space, Statistic,
   Row, Col, Progress, Collapse, Descriptions, Alert, Empty, Tooltip,
@@ -7,7 +7,7 @@ import {
 import {
   TableOutlined, TeamOutlined, MedicineBoxOutlined, ExperimentOutlined,
   HeartOutlined, EyeOutlined, ScheduleOutlined, DownloadOutlined,
-  CheckCircleOutlined,
+  CheckCircleOutlined, StopOutlined,
 } from '@ant-design/icons';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -53,19 +53,30 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [error, setError] = useState('');
   const [characterizedAt, setCharacterizedAt] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const hasCriteria =
     criteria.inclusion.criteria.length > 0 ||
     criteria.demographics?.age ||
     criteria.demographics?.gender;
 
-  // Load saved characterization when cohortId changes
+  // Stable key for criteria to avoid spurious resets on every render
+  const criteriaKey = JSON.stringify(criteria);
+
+  // Clear results and cancel in-flight request when criteria or cohortId change
   useEffect(() => {
-    if (!cohortId) {
-      setResult(null);
-      setCharacterizedAt(null);
-      return;
+    // Abort any running characterization
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
     }
+    setResult(null);
+    setCharacterizedAt(null);
+    setError('');
+    setLoading(false);
+
+    // Load saved characterization if we have a cohortId
+    if (!cohortId) return;
     let cancelled = false;
     setLoadingSaved(true);
     cohortApi.getCharacterization(cohortId).then(resp => {
@@ -80,14 +91,21 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
       if (!cancelled) setLoadingSaved(false);
     });
     return () => { cancelled = true; };
-  }, [cohortId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cohortId, criteriaKey]);
 
   const runCharacterization = async () => {
     if (!cdmName || !hasCriteria) return;
+    // Abort previous request if any
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError('');
     try {
-      const resp = await cohortApi.characterize(cdmName, criteria);
+      const resp = await cohortApi.characterize(cdmName, criteria, 25, controller.signal);
+      if (controller.signal.aborted) return;
       setResult(resp.data);
       setCharacterizedAt(new Date().toISOString());
 
@@ -101,10 +119,20 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
         }
       }
     } catch (e: any) {
+      if (controller.signal.aborted) return;
       setError(e.response?.data?.detail || 'Characterization failed');
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
+      if (abortRef.current === controller) abortRef.current = null;
     }
+  };
+
+  const stopCharacterization = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setLoading(false);
   };
 
   const exportCsv = () => {
@@ -199,6 +227,17 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                 {loadingSaved ? t('cohort.loading_saved', 'Loading saved results...') : 'Running characterization queries...'}
               </Text>
             </div>
+            {loading && (
+              <Button
+                danger
+                size="small"
+                icon={<StopOutlined />}
+                onClick={stopCharacterization}
+                style={{ marginTop: 12 }}
+              >
+                {t('common.stop', 'Stop')}
+              </Button>
+            )}
           </div>
         </Card>
       )}
