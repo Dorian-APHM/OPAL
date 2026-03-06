@@ -824,12 +824,15 @@ def export_cohort(
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
-    # CSV: execute and export patient IDs
+    # CSV: execute and export patient IDs (+ visit_occurrence_id when sameVisit)
     cdm, conn = _get_cdm_conn(db, cohort.cdm_name)
     schema = _get_omop_schema(db, cdm)
+    has_same_visit = bool(
+        latest.criteria_json.get("inclusion", {}).get("sameVisit", False)
+    )
 
     try:
-        sql = build_cohort_sql(latest.criteria_json, schema)
+        sql = build_cohort_sql(latest.criteria_json, schema, include_visit_id=has_same_visit)
         from psycopg2.extras import DictCursor
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute(sql)
@@ -837,9 +840,14 @@ def export_cohort(
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["person_id"])
-        for row in rows:
-            writer.writerow([row["person_id"]])
+        if has_same_visit:
+            writer.writerow(["person_id", "visit_occurrence_id"])
+            for row in rows:
+                writer.writerow([row["person_id"], row["visit_occurrence_id"]])
+        else:
+            writer.writerow(["person_id"])
+            for row in rows:
+                writer.writerow([row["person_id"]])
         output.seek(0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export error: {e}")
