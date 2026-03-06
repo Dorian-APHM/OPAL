@@ -16,9 +16,6 @@ backend/logs/
 # Data / output
 backend/data/
 ohdsi_output/
-sapbert_results.csv
-ccam_athena.csv
-interhop-actes-ameli.csv
 
 # IDE
 .vscode/
