@@ -173,6 +173,8 @@ export const cohortApi = {
     api.post<{ steps: AttritionStep[] }>('/cohorts/attrition', { cdm_name: cdmName, criteria }),
   sample: (cdmName: string, criteria: CohortCriteria, limit?: number) =>
     api.post<{ patients: SamplePatient[]; count: number }>('/cohorts/sample', { cdm_name: cdmName, criteria, limit: limit || 10 }),
+  sampleDetailed: (cdmName: string, criteria: CohortCriteria, limit?: number) =>
+    api.post<{ patients: Record<string, any>[]; count: number; columns: { key: string; label: string; domain: string }[] }>('/cohorts/sample/detailed', { cdm_name: cdmName, criteria, limit: limit || 10 }),
   searchConcepts: (cdmName: string, query: string, domain?: string, vocabularyId?: string) =>
     api.post<{ concepts: OmopConcept[]; count: number }>('/cohorts/concepts/search', {
       cdm_name: cdmName, query, domain: domain || null, vocabulary_id: vocabularyId || null,

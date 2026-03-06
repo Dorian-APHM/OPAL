@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from db.app_db import get_db
-from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings
+from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings, ReferenceCodebook
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
@@ -26,6 +26,7 @@ from modules.cohort.sql_builder import (
     build_count_sql,
     build_attrition_sql,
     build_sample_sql,
+    build_detailed_sample_sql,
     build_export_sql,
 )
 
@@ -486,6 +487,62 @@ def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
         conn.close()
 
     return {"patients": patients, "count": len(patients)}
+
+
+@router.post("/sample/detailed")
+def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_db)):
+    """Return a detailed patient sample with per-criterion matched codes and values."""
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+    schema = _get_omop_schema(db, cdm)
+
+    try:
+        sql, columns_meta = build_detailed_sample_sql(req.criteria, schema, limit=req.limit)
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql)
+            patients = [dict(r) for r in cur.fetchall()]
+            for p in patients:
+                for k, v in p.items():
+                    if hasattr(v, 'isoformat'):
+                        p[k] = v.isoformat()
+                    elif isinstance(v, float) and v != v:  # NaN
+                        p[k] = None
+    except Exception as e:
+        logger.exception("Detailed sampling failed")
+        raise HTTPException(status_code=500, detail=f"Detailed sampling error: {e}")
+    finally:
+        conn.close()
+
+    # Post-process: enrich codes without labels using reference codebooks
+    code_cols = [cm["key"] for cm in columns_meta if cm["key"].startswith("crit_") and cm["key"].endswith("_code")]
+    if code_cols and patients:
+        # Collect all source codes that have no label (no " — " in the value)
+        codes_needing_label: set[str] = set()
+        for p in patients:
+            for col in code_cols:
+                val = p.get(col)
+                if val and " — " not in str(val):
+                    codes_needing_label.add(str(val).strip())
+
+        if codes_needing_label:
+            # Lookup in reference_codebooks
+            ref_entries = (
+                db.query(ReferenceCodebook.code, ReferenceCodebook.description)
+                .filter(ReferenceCodebook.code.in_(list(codes_needing_label)))
+                .all()
+            )
+            ref_map = {r.code: r.description for r in ref_entries}
+
+            if ref_map:
+                for p in patients:
+                    for col in code_cols:
+                        val = p.get(col)
+                        if val and " — " not in str(val):
+                            code = str(val).strip()
+                            if code in ref_map:
+                                p[col] = f"{code} — {ref_map[code]}"
+
+    return {"patients": patients, "count": len(patients), "columns": columns_meta}
 
 
 @router.post("/export/direct")

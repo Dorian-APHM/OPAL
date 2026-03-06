@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
-import { Card, Statistic, Button, Table, Typography, Space, Tag, Tooltip, Spin, Alert } from 'antd';
+import { Card, Statistic, Button, Typography, Space, Tag, Tooltip, Spin, Alert } from 'antd';
 import {
   PlayCircleOutlined, TeamOutlined, BarChartOutlined,
-  UserOutlined, DownloadOutlined, ThunderboltOutlined, StopOutlined,
+  DownloadOutlined, ThunderboltOutlined, StopOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import {
@@ -10,7 +10,7 @@ import {
   ResponsiveContainer, Cell,
 } from 'recharts';
 import { cohortApi, authDownload } from '../../api/client';
-import type { CohortCriteria, AttritionStep, SamplePatient } from '../../types';
+import type { CohortCriteria, AttritionStep } from '../../types';
 
 const { Text, Title } = Typography;
 
@@ -26,19 +26,16 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
   const [countLoading, setCountLoading] = useState(false);
   const [attrition, setAttrition] = useState<AttritionStep[]>([]);
   const [attritionLoading, setAttritionLoading] = useState(false);
-  const [patients, setPatients] = useState<SamplePatient[]>([]);
-  const [sampleLoading, setSampleLoading] = useState(false);
   const [generatedSql, setGeneratedSql] = useState<string>('');
   const [error, setError] = useState<string>('');
   const abortRef = useRef<AbortController | null>(null);
 
-  const anyLoading = countLoading || attritionLoading || sampleLoading;
+  const anyLoading = countLoading || attritionLoading;
 
   const cancelOperation = () => {
     if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     setCountLoading(false);
     setAttritionLoading(false);
-    setSampleLoading(false);
   };
 
   const hasCriteria = criteria.inclusion.criteria.length > 0 || criteria.demographics?.age || criteria.demographics?.gender;
@@ -69,20 +66,6 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       setError(e.response?.data?.detail || 'Attrition failed');
     } finally {
       setAttritionLoading(false);
-    }
-  };
-
-  const runSample = async () => {
-    if (!cdmName || !hasCriteria) return;
-    setSampleLoading(true);
-    setError('');
-    try {
-      const resp = await cohortApi.sample(cdmName, criteria, 10);
-      setPatients(resp.data.patients);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Sampling failed');
-    } finally {
-      setSampleLoading(false);
     }
   };
 
@@ -214,51 +197,6 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
         ) : (
           <Text type="secondary" style={{ fontSize: 12 }}>
             {t('cohort.click_run_attrition', 'Click Run to see attrition diagram')}
-          </Text>
-        )}
-      </Card>
-
-      {/* Sample patients */}
-      <Card
-        size="small"
-        title={
-          <Space>
-            <UserOutlined />
-            {t('cohort.sample_patients', 'Sample Patients')}
-          </Space>
-        }
-        extra={
-          <Button
-            size="small"
-            onClick={runSample}
-            loading={sampleLoading}
-            disabled={!hasCriteria || !cdmName}
-          >
-            {t('cohort.sample', 'Sample')}
-          </Button>
-        }
-      >
-        {sampleLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
-        ) : patients.length > 0 ? (
-          <Table
-            size="small"
-            dataSource={patients}
-            rowKey="person_id"
-            pagination={false}
-            scroll={{ x: true }}
-            columns={[
-              { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90 },
-              { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
-              { title: t('cohort.gender', 'Gender'), dataIndex: 'gender', key: 'gender', width: 80 },
-              { title: t('cohort.race', 'Race'), dataIndex: 'race', key: 'race', width: 90, ellipsis: true },
-              { title: t('cohort.obs_start', 'Obs Start'), dataIndex: 'observation_period_start_date', key: 'obs_start', width: 100 },
-              { title: t('cohort.obs_end', 'Obs End'), dataIndex: 'observation_period_end_date', key: 'obs_end', width: 100 },
-            ]}
-          />
-        ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {t('cohort.click_sample', 'Click Sample to see random patients')}
           </Text>
         )}
       </Card>
