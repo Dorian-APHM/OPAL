@@ -318,6 +318,7 @@ export default function CohortPage({ selectedCdm }: Props) {
                   <CharacterizationPanel
                     cdmName={selectedCdm || ''}
                     criteria={toBackendCriteria(criteria)}
+                    cohortId={savedCohortId}
                   />
                 ),
               },
