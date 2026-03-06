@@ -11,6 +11,7 @@ import type {
   OmopConcept,
   AttritionStep,
   SamplePatient,
+  CharacterizationResult,
   MappingDashboardData,
   MappingEvolutionPoint,
   UnmappedItem,
@@ -185,6 +186,8 @@ export const cohortApi = {
     api.get<{ domains: { name: string; table: string }[] }>('/cohorts/domains'),
   exportDirect: (cdmName: string, criteria: CohortCriteria) =>
     api.post('/cohorts/export/direct', { cdm_name: cdmName, criteria }, { responseType: 'blob' }),
+  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number) =>
+    api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25 }),
 };
 
 // Mapping endpoints
