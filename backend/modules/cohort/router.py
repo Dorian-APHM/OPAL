@@ -6,7 +6,6 @@ attrition, sampling), and CSV export.
 """
 import csv
 import io
-import json
 import logging
 from datetime import datetime
 
