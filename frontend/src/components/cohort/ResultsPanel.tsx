@@ -39,6 +39,7 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
   };
 
   const hasCriteria = criteria.inclusion.criteria.length > 0 || criteria.demographics?.age || criteria.demographics?.gender;
+  const hasSameVisit = !!criteria.inclusion.sameVisit;
 
   const runCount = async () => {
     if (!cdmName || !hasCriteria) return;
@@ -204,24 +205,27 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       {/* Export */}
       <Card size="small" title={<Space><DownloadOutlined />{t('cohort.export', 'Export')}</Space>}>
         <Space wrap>
-          <Button
-            size="small"
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={runExport}
-            loading={exportLoading}
-            disabled={!hasCriteria || !cdmName}
-          >
-            {t('cohort.export_patients', 'Export patients (CSV)')}
-          </Button>
+          {!hasSameVisit && (
+            <Button
+              size="small"
+              type="primary"
+              icon={<DownloadOutlined />}
+              onClick={runExport}
+              loading={exportLoading}
+              disabled={!hasCriteria || !cdmName}
+            >
+              {t('cohort.export_patients', 'Export patients (CSV)')}
+            </Button>
+          )}
           {savedCohortId && (
             <>
               <Button
                 size="small"
+                type={hasSameVisit ? 'primary' : 'default'}
                 icon={<DownloadOutlined />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
               >
-                CSV (IDs only)
+                {hasSameVisit ? 'CSV (Patient + Visit IDs)' : 'CSV (IDs only)'}
               </Button>
               <Button
                 size="small"
