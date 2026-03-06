@@ -172,6 +172,75 @@ def mapping_evolution(cdm_name: str, domain: str, db: Session = Depends(get_db))
     return {"cdm_name": cdm_name, "domain": domain, "evolution": evolution}
 
 
+# ──── 5.1b Strategy Confidence Statistics ────
+
+@router.get("/strategies/{cdm_name}")
+def strategy_stats(
+    cdm_name: str,
+    domain: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Compute confidence statistics per suggestion strategy.
+    Returns per-strategy: total decisions, approval rate, avg confidence,
+    rejection rate, and modification rate.
+    """
+    query = db.query(MappingDecision).filter(
+        MappingDecision.cdm_name == cdm_name,
+        MappingDecision.suggestion_source.isnot(None),
+        MappingDecision.suggestion_source != "",
+        MappingDecision.suggestion_source != "bulk",
+    )
+    if domain:
+        query = query.filter(MappingDecision.domain == domain)
+
+    decisions = query.all()
+
+    # Group by suggestion_source
+    by_source: dict[str, list] = {}
+    for d in decisions:
+        source = d.suggestion_source or "unknown"
+        # Normalize: strip "rollback of #..." entries
+        if source.startswith("rollback"):
+            continue
+        by_source.setdefault(source, []).append(d)
+
+    strategies = []
+    for source, items in sorted(by_source.items()):
+        total = len(items)
+        approved = sum(1 for d in items if d.action == "approved")
+        modified = sum(1 for d in items if d.action == "modified")
+        rejected = sum(1 for d in items if d.action == "rejected")
+
+        confidences = [d.confidence_score for d in items if d.confidence_score is not None]
+        approved_conf = [d.confidence_score for d in items if d.action == "approved" and d.confidence_score is not None]
+        rejected_conf = [d.confidence_score for d in items if d.action == "rejected" and d.confidence_score is not None]
+
+        strategies.append({
+            "strategy": source,
+            "total_decisions": total,
+            "approved": approved,
+            "modified": modified,
+            "rejected": rejected,
+            "approval_rate": round(approved / total * 100, 1) if total > 0 else 0,
+            "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0,
+            "modification_rate": round(modified / total * 100, 1) if total > 0 else 0,
+            "avg_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
+            "avg_confidence_approved": round(sum(approved_conf) / len(approved_conf), 1) if approved_conf else None,
+            "avg_confidence_rejected": round(sum(rejected_conf) / len(rejected_conf), 1) if rejected_conf else None,
+        })
+
+    # Sort by approval rate descending
+    strategies.sort(key=lambda s: s["approval_rate"], reverse=True)
+
+    return {
+        "cdm_name": cdm_name,
+        "domain": domain,
+        "strategies": strategies,
+        "total_decisions": sum(s["total_decisions"] for s in strategies),
+    }
+
+
 # ──── 5.2 Unmapped Exploration ────
 
 @router.get("/unmapped/{cdm_name}/{domain}")
