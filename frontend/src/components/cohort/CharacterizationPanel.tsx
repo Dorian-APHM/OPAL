@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Card, Button, Spin, Typography, Table, Tag, Space, Statistic,
   Row, Col, Progress, Collapse, Descriptions, Alert, Empty, Tooltip,
+  message,
 } from 'antd';
 import {
   TableOutlined, TeamOutlined, MedicineBoxOutlined, ExperimentOutlined,
   HeartOutlined, EyeOutlined, ScheduleOutlined, DownloadOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -41,18 +43,44 @@ const PIE_COLORS = ['#1890ff', '#f5222d', '#52c41a', '#fa8c16', '#722ed1', '#13c
 interface Props {
   cdmName: string;
   criteria: CohortCriteria;
+  cohortId?: number;
 }
 
-export default function CharacterizationPanel({ cdmName, criteria }: Props) {
+export default function CharacterizationPanel({ cdmName, criteria, cohortId }: Props) {
   const { t } = useTranslation();
   const [result, setResult] = useState<CharacterizationResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingSaved, setLoadingSaved] = useState(false);
   const [error, setError] = useState('');
+  const [characterizedAt, setCharacterizedAt] = useState<string | null>(null);
 
   const hasCriteria =
     criteria.inclusion.criteria.length > 0 ||
     criteria.demographics?.age ||
     criteria.demographics?.gender;
+
+  // Load saved characterization when cohortId changes
+  useEffect(() => {
+    if (!cohortId) {
+      setResult(null);
+      setCharacterizedAt(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSaved(true);
+    cohortApi.getCharacterization(cohortId).then(resp => {
+      if (cancelled) return;
+      if (resp.data.characterization) {
+        setResult(resp.data.characterization);
+        setCharacterizedAt(resp.data.characterized_at);
+      }
+    }).catch(() => {
+      // no saved characterization, that's fine
+    }).finally(() => {
+      if (!cancelled) setLoadingSaved(false);
+    });
+    return () => { cancelled = true; };
+  }, [cohortId]);
 
   const runCharacterization = async () => {
     if (!cdmName || !hasCriteria) return;
@@ -61,6 +89,17 @@ export default function CharacterizationPanel({ cdmName, criteria }: Props) {
     try {
       const resp = await cohortApi.characterize(cdmName, criteria);
       setResult(resp.data);
+      setCharacterizedAt(new Date().toISOString());
+
+      // Auto-save if cohort is saved
+      if (cohortId) {
+        try {
+          await cohortApi.saveCharacterization(cohortId, resp.data);
+          message.success(t('cohort.characterization_saved', 'Characterization saved'));
+        } catch {
+          // non-blocking — results are still displayed
+        }
+      }
     } catch (e: any) {
       setError(e.response?.data?.detail || 'Characterization failed');
     } finally {
@@ -126,6 +165,11 @@ export default function CharacterizationPanel({ cdmName, criteria }: Props) {
             <Title level={5} style={{ margin: 0 }}>Table 1 — Cohort Characterization</Title>
           </Space>
           <Space>
+            {characterizedAt && (
+              <Tooltip title={`Last run: ${new Date(characterizedAt).toLocaleString()}`}>
+                <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 14 }} />
+              </Tooltip>
+            )}
             {result && (
               <Button size="small" icon={<DownloadOutlined />} onClick={exportCsv}>
                 CSV
@@ -146,12 +190,14 @@ export default function CharacterizationPanel({ cdmName, criteria }: Props) {
 
       {error && <Alert type="error" message={error} closable onClose={() => setError('')} />}
 
-      {loading && (
+      {(loading || loadingSaved) && (
         <Card size="small">
           <div style={{ textAlign: 'center', padding: 40 }}>
             <Spin size="large" />
             <div style={{ marginTop: 16 }}>
-              <Text type="secondary">Running characterization queries...</Text>
+              <Text type="secondary">
+                {loadingSaved ? t('cohort.loading_saved', 'Loading saved results...') : 'Running characterization queries...'}
+              </Text>
             </div>
           </div>
         </Card>

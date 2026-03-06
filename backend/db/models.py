@@ -73,6 +73,8 @@ class CohortVersion(Base):
     criteria_json = Column(JSON, nullable=False)
     generated_sql = Column(Text, default="")
     patient_count = Column(Integer, nullable=True)
+    characterization_json = Column(JSON, nullable=True)
+    characterized_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

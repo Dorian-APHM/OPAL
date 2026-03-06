@@ -613,6 +613,51 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
     return result
 
 
+@router.put("/{cohort_id}/characterization")
+def save_characterization(cohort_id: int, payload: dict, db: Session = Depends(get_db)):
+    """Save characterization results to the latest version of a cohort."""
+    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
+    if not cohort:
+        raise HTTPException(status_code=404, detail="Cohort not found")
+
+    latest = (
+        db.query(CohortVersion)
+        .filter(CohortVersion.cohort_id == cohort_id)
+        .order_by(CohortVersion.version.desc())
+        .first()
+    )
+    if not latest:
+        raise HTTPException(status_code=404, detail="No version found")
+
+    latest.characterization_json = payload.get("characterization")
+    latest.characterized_at = datetime.utcnow()
+    db.commit()
+    return {"status": "saved", "cohort_id": cohort_id, "version": latest.version}
+
+
+@router.get("/{cohort_id}/characterization")
+def get_characterization(cohort_id: int, db: Session = Depends(get_db)):
+    """Get saved characterization results from the latest version of a cohort."""
+    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
+    if not cohort:
+        raise HTTPException(status_code=404, detail="Cohort not found")
+
+    latest = (
+        db.query(CohortVersion)
+        .filter(CohortVersion.cohort_id == cohort_id)
+        .order_by(CohortVersion.version.desc())
+        .first()
+    )
+    if not latest:
+        raise HTTPException(status_code=404, detail="No version found")
+
+    return {
+        "characterization": latest.characterization_json,
+        "characterized_at": latest.characterized_at.isoformat() if latest.characterized_at else None,
+        "version": latest.version,
+    }
+
+
 @router.post("/{cohort_id}/execute")
 def execute_cohort(cohort_id: int, db: Session = Depends(get_db)):
     """
