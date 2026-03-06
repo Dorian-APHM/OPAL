@@ -19,7 +19,7 @@ _jwks_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/cer
 _jwks_client = PyJWKClient(_jwks_url, cache_keys=True, lifespan=3600)
 
 # Public endpoints that don't require authentication
-PUBLIC_PATHS = {"/api/health", "/api/i18n", "/docs", "/openapi.json", "/redoc", "/"}
+PUBLIC_PATHS = {"/api/health", "/api/i18n", "/api/access-requests", "/docs", "/openapi.json", "/redoc", "/"}
 
 # Authenticated endpoints accessible to any logged-in user (no role check)
 AUTH_NO_ROLE_CHECK_PATHS = {"/api/auth"}

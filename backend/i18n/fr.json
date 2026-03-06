@@ -178,6 +178,21 @@
     "user_enabled": "Utilisateur activé",
     "user_disabled": "Utilisateur désactivé",
     "no_users": "Aucun utilisateur trouvé",
-    "keycloak_warning": "Problème de connexion Keycloak"
+    "keycloak_warning": "Problème de connexion Keycloak",
+    "access_requests": "Demandes d'accès",
+    "requested_role": "Rôle demandé",
+    "requested_at": "Demandé le",
+    "approve": "Approuver",
+    "reject": "Rejeter",
+    "confirm_approve": "Approuver cette demande d'accès ?",
+    "approve_description": "Un compte Keycloak sera créé avec l'identifiant comme mot de passe temporaire.",
+    "confirm_reject": "Rejeter cette demande ?",
+    "request_approved": "Demande approuvée. Mot de passe temporaire : {{password}}",
+    "request_rejected": "Demande rejetée",
+    "account_created": "Compte créé",
+    "temp_password": "Mot de passe temporaire",
+    "password_change_required": "L'utilisateur devra changer son mot de passe à la première connexion.",
+    "no_pending": "Aucune demande en attente",
+    "all_clear": "Toutes les demandes d'accès ont été traitées."
   }
 }

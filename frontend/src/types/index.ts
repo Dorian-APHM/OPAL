@@ -657,3 +657,17 @@ export interface AdminUser {
   created_at: number | null;
   roles: string[];
 }
+
+/** Access request */
+export interface AccessRequest {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  requested_role: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string | null;
+}

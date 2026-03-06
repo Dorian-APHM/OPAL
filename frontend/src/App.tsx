@@ -14,6 +14,7 @@ const ConceptExplorerPage = lazy(() => import('./pages/ConceptExplorerPage'));
 const OhdsiPage = lazy(() => import('./pages/OhdsiPage'));
 const AuditPage = lazy(() => import('./pages/AuditPage'));
 const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
 
 const { Content } = Layout;
 
@@ -85,7 +86,7 @@ function DefaultRedirect() {
 }
 
 export default function App() {
-  const { initialized, authenticated } = useAuth();
+  const { initialized, authenticated, login } = useAuth();
   const [selectedCdm, setSelectedCdm] = useState<string | null>(
     localStorage.getItem('opal-selected-cdm')
   );
@@ -115,9 +116,9 @@ export default function App() {
 
   if (!authenticated) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Result status="error" title="Authentication Failed" subTitle="Unable to authenticate. Please try again." />
-      </div>
+      <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><Spin size="large" /></div>}>
+        <LoginPage onSignIn={login} />
+      </Suspense>
     );
   }
 

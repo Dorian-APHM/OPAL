@@ -178,6 +178,21 @@
     "user_enabled": "User enabled",
     "user_disabled": "User disabled",
     "no_users": "No users found",
-    "keycloak_warning": "Keycloak connection issue"
+    "keycloak_warning": "Keycloak connection issue",
+    "access_requests": "Access Requests",
+    "requested_role": "Requested Role",
+    "requested_at": "Requested",
+    "approve": "Approve",
+    "reject": "Reject",
+    "confirm_approve": "Approve this access request?",
+    "approve_description": "A Keycloak account will be created with username as temporary password.",
+    "confirm_reject": "Reject this request?",
+    "request_approved": "Request approved. Temporary password: {{password}}",
+    "request_rejected": "Request rejected",
+    "account_created": "Account Created",
+    "temp_password": "Temporary Password",
+    "password_change_required": "The user will be asked to change their password on first login.",
+    "no_pending": "No pending requests",
+    "all_clear": "All access requests have been processed."
   }
 }
