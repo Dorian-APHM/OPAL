@@ -19,6 +19,8 @@ import type {
   MappingDecisionEntry,
   CohortComparisonResult,
   StrategyStats,
+  PatientJourneyEvent,
+  PatientJourneyInfo,
 } from '../types';
 
 const api = axios.create({
@@ -233,6 +235,10 @@ export const cohortApi = {
     ),
   exportSql: (cdmName: string, sql: string) =>
     api.post('/cohorts/sql/export', { cdm_name: cdmName, sql }, { responseType: 'blob' }),
+  patientJourney: (cdmName: string, personId: number) =>
+    api.get<{ person: PatientJourneyInfo; events: PatientJourneyEvent[] }>(
+      `/cohorts/patient/${personId}/journey`, { params: { cdm_name: cdmName } }
+    ),
 };
 
 // Mapping endpoints

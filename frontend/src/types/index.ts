@@ -332,6 +332,28 @@ export interface AttritionStep {
   error?: string;
 }
 
+/** Patient journey event (from timeline endpoint) */
+export interface PatientJourneyEvent {
+  domain: string;
+  start_date: string | null;
+  end_date?: string;
+  concept_id: number | null;
+  concept_name: string;
+  source_value: string;
+  value_as_number?: number;
+  unit_source_value?: string;
+  quantity?: number;
+}
+
+/** Patient info returned with journey */
+export interface PatientJourneyInfo {
+  person_id: number;
+  year_of_birth: number;
+  gender: string;
+  observation_period_start_date: string | null;
+  observation_period_end_date: string | null;
+}
+
 /** Sample patient row */
 export interface SamplePatient {
   person_id: number;
