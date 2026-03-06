@@ -15,6 +15,7 @@ import QueryCanvas from '../components/cohort/QueryCanvas';
 import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
+import PatientJourney from '../components/cohort/PatientJourney';
 import { cohortApi } from '../api/client';
 import type {
   CohortCriterion,
@@ -169,6 +170,9 @@ export default function CohortPage({ selectedCdm }: Props) {
   const [sampleColumns, setSampleColumns] = useState<{ key: string; label: string; domain: string }[]>([]);
   const [sampleLoading, setSampleLoading] = useState(false);
 
+  // Patient journey state
+  const [journeyPersonId, setJourneyPersonId] = useState<number | null>(null);
+
   const runDetailedSample = async () => {
     if (!selectedCdm) return;
     const backendCriteria = toBackendCriteria(criteria);
@@ -286,7 +290,14 @@ export default function CohortPage({ selectedCdm }: Props) {
                           pagination={false}
                           scroll={{ x: true }}
                           columns={[
-                            { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' },
+                            {
+                              title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' as const,
+                              render: (v: number) => (
+                                <a onClick={() => setJourneyPersonId(v)} title={t('cohort.view_journey', 'View patient journey')}>
+                                  {v}
+                                </a>
+                              ),
+                            },
                             { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
                             ...sampleColumns.map(col => ({
                               title: col.label,
@@ -363,6 +374,14 @@ export default function CohortPage({ selectedCdm }: Props) {
           />
         </Col>
       </Row>
+
+      {/* Patient Journey modal */}
+      <PatientJourney
+        cdmName={selectedCdm || ''}
+        personId={journeyPersonId}
+        open={journeyPersonId !== null}
+        onClose={() => setJourneyPersonId(null)}
+      />
 
       {/* Load modal */}
       <Modal
