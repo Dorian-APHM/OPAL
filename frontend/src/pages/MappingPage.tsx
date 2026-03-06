@@ -16,6 +16,7 @@ import {
   ResponsiveContainer, LineChart, Line, Legend, Cell,
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
+import { useAuth } from '../auth/KeycloakContext';
 import type {
   MappingDomainStat, MappingEvolutionPoint, UnmappedItem,
   SuggestionResult, MappingSuggestion, MappingDecisionEntry,
@@ -496,6 +497,8 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
 
 function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKey?: number }) {
   const { t } = useTranslation();
+  const { roles } = useAuth();
+  const canWriteCdm = roles.includes('admin') || roles.includes('omop-dim');
   const [items, setItems] = useState<MappingDecisionEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -629,9 +632,11 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             <Col span={8}><Statistic title={t('mapping.impacted_persons', 'Impacted Persons')} value={applyPreview.impacted_persons.toLocaleString()} valueStyle={{ color: '#ff4d4f' }} /></Col>
           </Row>
           <Space style={{ marginTop: 12 }}>
-            <Button type="primary" danger size="small" onClick={() => setWriteConfirmOpen(true)}>
-              <WarningOutlined /> {t('mapping.write_to_cdm', 'Write to CDM')}
-            </Button>
+            {canWriteCdm && (
+              <Button type="primary" danger size="small" onClick={() => setWriteConfirmOpen(true)}>
+                <WarningOutlined /> {t('mapping.write_to_cdm', 'Write to CDM')}
+              </Button>
+            )}
             <Button size="small" icon={<DownloadOutlined />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
               {t('mapping.export_stcm_instead', 'Exporter en CSV (recommandé)')}
             </Button>
