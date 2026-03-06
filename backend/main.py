@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import psycopg2
+
 from config import CORS_ORIGINS, AUTH_ENABLED
 from db.app_db import engine
 from db.models import Base
@@ -27,6 +29,24 @@ app = FastAPI(
     description="OMOP Platform for Analytics & Lineage",
     version="1.0.0",
 )
+
+# Global exception handlers
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(psycopg2.OperationalError)
+async def db_error_handler(request: Request, exc: psycopg2.OperationalError):
+    logger.error("Database error: %s", exc)
+    return JSONResponse(status_code=502, content={"detail": "External database connection error"})
+
+
+@app.exception_handler(psycopg2.extensions.QueryCanceledError)
+async def query_timeout_handler(request: Request, exc):
+    logger.warning("Query timeout: %s", exc)
+    return JSONResponse(status_code=504, content={"detail": "Query timed out. Try a simpler query or smaller dataset."})
+
 
 # CORS
 app.add_middleware(

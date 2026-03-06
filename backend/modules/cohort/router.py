@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -38,35 +38,35 @@ router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
 # ──── Request / Response models ────
 
 class CohortCreateRequest(BaseModel):
-    cdm_name: str
-    name: str
-    description: str = ""
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    name: str = Field(..., min_length=1, max_length=500)
+    description: str = Field(default="", max_length=5000)
     criteria: dict
 
 
 class CohortUpdateRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(default=None, max_length=500)
+    description: str | None = Field(default=None, max_length=5000)
     criteria: dict | None = None
 
 
 class CohortCountRequest(BaseModel):
-    cdm_name: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
 
 
 class CohortSampleRequest(BaseModel):
-    cdm_name: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
-    limit: int = 10
+    limit: int = Field(default=10, ge=1, le=1000)
 
 
 class ConceptSearchRequest(BaseModel):
-    cdm_name: str
-    query: str
-    domain: str | None = None
-    vocabulary_id: str | None = None
-    limit: int = 30
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    query: str = Field(..., min_length=1, max_length=500)
+    domain: str | None = Field(default=None, max_length=100)
+    vocabulary_id: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=30, ge=1, le=200)
 
 
 # ──── Helpers ────

@@ -1,7 +1,11 @@
 """
 SQLAlchemy models for the OPAL application database.
 """
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import declarative_base
@@ -21,8 +25,8 @@ class CdmConfig(Base):
     db_user = Column(String(255), nullable=False)
     db_password_encrypted = Column(Text, nullable=False)
     omop_schema = Column(String(255), nullable=False, default="omop_cdm")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class AnalysisSnapshot(Base):
@@ -34,7 +38,7 @@ class AnalysisSnapshot(Base):
     domain = Column(String(100), nullable=False, index=True)
     version = Column(Integer, nullable=False)
     results = Column(JSON, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class AnalysisSettings(Base):
@@ -59,8 +63,8 @@ class Cohort(Base):
     cdm_name = Column(String(255), nullable=False, index=True)
     name = Column(String(500), nullable=False)
     description = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class CohortVersion(Base):
@@ -75,7 +79,7 @@ class CohortVersion(Base):
     patient_count = Column(Integer, nullable=True)
     characterization_json = Column(JSON, nullable=True)
     characterized_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class MappingDecision(Base):
@@ -99,7 +103,7 @@ class MappingDecision(Base):
     confidence_score = Column(Float, nullable=True)
     user = Column(String(255), default="system")
     reason = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class ReferenceCodebook(Base):
@@ -117,7 +121,7 @@ class ReferenceCodebook(Base):
     domain = Column(String(100), nullable=False, index=True)
     code = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=_utcnow)
 
 
 class SapbertMapping(Base):
@@ -137,4 +141,4 @@ class SapbertMapping(Base):
     target_concept_name = Column(String(500), default="")
     target_vocabulary_id = Column(String(100), default="")
     similarity = Column(Float, nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=_utcnow)
