@@ -3,16 +3,14 @@ Keycloak OIDC authentication middleware with role-based access control.
 Validates JWT tokens locally using JWKS keys (no issuer hostname dependency).
 """
 import logging
-import time
 
-import httpx
 import jwt
 from jwt import PyJWKClient
 from fastapi import Request, HTTPException, Depends
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from config import AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM, KEYCLOAK_CLIENT_ID
+from config import AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
 
 logger = logging.getLogger(__name__)
 
