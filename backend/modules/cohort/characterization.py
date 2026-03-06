@@ -35,11 +35,18 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
     results: dict[str, Any] = {}
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # ── 0. Materialize cohort into a temp table (executed ONCE) ──
+        cur.execute(f"""
+            CREATE TEMP TABLE _coh_char ON COMMIT DROP AS
+            SELECT DISTINCT person_id FROM ({cohort_sql}) AS _coh_src
+        """)
+        cur.execute("CREATE INDEX ON _coh_char (person_id)")
+
         # ── 1. Demographics ──
-        results["demographics"] = _query_demographics(cur, cohort_sql, omop_schema)
+        results["demographics"] = _query_demographics(cur, omop_schema)
 
         # ── 2. Cohort size ──
-        cur.execute(f"SELECT COUNT(DISTINCT person_id) AS n FROM ({cohort_sql}) AS _coh")
+        cur.execute("SELECT COUNT(*) AS n FROM _coh_char")
         results["cohort_size"] = cur.fetchone()["n"]
 
         # ── 3. Domain prevalence ──
@@ -50,7 +57,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
                 continue
             try:
                 dp = _query_domain_prevalence(
-                    cur, cohort_sql, omop_schema, domain_name, cfg, top_n,
+                    cur, omop_schema, domain_name, cfg, top_n,
                     results["cohort_size"],
                 )
                 domain_prev.append(dp)
@@ -69,7 +76,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
         # ── 4. Measurement value stats (top measurements by patient count) ──
         try:
             results["measurement_stats"] = _query_measurement_stats(
-                cur, cohort_sql, omop_schema, top_n, results["cohort_size"],
+                cur, omop_schema, top_n, results["cohort_size"],
             )
         except Exception as e:
             logger.warning("Characterization: measurement stats failed: %s", e)
@@ -79,7 +86,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
         # ── 5. Visit type distribution ──
         try:
             results["visit_types"] = _query_visit_types(
-                cur, cohort_sql, omop_schema, results["cohort_size"],
+                cur, omop_schema, results["cohort_size"],
             )
         except Exception as e:
             logger.warning("Characterization: visit types failed: %s", e)
@@ -89,7 +96,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
         # ── 6. Observation period stats ──
         try:
             results["observation_period"] = _query_observation_period(
-                cur, cohort_sql, omop_schema,
+                cur, omop_schema,
             )
         except Exception as e:
             logger.warning("Characterization: obs period failed: %s", e)
@@ -103,36 +110,37 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
 # Internal query builders
 # ─────────────────────────────────────────────
 
-def _query_demographics(cur, cohort_sql: str, schema: str) -> dict:
+def _query_demographics(cur, schema: str) -> dict:
     """Age, gender, race, ethnicity distributions."""
 
-    # Age statistics
+    # Age statistics + age brackets in a single query
     cur.execute(f"""
-        WITH coh AS ({cohort_sql})
+        WITH ages AS (
+            SELECT EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth AS age
+            FROM _coh_char coh
+            JOIN {schema}.person p ON coh.person_id = p.person_id
+        )
         SELECT
             COUNT(*)                                           AS n,
-            ROUND(AVG(EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::numeric, 1) AS mean_age,
-            ROUND(STDDEV(EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::numeric, 1) AS std_age,
-            MIN(EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::int AS min_age,
-            MAX(EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::int AS max_age,
-            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::numeric AS q1_age,
-            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::numeric AS median_age,
-            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth)::numeric AS q3_age
-        FROM coh
-        JOIN {schema}.person p ON coh.person_id = p.person_id
+            ROUND(AVG(age)::numeric, 1)                        AS mean_age,
+            ROUND(STDDEV(age)::numeric, 1)                     AS std_age,
+            MIN(age)::int                                      AS min_age,
+            MAX(age)::int                                      AS max_age,
+            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY age)::numeric AS q1_age,
+            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY age)::numeric AS median_age,
+            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY age)::numeric AS q3_age
+        FROM ages
     """)
     age_row = dict(cur.fetchone())
-    # Convert Decimals to float
     for k, v in age_row.items():
         if v is not None and not isinstance(v, (int, float, str)):
             age_row[k] = float(v)
 
     # Age brackets
     cur.execute(f"""
-        WITH coh AS ({cohort_sql}),
-        ages AS (
+        WITH ages AS (
             SELECT EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth AS age
-            FROM coh
+            FROM _coh_char coh
             JOIN {schema}.person p ON coh.person_id = p.person_id
         )
         SELECT
@@ -153,50 +161,51 @@ def _query_demographics(cur, cohort_sql: str, schema: str) -> dict:
     """)
     age_groups = [dict(r) for r in cur.fetchall()]
 
-    # Gender
+    # Gender, race, ethnicity in a single query
     cur.execute(f"""
-        WITH coh AS ({cohort_sql})
         SELECT
-            COALESCE(c.concept_name, 'Unknown') AS label,
-            p.gender_concept_id AS concept_id,
+            COALESCE(cg.concept_name, 'Unknown') AS gender_label,
+            p.gender_concept_id,
+            COALESCE(cr.concept_name, 'Unknown') AS race_label,
+            p.race_concept_id,
+            COALESCE(ce.concept_name, 'Unknown') AS ethnicity_label,
+            p.ethnicity_concept_id,
             COUNT(*) AS count
-        FROM coh
+        FROM _coh_char coh
         JOIN {schema}.person p ON coh.person_id = p.person_id
-        LEFT JOIN {schema}.concept c ON p.gender_concept_id = c.concept_id
-        GROUP BY p.gender_concept_id, c.concept_name
-        ORDER BY count DESC
+        LEFT JOIN {schema}.concept cg ON p.gender_concept_id = cg.concept_id
+        LEFT JOIN {schema}.concept cr ON p.race_concept_id = cr.concept_id
+        LEFT JOIN {schema}.concept ce ON p.ethnicity_concept_id = ce.concept_id
+        GROUP BY p.gender_concept_id, cg.concept_name,
+                 p.race_concept_id, cr.concept_name,
+                 p.ethnicity_concept_id, ce.concept_name
     """)
-    gender = [dict(r) for r in cur.fetchall()]
+    rows = [dict(r) for r in cur.fetchall()]
 
-    # Race
-    cur.execute(f"""
-        WITH coh AS ({cohort_sql})
-        SELECT
-            COALESCE(c.concept_name, 'Unknown') AS label,
-            p.race_concept_id AS concept_id,
-            COUNT(*) AS count
-        FROM coh
-        JOIN {schema}.person p ON coh.person_id = p.person_id
-        LEFT JOIN {schema}.concept c ON p.race_concept_id = c.concept_id
-        GROUP BY p.race_concept_id, c.concept_name
-        ORDER BY count DESC
-    """)
-    race = [dict(r) for r in cur.fetchall()]
+    # Aggregate gender, race, ethnicity from the combined rows
+    gender_map: dict[tuple, int] = {}
+    race_map: dict[tuple, int] = {}
+    ethnicity_map: dict[tuple, int] = {}
+    for r in rows:
+        gk = (r["gender_label"], r["gender_concept_id"])
+        gender_map[gk] = gender_map.get(gk, 0) + r["count"]
+        rk = (r["race_label"], r["race_concept_id"])
+        race_map[rk] = race_map.get(rk, 0) + r["count"]
+        ek = (r["ethnicity_label"], r["ethnicity_concept_id"])
+        ethnicity_map[ek] = ethnicity_map.get(ek, 0) + r["count"]
 
-    # Ethnicity
-    cur.execute(f"""
-        WITH coh AS ({cohort_sql})
-        SELECT
-            COALESCE(c.concept_name, 'Unknown') AS label,
-            p.ethnicity_concept_id AS concept_id,
-            COUNT(*) AS count
-        FROM coh
-        JOIN {schema}.person p ON coh.person_id = p.person_id
-        LEFT JOIN {schema}.concept c ON p.ethnicity_concept_id = c.concept_id
-        GROUP BY p.ethnicity_concept_id, c.concept_name
-        ORDER BY count DESC
-    """)
-    ethnicity = [dict(r) for r in cur.fetchall()]
+    gender = sorted(
+        [{"label": k[0], "concept_id": k[1], "count": v} for k, v in gender_map.items()],
+        key=lambda x: x["count"], reverse=True,
+    )
+    race = sorted(
+        [{"label": k[0], "concept_id": k[1], "count": v} for k, v in race_map.items()],
+        key=lambda x: x["count"], reverse=True,
+    )
+    ethnicity = sorted(
+        [{"label": k[0], "concept_id": k[1], "count": v} for k, v in ethnicity_map.items()],
+        key=lambda x: x["count"], reverse=True,
+    )
 
     return {
         "age": age_row,
@@ -208,7 +217,7 @@ def _query_demographics(cur, cohort_sql: str, schema: str) -> dict:
 
 
 def _query_domain_prevalence(
-    cur, cohort_sql: str, schema: str, domain_name: str, cfg: dict,
+    cur, schema: str, domain_name: str, cfg: dict,
     top_n: int, cohort_size: int,
 ) -> dict:
     """For a clinical domain, return % of cohort with data + top concepts."""
@@ -216,37 +225,51 @@ def _query_domain_prevalence(
     pid = cfg["person_id"]
     cid = cfg["concept_id"]
 
-    # Patients with at least one record
+    # Single query: top concepts + total patients with data via window function
     cur.execute(f"""
-        WITH coh AS ({cohort_sql})
-        SELECT COUNT(DISTINCT t.{pid}) AS n
-        FROM coh
-        JOIN {table} t ON coh.person_id = t.{pid}
-    """)
-    n_patients = cur.fetchone()["n"]
-    pct = round(100.0 * n_patients / cohort_size, 1) if cohort_size > 0 else 0
-
-    # Top concepts
-    cur.execute(f"""
-        WITH coh AS ({cohort_sql})
+        WITH domain_data AS (
+            SELECT
+                t.{cid} AS concept_id,
+                t.{pid} AS person_id
+            FROM _coh_char coh
+            JOIN {table} t ON coh.person_id = t.{pid}
+        ),
+        total AS (
+            SELECT COUNT(DISTINCT person_id) AS n FROM domain_data
+        ),
+        top AS (
+            SELECT
+                concept_id,
+                COUNT(DISTINCT person_id) AS n_persons,
+                COUNT(*) AS n_records
+            FROM domain_data
+            GROUP BY concept_id
+            ORDER BY n_persons DESC
+            LIMIT {int(top_n)}
+        )
         SELECT
-            t.{cid} AS concept_id,
+            total.n AS total_patients_with_data,
+            top.concept_id,
             COALESCE(c.concept_name, 'Unknown') AS concept_name,
             COALESCE(c.concept_code, '') AS concept_code,
             COALESCE(c.vocabulary_id, '') AS vocabulary_id,
-            COUNT(DISTINCT t.{pid}) AS n_persons,
-            COUNT(*) AS n_records
-        FROM coh
-        JOIN {table} t ON coh.person_id = t.{pid}
-        LEFT JOIN {schema}.concept c ON t.{cid} = c.concept_id
-        GROUP BY t.{cid}, c.concept_name, c.concept_code, c.vocabulary_id
-        ORDER BY n_persons DESC
-        LIMIT {int(top_n)}
+            top.n_persons,
+            top.n_records
+        FROM top
+        CROSS JOIN total
+        LEFT JOIN {schema}.concept c ON top.concept_id = c.concept_id
+        ORDER BY top.n_persons DESC
     """)
+    rows = cur.fetchall()
+
+    n_patients = rows[0]["total_patients_with_data"] if rows else 0
+    pct = round(100.0 * n_patients / cohort_size, 1) if cohort_size > 0 else 0
+
     top_concepts = []
-    for row in cur.fetchall():
+    for row in rows:
         r = dict(row)
         r["pct_persons"] = round(100.0 * r["n_persons"] / cohort_size, 1) if cohort_size > 0 else 0
+        del r["total_patients_with_data"]
         top_concepts.append(r)
 
     return {
@@ -258,7 +281,7 @@ def _query_domain_prevalence(
 
 
 def _query_measurement_stats(
-    cur, cohort_sql: str, schema: str, top_n: int, cohort_size: int,
+    cur, schema: str, top_n: int, cohort_size: int,
 ) -> list[dict]:
     """Top measurements with value statistics (mean, SD, median, range)."""
     mcfg = DOMAIN_CONFIG.get("Measurement")
@@ -270,14 +293,13 @@ def _query_measurement_stats(
     cid = mcfg["concept_id"]
 
     cur.execute(f"""
-        WITH coh AS ({cohort_sql}),
-        meas AS (
+        WITH meas AS (
             SELECT
                 t.{cid} AS concept_id,
                 t.value_as_number,
                 t.unit_source_value,
                 t.{pid} AS person_id
-            FROM coh
+            FROM _coh_char coh
             JOIN {table} t ON coh.person_id = t.{pid}
             WHERE t.value_as_number IS NOT NULL
         ),
@@ -322,7 +344,7 @@ def _query_measurement_stats(
 
 
 def _query_visit_types(
-    cur, cohort_sql: str, schema: str, cohort_size: int,
+    cur, schema: str, cohort_size: int,
 ) -> list[dict]:
     """Distribution of visit types in the cohort."""
     vcfg = DOMAIN_CONFIG.get("Visit")
@@ -334,13 +356,12 @@ def _query_visit_types(
     cid = vcfg["concept_id"]
 
     cur.execute(f"""
-        WITH coh AS ({cohort_sql})
         SELECT
             t.{cid} AS concept_id,
             COALESCE(c.concept_name, 'Unknown') AS concept_name,
             COUNT(DISTINCT t.{pid}) AS n_persons,
             COUNT(*) AS n_records
-        FROM coh
+        FROM _coh_char coh
         JOIN {table} t ON coh.person_id = t.{pid}
         LEFT JOIN {schema}.concept c ON t.{cid} = c.concept_id
         GROUP BY t.{cid}, c.concept_name
@@ -355,17 +376,16 @@ def _query_visit_types(
     return results
 
 
-def _query_observation_period(cur, cohort_sql: str, schema: str) -> dict:
+def _query_observation_period(cur, schema: str) -> dict:
     """Observation period stats for the cohort."""
     cur.execute(f"""
-        WITH coh AS ({cohort_sql}),
-        obs AS (
+        WITH obs AS (
             SELECT
                 op.person_id,
                 op.observation_period_start_date,
                 op.observation_period_end_date,
                 (op.observation_period_end_date - op.observation_period_start_date) AS days
-            FROM coh
+            FROM _coh_char coh
             JOIN {schema}.observation_period op ON coh.person_id = op.person_id
         )
         SELECT
