@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   opal-backend:
     build: ./backend
