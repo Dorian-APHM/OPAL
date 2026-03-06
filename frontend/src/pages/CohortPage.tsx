@@ -1,17 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Card, Button, Input, Typography, Space, Modal, List, Tag, message,
-  Tooltip, Popconfirm, Row, Col, Empty, Table, Spin,
+  Tooltip, Popconfirm, Row, Col, Empty, Table, Spin, Tabs,
 } from 'antd';
 import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
   PlusOutlined, PlayCircleOutlined, EditOutlined, UserOutlined,
+  TableOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
 import CriteriaPanel from '../components/cohort/CriteriaPanel';
 import QueryCanvas from '../components/cohort/QueryCanvas';
 import ResultsPanel from '../components/cohort/ResultsPanel';
+import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import { cohortApi } from '../api/client';
 import type {
   CohortCriterion, CriteriaGroup, DemographicConstraints,
@@ -158,6 +160,9 @@ export default function CohortPage({ selectedCdm }: Props) {
     setSampleColumns([]);
   };
 
+  // Active tab (builder vs characterization)
+  const [activeTab, setActiveTab] = useState<string>('builder');
+
   // Detailed sample state
   const [samplePatients, setSamplePatients] = useState<Record<string, any>[]>([]);
   const [sampleColumns, setSampleColumns] = useState<{ key: string; label: string; domain: string }[]>([]);
@@ -231,62 +236,93 @@ export default function CohortPage({ selectedCdm }: Props) {
           />
         </Col>
 
-        {/* Center: Query Canvas + Sample */}
+        {/* Center: Tabs — Builder / Characterization */}
         <Col span={12} style={{ height: '100%', overflow: 'auto' }}>
-          <QueryCanvas
-            inclusion={criteria.inclusion}
-            exclusion={criteria.exclusion}
-            demographics={criteria.demographics || {}}
-            cdmName={selectedCdm || ''}
-            onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
-            onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
-            onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
-          />
-
-          {/* Detailed Sample */}
-          <Card
+          <Tabs
+            activeKey={activeTab}
+            onChange={setActiveTab}
             size="small"
-            style={{ marginTop: 8 }}
-            title={<Space><UserOutlined />{t('cohort.sample_patients', 'Sample Patients')}</Space>}
-            extra={
-              <Button
-                size="small"
-                onClick={runDetailedSample}
-                loading={sampleLoading}
-                disabled={criteria.inclusion.criteria.length === 0}
-              >
-                {t('cohort.sample', 'Sample')}
-              </Button>
-            }
-          >
-            {sampleLoading ? (
-              <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
-            ) : samplePatients.length > 0 ? (
-              <Table
-                size="small"
-                dataSource={samplePatients}
-                rowKey={(_, idx) => String(idx)}
-                pagination={false}
-                scroll={{ x: true }}
-                columns={[
-                  { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' },
-                  { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
-                  ...sampleColumns.map(col => ({
-                    title: col.label,
-                    dataIndex: col.key,
-                    key: col.key,
-                    width: col.key === 'visit_occurrence_id' ? 90 : 150,
-                    ellipsis: true,
-                    render: (v: any) => v != null ? String(v) : '—',
-                  })),
-                ]}
-              />
-            ) : (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t('cohort.click_sample', 'Click Sample to see random patients')}
-              </Typography.Text>
-            )}
-          </Card>
+            style={{ marginBottom: 0 }}
+            items={[
+              {
+                key: 'builder',
+                label: t('cohort.query_builder', 'Query Builder'),
+                children: (
+                  <>
+                    <QueryCanvas
+                      inclusion={criteria.inclusion}
+                      exclusion={criteria.exclusion}
+                      demographics={criteria.demographics || {}}
+                      cdmName={selectedCdm || ''}
+                      onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
+                      onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
+                      onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
+                    />
+
+                    {/* Detailed Sample */}
+                    <Card
+                      size="small"
+                      style={{ marginTop: 8 }}
+                      title={<Space><UserOutlined />{t('cohort.sample_patients', 'Sample Patients')}</Space>}
+                      extra={
+                        <Button
+                          size="small"
+                          onClick={runDetailedSample}
+                          loading={sampleLoading}
+                          disabled={criteria.inclusion.criteria.length === 0}
+                        >
+                          {t('cohort.sample', 'Sample')}
+                        </Button>
+                      }
+                    >
+                      {sampleLoading ? (
+                        <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
+                      ) : samplePatients.length > 0 ? (
+                        <Table
+                          size="small"
+                          dataSource={samplePatients}
+                          rowKey={(_, idx) => String(idx)}
+                          pagination={false}
+                          scroll={{ x: true }}
+                          columns={[
+                            { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' },
+                            { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
+                            ...sampleColumns.map(col => ({
+                              title: col.label,
+                              dataIndex: col.key,
+                              key: col.key,
+                              width: col.key === 'visit_occurrence_id' ? 90 : 150,
+                              ellipsis: true,
+                              render: (v: any) => v != null ? String(v) : '—',
+                            })),
+                          ]}
+                        />
+                      ) : (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {t('cohort.click_sample', 'Click Sample to see random patients')}
+                        </Typography.Text>
+                      )}
+                    </Card>
+                  </>
+                ),
+              },
+              {
+                key: 'characterization',
+                label: (
+                  <Space size={4}>
+                    <TableOutlined />
+                    Table 1
+                  </Space>
+                ),
+                children: (
+                  <CharacterizationPanel
+                    cdmName={selectedCdm || ''}
+                    criteria={toBackendCriteria(criteria)}
+                  />
+                ),
+              },
+            ]}
+          />
         </Col>
 
         {/* Right: Results Panel */}
