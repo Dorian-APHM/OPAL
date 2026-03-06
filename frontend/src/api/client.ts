@@ -229,10 +229,6 @@ export const mappingApi = {
     target_vocabulary_id?: string; suggestion_source?: string; confidence_score?: number;
     reason?: string;
   }) => api.post('/mapping/decide', data),
-  decideBulk: (data: {
-    cdm_name: string; domain: string; action: string;
-    min_confidence?: number; source_values?: string[];
-  }) => api.post('/mapping/decide/bulk', data),
   apply: (cdmName: string, domain: string, writeToCdm?: boolean) =>
     api.post('/mapping/apply', { cdm_name: cdmName, domain, write_to_cdm: writeToCdm || false }),
   applyPreview: (cdmName: string, domain: string) =>
