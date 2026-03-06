@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Card, Button, Select, Spin, Typography, Table, Tag, Space, Statistic,
-  Row, Col, Collapse, Descriptions, Alert, Empty, Tooltip, message,
+  Row, Col, Collapse, Descriptions, Alert, Empty, Tooltip, Switch, message,
 } from 'antd';
 import {
   SwapOutlined, DownloadOutlined, TeamOutlined,
@@ -53,6 +53,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<CohortComparisonResult | null>(null);
+  const [visitLevel, setVisitLevel] = useState(false);
 
   const runCompare = async () => {
     if (!cdmName || !cohortIdA || !cohortIdB) return;
@@ -60,7 +61,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
     setError('');
     setResult(null);
     try {
-      const resp = await cohortApi.compare(cdmName, cohortIdA, cohortIdB);
+      const resp = await cohortApi.compare(cdmName, cohortIdA, cohortIdB, visitLevel);
       setResult(resp.data);
     } catch (e: any) {
       setError(e.response?.data?.detail || 'Comparison failed');
@@ -166,6 +167,24 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
             </Button>
           </Col>
         </Row>
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+          <Tooltip title={
+            visitLevel
+              ? t('cohort.visit_level_on', 'Clinical data restricted to the qualifying visit only')
+              : t('cohort.visit_level_off', 'All patient data across all visits (standard)')
+          }>
+            <Space size={4}>
+              <Switch
+                size="small"
+                checked={visitLevel}
+                onChange={setVisitLevel}
+              />
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {t('cohort.visit_level', 'Visit-level')}
+              </Text>
+            </Space>
+          </Tooltip>
+        </div>
       </Card>
 
       {error && <Alert type="error" message={error} closable onClose={() => setError('')} />}

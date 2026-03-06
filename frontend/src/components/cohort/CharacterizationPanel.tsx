@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   Card, Button, Spin, Typography, Table, Tag, Space, Statistic,
   Row, Col, Progress, Collapse, Descriptions, Alert, Empty, Tooltip,
-  message,
+  Switch, message,
 } from 'antd';
 import {
   TableOutlined, TeamOutlined, MedicineBoxOutlined, ExperimentOutlined,
@@ -53,12 +53,15 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [error, setError] = useState('');
   const [characterizedAt, setCharacterizedAt] = useState<string | null>(null);
+  const [visitLevel, setVisitLevel] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const hasCriteria =
     criteria.inclusion.criteria.length > 0 ||
     criteria.demographics?.age ||
     criteria.demographics?.gender;
+
+  const hasSameVisit = !!criteria.inclusion.sameVisit;
 
   // Stable key for criteria to avoid spurious resets on every render
   const criteriaKey = JSON.stringify(criteria);
@@ -104,7 +107,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
     setLoading(true);
     setError('');
     try {
-      const resp = await cohortApi.characterize(cdmName, criteria, 25, controller.signal);
+      const resp = await cohortApi.characterize(cdmName, criteria, 25, controller.signal, visitLevel);
       if (controller.signal.aborted) return;
       setResult(resp.data);
       setCharacterizedAt(new Date().toISOString());
@@ -193,6 +196,24 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
             <Title level={5} style={{ margin: 0 }}>Table 1 — Cohort Characterization</Title>
           </Space>
           <Space>
+            {hasSameVisit && (
+              <Tooltip title={
+                visitLevel
+                  ? t('cohort.visit_level_on', 'Clinical data restricted to the qualifying visit only')
+                  : t('cohort.visit_level_off', 'All patient data across all visits (standard)')
+              }>
+                <Space size={4}>
+                  <Switch
+                    size="small"
+                    checked={visitLevel}
+                    onChange={setVisitLevel}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {t('cohort.visit_level', 'Visit-level')}
+                  </Text>
+                </Space>
+              </Tooltip>
+            )}
             {characterizedAt && (
               <Tooltip title={`Last run: ${new Date(characterizedAt).toLocaleString()}`}>
                 <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 14 }} />
@@ -244,6 +265,16 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
 
       {result && !loading && (
         <>
+          {/* Visit-level indicator */}
+          {(result as any).visit_level && (
+            <Alert
+              type="info"
+              showIcon
+              message={t('cohort.visit_level_active', 'Visit-level characterization — clinical data restricted to qualifying visits only. Demographics remain patient-level.')}
+              style={{ fontSize: 12 }}
+            />
+          )}
+
           {/* Cohort Size */}
           <Card size="small">
             <Statistic
