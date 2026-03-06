@@ -87,7 +87,15 @@
     "exclusion": "Exclusion Criteria",
     "demographics": "Demographics",
     "generated_sql": "Generated SQL",
-    "export": "Export"
+    "export": "Export",
+    "patient_journey": "Patient Journey",
+    "view_journey": "View patient journey",
+    "no_journey": "No data found",
+    "filter_domains": "Filter",
+    "group_by_domain": "By domain",
+    "no_events": "No events for selected domains",
+    "obs_period": "Obs. Period",
+    "events": "events"
   },
   "mapping": {
     "title": "Mapping Workflow",

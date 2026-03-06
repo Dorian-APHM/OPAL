@@ -87,7 +87,15 @@
     "exclusion": "Critères d'exclusion",
     "demographics": "Démographie",
     "generated_sql": "SQL généré",
-    "export": "Exporter"
+    "export": "Exporter",
+    "patient_journey": "Parcours Patient",
+    "view_journey": "Voir le parcours patient",
+    "no_journey": "Aucune donnée trouvée",
+    "filter_domains": "Filtrer",
+    "group_by_domain": "Par domaine",
+    "no_events": "Aucun événement pour les domaines sélectionnés",
+    "obs_period": "Période d'obs.",
+    "events": "événements"
   },
   "mapping": {
     "title": "Workflow de Mapping",
