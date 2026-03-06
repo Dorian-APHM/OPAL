@@ -1,0 +1,117 @@
+/* Reset body margin/padding to remove white border */
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+/* OPAL Green Secondary Color Theme (#2bc459) */
+
+/* Default (non-primary) button hover → green border + text */
+.ant-btn-default:not(.ant-btn-dangerous):hover,
+.ant-btn-default:not(.ant-btn-dangerous):focus {
+  color: #2bc459 !important;
+  border-color: #2bc459 !important;
+}
+
+/* Ghost button hover */
+.ant-btn-default.ant-btn-background-ghost:not(.ant-btn-dangerous):hover {
+  color: #2bc459 !important;
+  border-color: #2bc459 !important;
+}
+
+/* Link button hover → green */
+.ant-btn-link:not(.ant-btn-dangerous):hover {
+  color: #24a34a !important;
+}
+
+/* Sidebar: override dark menu selected item with green */
+.ant-layout-sider .ant-menu-dark .ant-menu-item-selected {
+  background-color: rgba(43, 196, 89, 0.2) !important;
+}
+.ant-layout-sider .ant-menu-dark .ant-menu-item-selected .ant-menu-title-content,
+.ant-layout-sider .ant-menu-dark .ant-menu-item-selected .anticon {
+  color: #2bc459 !important;
+}
+
+/* Sidebar: menu item hover → subtle green */
+.ant-layout-sider .ant-menu-dark .ant-menu-item:not(.ant-menu-item-selected):hover {
+  background-color: rgba(43, 196, 89, 0.1) !important;
+}
+.ant-layout-sider .ant-menu-dark .ant-menu-item:not(.ant-menu-item-selected):hover .ant-menu-title-content,
+.ant-layout-sider .ant-menu-dark .ant-menu-item:not(.ant-menu-item-selected):hover .anticon {
+  color: #2bc459 !important;
+}
+
+/* Select dropdown item hover → light green */
+.ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+  background-color: rgba(43, 196, 89, 0.08) !important;
+}
+.ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+  background-color: rgba(43, 196, 89, 0.15) !important;
+}
+
+/* Input focus border → green */
+.ant-input:focus,
+.ant-input-focused,
+.ant-input:hover,
+.ant-input-number:hover,
+.ant-input-number-focused,
+.ant-select:not(.ant-select-disabled):hover .ant-select-selector {
+  border-color: #2bc459 !important;
+}
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-number-focused {
+  box-shadow: 0 0 0 2px rgba(43, 196, 89, 0.15) !important;
+}
+
+/* Pagination active item → green */
+.ant-pagination .ant-pagination-item-active {
+  border-color: #2bc459 !important;
+}
+.ant-pagination .ant-pagination-item-active a {
+  color: #2bc459 !important;
+}
+.ant-pagination .ant-pagination-item:hover {
+  border-color: #2bc459 !important;
+}
+.ant-pagination .ant-pagination-item:hover a {
+  color: #2bc459 !important;
+}
+
+/* Card hover → subtle green top border */
+.ant-card:hover {
+  border-color: rgba(43, 196, 89, 0.3);
+}
+
+/* Table row hover → very light green */
+.ant-table-tbody > tr.ant-table-row:hover > td {
+  background: rgba(43, 196, 89, 0.04) !important;
+}
+
+/* Collapse header hover */
+.ant-collapse-header:hover {
+  color: #2bc459 !important;
+}
+
+/* Radio button checked → green */
+.ant-radio-wrapper .ant-radio-checked .ant-radio-inner {
+  border-color: #2bc459 !important;
+  background-color: #2bc459 !important;
+}
+
+/* Scrollbar thumb (webkit) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(43, 196, 89, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(43, 196, 89, 0.5);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

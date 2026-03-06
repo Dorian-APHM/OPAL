@@ -1,0 +1,80 @@
+{
+  "realm": "opal",
+  "enabled": true,
+  "displayName": "OPAL",
+  "loginTheme": "opal",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Full access to all OPAL features"
+      },
+      {
+        "name": "omop-dim",
+        "description": "Full access to all OPAL features (OMOP DIM team)"
+      },
+      {
+        "name": "chercheur",
+        "description": "Access to Quality, Cohorting, Concept Explorer"
+      },
+      {
+        "name": "medecin",
+        "description": "Access to Mapping, Cohorting, Concept Explorer"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "opal-frontend",
+      "name": "OPAL Frontend",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "rootUrl": "",
+      "baseUrl": "/",
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "realm-roles-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "OPAL",
+      "email": "admin@opal.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin"]
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  opal-backend:
+    build: ./backend
+    container_name: opal-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://opal:opal@opal-db:5432/opal
+      - AUTH_ENABLED=true
+      - KEYCLOAK_URL=http://opal-keycloak:8080
+      - KEYCLOAK_REALM=opal
+      - KEYCLOAK_CLIENT_ID=opal-frontend
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - CORS_ORIGINS=http://10.64.48.194:3000,http://10.64.48.194:5173,http://localhost:3000,http://localhost:5173
+      - OHDSI_IMAGE_PREFIX=ohdsi-docker
+      - OHDSI_HOST_OUTPUT_DIR=/data/Dorian/apps/OPAL/opal/ohdsi_output
+      - OHDSI_HOST_SCRIPTS_DIR=/data/ohdsi_quality_tool/ohdsi-docker/scripts
+      - OHDSI_HOST_JDBC_DIR=/data/jdbc_drivers
+    depends_on:
+      opal-db:
+        condition: service_healthy
+    volumes:
+      - opal_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /data/ohdsi_quality_tool/ohdsi-docker/scripts:/app/ohdsi_scripts:ro
+      - /data/jdbc_drivers:/app/jdbc_drivers:ro
+      - ./ohdsi_output:/app/ohdsi_output
+      - ./backend/logs:/app/logs
+    restart: unless-stopped
+
+  opal-frontend:
+    build: ./frontend
+    container_name: opal-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - opal-backend
+    restart: unless-stopped
+
+  opal-db:
+    image: postgres:16-alpine
+    container_name: opal-db
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_USER=opal
+      - POSTGRES_PASSWORD=opal
+      - POSTGRES_DB=opal
+    volumes:
+      - opal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  opal-keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: opal-keycloak
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_HOSTNAME=10.64.48.194
+      - KC_HOSTNAME_PORT=8080
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+    command: start-dev --import-realm
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/opal-realm.json:/opt/keycloak/data/import/opal-realm.json:ro
+      - ./keycloak/themes/opal:/opt/keycloak/themes/opal:ro
+      - opal_keycloak_data:/opt/keycloak/data/h2
+    restart: unless-stopped
+
+volumes:
+  opal_pgdata:
+  opal_data:
+  opal_keycloak_data:
+
+networks:
+  default:
+    name: opal-network

@@ -1,0 +1,152 @@
+/* OPAL Keycloak Login Theme — PatternFly v5 (keycloak.v2) */
+
+/* ── Background ── */
+#keycloak-bg,
+body {
+  background: linear-gradient(135deg, #001529 0%, #002140 50%, #003a5c 100%) !important;
+}
+
+/* ── Header / Logo area ── */
+#kc-header {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+#kc-header-wrapper {
+  font-size: 0 !important;
+  text-align: center !important;
+  padding: 30px 0 16px !important;
+  color: transparent !important;
+}
+
+#kc-header-wrapper::before {
+  content: '';
+  display: block;
+  width: 280px;
+  height: 160px;
+  margin: 0 auto 12px;
+  background: url('../img/opal-logo.svg') center/contain no-repeat;
+}
+
+#kc-header-wrapper::after {
+  content: 'OMOP Platform for Analytics & Lineage';
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+/* ── Login card ── */
+.pf-v5-c-login__main {
+  background: rgba(255, 255, 255, 0.97) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
+  border: 1px solid rgba(43, 196, 89, 0.15) !important;
+  max-width: 420px !important;
+}
+
+/* Card header title */
+.pf-v5-c-login__main-header .pf-v5-c-title {
+  color: #001529 !important;
+  font-weight: 600 !important;
+}
+
+/* ── Form inputs (PatternFly v5) ── */
+.pf-v5-c-form-control {
+  border-radius: 6px !important;
+}
+
+.pf-v5-c-form-control:focus-within,
+.pf-v5-c-form-control:focus {
+  --pf-v5-c-form-control--m-expanded--BorderBottomColor: #2bc459 !important;
+  border-color: #2bc459 !important;
+  box-shadow: 0 0 0 1px #2bc459 !important;
+  outline: none !important;
+}
+
+/* ── Primary button (Sign In) ── */
+.pf-v5-c-button.pf-m-primary,
+#kc-login {
+  background-color: #2bc459 !important;
+  border-radius: 6px !important;
+  font-weight: 600 !important;
+  font-size: 15px !important;
+  border: none !important;
+  box-shadow: 0 2px 8px rgba(43, 196, 89, 0.3) !important;
+  transition: all 0.2s ease !important;
+  --pf-v5-c-button--m-primary--BackgroundColor: #2bc459 !important;
+}
+
+.pf-v5-c-button.pf-m-primary:hover,
+#kc-login:hover {
+  background-color: #24a34a !important;
+  box-shadow: 0 4px 12px rgba(43, 196, 89, 0.4) !important;
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #24a34a !important;
+}
+
+.pf-v5-c-button.pf-m-primary:focus,
+#kc-login:focus {
+  background-color: #24a34a !important;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #24a34a !important;
+}
+
+/* ── Links ── */
+.pf-v5-c-login__main-footer-links-item-link,
+.pf-v5-c-button.pf-m-link,
+#kc-registration a,
+#kc-form-options a,
+a.pf-v5-c-button {
+  color: #1f77b4 !important;
+  --pf-v5-c-button--m-link--Color: #1f77b4 !important;
+}
+
+.pf-v5-c-button.pf-m-link:hover,
+#kc-form-options a:hover {
+  color: #155a8a !important;
+  --pf-v5-c-button--m-link--hover--Color: #155a8a !important;
+}
+
+/* ── Labels ── */
+.pf-v5-c-form__label-text {
+  color: #333 !important;
+  font-weight: 500 !important;
+}
+
+/* ── Alert messages ── */
+.pf-v5-c-alert.pf-m-danger {
+  --pf-v5-c-alert--m-danger--BackgroundColor: #fff2f0 !important;
+  border-left-color: #cf1322 !important;
+}
+
+.pf-v5-c-alert.pf-m-success {
+  --pf-v5-c-alert--m-success--BackgroundColor: #f6ffed !important;
+  border-left-color: #2bc459 !important;
+}
+
+/* ── Footer area ── */
+.pf-v5-c-login__main-footer {
+  border-top: 1px solid #f0f0f0 !important;
+}
+
+/* ── Password visibility toggle ── */
+.pf-v5-c-button.pf-m-control {
+  border-radius: 0 6px 6px 0 !important;
+}
+
+/* ── Container ── */
+.pf-v5-c-login__container {
+  max-width: 480px !important;
+}
+
+/* ── Locale dropdown ── */
+#kc-locale ul {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-radius: 6px !important;
+}
+
+#kc-locale-dropdown > a,
+.kc-dropdown a {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
