@@ -276,7 +276,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
         )}
 
         {/* Search results */}
-        <div style={{ flex: 1, overflow: 'auto' }}>
+        <div style={{ maxHeight: 300, overflow: 'auto' }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 16 }}><Spin size="small" /></div>
           ) : concepts.length > 0 ? (

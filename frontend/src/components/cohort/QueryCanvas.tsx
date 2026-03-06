@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import {
   Card, Tag, Button, Select, InputNumber, Space, Typography,
-  Tooltip, Switch, Collapse, Empty, Checkbox,
+  Tooltip, Switch, Collapse, Empty, Checkbox, Spin,
 } from 'antd';
 import {
   DeleteOutlined, SwapOutlined,
   CheckCircleOutlined, CloseCircleOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
+import { conceptApi } from '../../api/client';
 import type {
   CohortCriterion, CriteriaGroup, DemographicConstraints,
   TemporalConstraint, OccurrenceConstraint, ValueConstraint,
@@ -31,13 +32,14 @@ interface Props {
   inclusion: CriteriaGroup;
   exclusion: CriteriaGroup;
   demographics: DemographicConstraints;
+  cdmName: string;
   onUpdateInclusion: (group: CriteriaGroup) => void;
   onUpdateExclusion: (group: CriteriaGroup) => void;
   onUpdateDemographics: (demo: DemographicConstraints) => void;
 }
 
 export default function QueryCanvas({
-  inclusion, exclusion, demographics,
+  inclusion, exclusion, demographics, cdmName,
   onUpdateInclusion, onUpdateExclusion, onUpdateDemographics,
 }: Props) {
   const { t } = useTranslation();
@@ -119,6 +121,7 @@ export default function QueryCanvas({
         icon={<CheckCircleOutlined />}
         criteria={inclusion.criteria}
         groupKey="inclusion"
+        cdmName={cdmName}
         onRemove={(id) => removeCriterion('inclusion', id)}
         onUpdate={(id, updates) => updateCriterion('inclusion', id, updates)}
         onMove={(id) => moveCriterion('inclusion', id)}
@@ -139,6 +142,7 @@ export default function QueryCanvas({
         icon={<CloseCircleOutlined />}
         criteria={exclusion.criteria}
         groupKey="exclusion"
+        cdmName={cdmName}
         onRemove={(id) => removeCriterion('exclusion', id)}
         onUpdate={(id, updates) => updateCriterion('exclusion', id, updates)}
         onMove={(id) => moveCriterion('exclusion', id)}
@@ -158,7 +162,7 @@ export default function QueryCanvas({
 // ──── Criteria List Card ────
 
 function CriteriaListCard({
-  title, color, icon, criteria, groupKey,
+  title, color, icon, criteria, groupKey, cdmName,
   onRemove, onUpdate, onMove, onToggleOperator,
   sameVisit, onToggleSameVisit,
 }: {
@@ -167,6 +171,7 @@ function CriteriaListCard({
   icon: React.ReactNode;
   criteria: CohortCriterion[];
   groupKey: 'inclusion' | 'exclusion';
+  cdmName: string;
   onRemove: (id: string) => void;
   onUpdate: (id: string, updates: Partial<CohortCriterion>) => void;
   onMove: (id: string) => void;
@@ -206,6 +211,7 @@ function CriteriaListCard({
             <CriterionCard
               criterion={criterion}
               groupKey={groupKey}
+              cdmName={cdmName}
               onRemove={() => onRemove(criterion.id)}
               onUpdate={(updates) => onUpdate(criterion.id, updates)}
               onMove={() => onMove(criterion.id)}
@@ -220,16 +226,39 @@ function CriteriaListCard({
 // ──── Single Criterion Card ────
 
 function CriterionCard({
-  criterion, groupKey, onRemove, onUpdate, onMove,
+  criterion, groupKey, cdmName, onRemove, onUpdate, onMove,
 }: {
   criterion: CohortCriterion;
   groupKey: string;
+  cdmName: string;
   onRemove: () => void;
   onUpdate: (updates: Partial<CohortCriterion>) => void;
   onMove: () => void;
 }) {
   const { t } = useTranslation();
   const domainColor = DOMAIN_COLORS[criterion.domain] || '#666';
+  const [descendants, setDescendants] = useState<{ concept_id: number; concept_name: string; concept_code: string; vocabulary_id: string }[]>([]);
+  const [descendantsLoading, setDescendantsLoading] = useState(false);
+  const [descendantsLoaded, setDescendantsLoaded] = useState(false);
+
+  const loadDescendants = () => {
+    if (descendantsLoaded || descendantsLoading || !cdmName) return;
+    setDescendantsLoading(true);
+    const allDescs: typeof descendants = [];
+    const promises = criterion.concepts.map(c =>
+      conceptApi.hierarchy(cdmName, c.concept_id)
+        .then(r => { allDescs.push(...(r.data.descendants || [])); })
+        .catch(() => {})
+    );
+    Promise.all(promises).then(() => {
+      // Deduplicate by concept_id
+      const seen = new Set(criterion.concepts.map(c => c.concept_id));
+      const unique = allDescs.filter(d => { if (seen.has(d.concept_id)) return false; seen.add(d.concept_id); return true; });
+      setDescendants(unique);
+      setDescendantsLoaded(true);
+      setDescendantsLoading(false);
+    });
+  };
 
   return (
     <Card
@@ -242,12 +271,12 @@ function CriterionCard({
           {/* Domain & concepts */}
           <Space size={4} style={{ marginBottom: 4 }} wrap>
             <Tag color={domainColor}>{criterion.domain}</Tag>
-            {criterion.concepts.length > 0 ? (
-              criterion.concepts.map(c => (
-                <Tooltip key={c.concept_id} title={`${c.concept_code} · ${c.vocabulary_id}`}>
-                  <Tag>{c.concept_name}</Tag>
-                </Tooltip>
-              ))
+            {criterion.concepts.length > 1 ? (
+              <Tag>{criterion.concepts.length} concepts</Tag>
+            ) : criterion.concepts.length === 1 ? (
+              <Tooltip title={`${criterion.concepts[0].concept_code} · ${criterion.concepts[0].vocabulary_id}`}>
+                <Tag>{criterion.concepts[0].concept_name}</Tag>
+              </Tooltip>
             ) : criterion.source_codes && criterion.source_codes.length > 0 ? (
               criterion.source_codes.map(code => (
                 <Tag key={code} color="orange">{code}</Tag>
@@ -258,6 +287,32 @@ function CriterionCard({
               </Text>
             )}
           </Space>
+
+          {/* Included concepts (collapsible, loads descendants on expand) */}
+          {criterion.concepts.length > 0 && criterion.include_descendants && (
+            <Collapse ghost size="small" onChange={(keys) => { if (keys.length > 0) loadDescendants(); }} items={[{
+              key: 'descendants',
+              label: <Text style={{ fontSize: 11 }}>{t('cohort.included_concepts', 'Included concepts')} {descendantsLoaded ? `(${criterion.concepts.length} + ${descendants.length} descendants)` : ''}</Text>,
+              children: descendantsLoading ? (
+                <div style={{ textAlign: 'center', padding: 8 }}><Spin size="small" /></div>
+              ) : (
+                <div style={{ maxHeight: 200, overflow: 'auto' }}>
+                  <Space size={[4, 4]} wrap>
+                    {criterion.concepts.map(c => (
+                      <Tooltip key={c.concept_id} title={`${c.concept_code} · ${c.vocabulary_id}`}>
+                        <Tag color="blue" style={{ fontSize: 11 }}>{c.concept_name}</Tag>
+                      </Tooltip>
+                    ))}
+                    {descendants.map(d => (
+                      <Tooltip key={d.concept_id} title={`${d.concept_code} · ${d.vocabulary_id}`}>
+                        <Tag style={{ fontSize: 11, opacity: 0.7 }}>{d.concept_name}</Tag>
+                      </Tooltip>
+                    ))}
+                  </Space>
+                </div>
+              ),
+            }]} />
+          )}
 
           {/* Constraint controls */}
           <Collapse ghost size="small" items={[{
@@ -394,9 +449,12 @@ function LogicSummary({ criteria, sameVisit }: { criteria: CohortCriterion[]; sa
   if (criteria.length < 2) return null;
 
   const criterionLabel = (c: CohortCriterion) => {
-    if (c.source_codes && c.source_codes.length > 0) return c.source_codes.join(', ');
-    if (c.concepts.length > 0) return c.concepts.map(con => con.concept_name).join(', ');
-    return c.domain;
+    let items: string[] = [];
+    if (c.concepts.length > 0) items.push(...c.concepts.map(con => con.concept_name));
+    if (c.source_codes && c.source_codes.length > 0) items.push(...c.source_codes);
+    if (items.length === 0) return c.domain;
+    if (items.length === 1) return items[0];
+    return `(${items.join(' OR ')})`;
   };
 
   // Group by OR-consecutive
