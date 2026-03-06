@@ -36,8 +36,9 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         # ── 0. Materialize cohort into a temp table (executed ONCE) ──
+        cur.execute("DROP TABLE IF EXISTS _coh_char")
         cur.execute(f"""
-            CREATE TEMP TABLE _coh_char ON COMMIT DROP AS
+            CREATE TEMP TABLE _coh_char AS
             SELECT DISTINCT person_id FROM ({cohort_sql}) AS _coh_src
         """)
         cur.execute("CREATE INDEX ON _coh_char (person_id)")
@@ -56,14 +57,16 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
             if not cfg:
                 continue
             try:
+                cur.execute("SAVEPOINT sp_domain")
                 dp = _query_domain_prevalence(
                     cur, omop_schema, domain_name, cfg, top_n,
                     results["cohort_size"],
                 )
+                cur.execute("RELEASE SAVEPOINT sp_domain")
                 domain_prev.append(dp)
             except Exception as e:
                 logger.warning("Characterization: domain %s failed: %s", domain_name, e)
-                conn.rollback()
+                cur.execute("ROLLBACK TO SAVEPOINT sp_domain")
                 domain_prev.append({
                     "domain": domain_name,
                     "patients_with_data": 0,
@@ -75,33 +78,42 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
 
         # ── 4. Measurement value stats (top measurements by patient count) ──
         try:
+            cur.execute("SAVEPOINT sp_meas")
             results["measurement_stats"] = _query_measurement_stats(
                 cur, omop_schema, top_n, results["cohort_size"],
             )
+            cur.execute("RELEASE SAVEPOINT sp_meas")
         except Exception as e:
             logger.warning("Characterization: measurement stats failed: %s", e)
-            conn.rollback()
+            cur.execute("ROLLBACK TO SAVEPOINT sp_meas")
             results["measurement_stats"] = []
 
         # ── 5. Visit type distribution ──
         try:
+            cur.execute("SAVEPOINT sp_visit")
             results["visit_types"] = _query_visit_types(
                 cur, omop_schema, results["cohort_size"],
             )
+            cur.execute("RELEASE SAVEPOINT sp_visit")
         except Exception as e:
             logger.warning("Characterization: visit types failed: %s", e)
-            conn.rollback()
+            cur.execute("ROLLBACK TO SAVEPOINT sp_visit")
             results["visit_types"] = []
 
         # ── 6. Observation period stats ──
         try:
+            cur.execute("SAVEPOINT sp_obs")
             results["observation_period"] = _query_observation_period(
                 cur, omop_schema,
             )
+            cur.execute("RELEASE SAVEPOINT sp_obs")
         except Exception as e:
             logger.warning("Characterization: obs period failed: %s", e)
-            conn.rollback()
+            cur.execute("ROLLBACK TO SAVEPOINT sp_obs")
             results["observation_period"] = {}
+
+        # Cleanup temp table
+        cur.execute("DROP TABLE IF EXISTS _coh_char")
 
     return results
 
