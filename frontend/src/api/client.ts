@@ -186,8 +186,8 @@ export const cohortApi = {
     api.get<{ domains: { name: string; table: string }[] }>('/cohorts/domains'),
   exportDirect: (cdmName: string, criteria: CohortCriteria) =>
     api.post('/cohorts/export/direct', { cdm_name: cdmName, criteria }, { responseType: 'blob' }),
-  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number) =>
-    api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25 }),
+  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, signal?: AbortSignal) =>
+    api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25 }, { signal }),
   saveCharacterization: (cohortId: number, characterization: CharacterizationResult) =>
     api.put(`/cohorts/${cohortId}/characterization`, { characterization }),
   getCharacterization: (cohortId: number) =>
