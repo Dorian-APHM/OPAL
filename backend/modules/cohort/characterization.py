@@ -22,26 +22,49 @@ _CHAR_DOMAINS = ["Condition", "Drug", "Procedure", "Measurement", "Observation",
 _TOP_N = 25
 
 
-def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _TOP_N) -> dict:
+def run_characterization(
+    conn, criteria: dict, omop_schema: str, top_n: int = _TOP_N,
+    visit_level: bool = False,
+) -> dict:
     """
     Run full Table 1 characterization for the given cohort criteria.
 
     Returns a dict with sections: demographics, domain_prevalence, measurement_stats.
+
+    When visit_level=True and the cohort uses sameVisit, clinical domain queries
+    are restricted to the qualifying visit only (not all patient data).
+    Demographics remain patient-level.
     """
     from psycopg2.extras import RealDictCursor
 
-    cohort_sql = build_cohort_sql(criteria, omop_schema)
+    # Check if visit-level mode is applicable
+    has_same_visit = bool(criteria.get("inclusion", {}).get("sameVisit", False))
+    effective_visit_level = visit_level and has_same_visit
+
+    cohort_sql = build_cohort_sql(
+        criteria, omop_schema, include_visit_id=effective_visit_level,
+    )
 
     results: dict[str, Any] = {}
+    results["visit_level"] = effective_visit_level
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         # ── 0. Materialize cohort into a temp table (executed ONCE) ──
         cur.execute("DROP TABLE IF EXISTS _coh_char")
-        cur.execute(f"""
-            CREATE TEMP TABLE _coh_char AS
-            SELECT DISTINCT person_id FROM ({cohort_sql}) AS _coh_src
-        """)
-        cur.execute("CREATE INDEX ON _coh_char (person_id)")
+        if effective_visit_level:
+            cur.execute(f"""
+                CREATE TEMP TABLE _coh_char AS
+                SELECT DISTINCT person_id, visit_occurrence_id
+                FROM ({cohort_sql}) AS _coh_src
+            """)
+            cur.execute("CREATE INDEX ON _coh_char (person_id)")
+            cur.execute("CREATE INDEX ON _coh_char (person_id, visit_occurrence_id)")
+        else:
+            cur.execute(f"""
+                CREATE TEMP TABLE _coh_char AS
+                SELECT DISTINCT person_id FROM ({cohort_sql}) AS _coh_src
+            """)
+            cur.execute("CREATE INDEX ON _coh_char (person_id)")
 
         # ── 1. Demographics ──
         results["demographics"] = _query_demographics(cur, omop_schema)
@@ -61,6 +84,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
                 dp = _query_domain_prevalence(
                     cur, omop_schema, domain_name, cfg, top_n,
                     results["cohort_size"],
+                    visit_level=effective_visit_level,
                 )
                 cur.execute("RELEASE SAVEPOINT sp_domain")
                 domain_prev.append(dp)
@@ -81,6 +105,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
             cur.execute("SAVEPOINT sp_meas")
             results["measurement_stats"] = _query_measurement_stats(
                 cur, omop_schema, top_n, results["cohort_size"],
+                visit_level=effective_visit_level,
             )
             cur.execute("RELEASE SAVEPOINT sp_meas")
         except Exception as e:
@@ -93,6 +118,7 @@ def run_characterization(conn, criteria: dict, omop_schema: str, top_n: int = _T
             cur.execute("SAVEPOINT sp_visit")
             results["visit_types"] = _query_visit_types(
                 cur, omop_schema, results["cohort_size"],
+                visit_level=effective_visit_level,
             )
             cur.execute("RELEASE SAVEPOINT sp_visit")
         except Exception as e:
@@ -231,11 +257,19 @@ def _query_demographics(cur, schema: str) -> dict:
 def _query_domain_prevalence(
     cur, schema: str, domain_name: str, cfg: dict,
     top_n: int, cohort_size: int,
+    visit_level: bool = False,
 ) -> dict:
     """For a clinical domain, return % of cohort with data + top concepts."""
     table = f"{schema}.{cfg['table']}"
     pid = cfg["person_id"]
     cid = cfg["concept_id"]
+
+    # Visit-level: restrict to records from the qualifying visit only
+    visit_join = (
+        f"JOIN {table} t ON coh.person_id = t.{pid} AND coh.visit_occurrence_id = t.visit_occurrence_id"
+        if visit_level else
+        f"JOIN {table} t ON coh.person_id = t.{pid}"
+    )
 
     # Single query: top concepts + total patients with data via window function
     cur.execute(f"""
@@ -244,7 +278,7 @@ def _query_domain_prevalence(
                 t.{cid} AS concept_id,
                 t.{pid} AS person_id
             FROM _coh_char coh
-            JOIN {table} t ON coh.person_id = t.{pid}
+            {visit_join}
         ),
         total AS (
             SELECT COUNT(DISTINCT person_id) AS n FROM domain_data
@@ -294,6 +328,7 @@ def _query_domain_prevalence(
 
 def _query_measurement_stats(
     cur, schema: str, top_n: int, cohort_size: int,
+    visit_level: bool = False,
 ) -> list[dict]:
     """Top measurements with value statistics (mean, SD, median, range)."""
     mcfg = DOMAIN_CONFIG.get("Measurement")
@@ -304,6 +339,12 @@ def _query_measurement_stats(
     pid = mcfg["person_id"]
     cid = mcfg["concept_id"]
 
+    visit_join = (
+        f"JOIN {table} t ON coh.person_id = t.{pid} AND coh.visit_occurrence_id = t.visit_occurrence_id"
+        if visit_level else
+        f"JOIN {table} t ON coh.person_id = t.{pid}"
+    )
+
     cur.execute(f"""
         WITH meas AS (
             SELECT
@@ -312,7 +353,7 @@ def _query_measurement_stats(
                 t.unit_source_value,
                 t.{pid} AS person_id
             FROM _coh_char coh
-            JOIN {table} t ON coh.person_id = t.{pid}
+            {visit_join}
             WHERE t.value_as_number IS NOT NULL
         ),
         ranked AS (
@@ -357,6 +398,7 @@ def _query_measurement_stats(
 
 def _query_visit_types(
     cur, schema: str, cohort_size: int,
+    visit_level: bool = False,
 ) -> list[dict]:
     """Distribution of visit types in the cohort."""
     vcfg = DOMAIN_CONFIG.get("Visit")
@@ -367,6 +409,12 @@ def _query_visit_types(
     pid = vcfg["person_id"]
     cid = vcfg["concept_id"]
 
+    visit_join = (
+        f"JOIN {table} t ON coh.person_id = t.{pid} AND coh.visit_occurrence_id = t.visit_occurrence_id"
+        if visit_level else
+        f"JOIN {table} t ON coh.person_id = t.{pid}"
+    )
+
     cur.execute(f"""
         SELECT
             t.{cid} AS concept_id,
@@ -374,7 +422,7 @@ def _query_visit_types(
             COUNT(DISTINCT t.{pid}) AS n_persons,
             COUNT(*) AS n_records
         FROM _coh_char coh
-        JOIN {table} t ON coh.person_id = t.{pid}
+        {visit_join}
         LEFT JOIN {schema}.concept c ON t.{cid} = c.concept_id
         GROUP BY t.{cid}, c.concept_name
         ORDER BY n_persons DESC
