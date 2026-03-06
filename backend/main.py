@@ -96,7 +96,6 @@ def auth_me(request: Request):
     user = getattr(request.state, "user", None)
     if not user or user.get("sub") == "anonymous":
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-    from auth.keycloak import ROLE_ROUTE_ACCESS
     return {
         "username": user.get("preferred_username", "unknown"),
         "email": user.get("email", ""),
