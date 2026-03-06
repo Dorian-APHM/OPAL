@@ -6,7 +6,7 @@ import {
 import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
   PlusOutlined, PlayCircleOutlined, EditOutlined, UserOutlined,
-  TableOutlined,
+  TableOutlined, SwapOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -14,6 +14,7 @@ import CriteriaPanel from '../components/cohort/CriteriaPanel';
 import QueryCanvas from '../components/cohort/QueryCanvas';
 import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
+import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
 import { cohortApi } from '../api/client';
 import type {
   CohortCriterion, CriteriaGroup, DemographicConstraints,
@@ -319,6 +320,21 @@ export default function CohortPage({ selectedCdm }: Props) {
                     cdmName={selectedCdm || ''}
                     criteria={toBackendCriteria(criteria)}
                     cohortId={savedCohortId}
+                  />
+                ),
+              },
+              {
+                key: 'comparison',
+                label: (
+                  <Space size={4}>
+                    <SwapOutlined />
+                    {t('cohort.compare', 'Compare')}
+                  </Space>
+                ),
+                children: (
+                  <CohortComparisonPanel
+                    cdmName={selectedCdm || ''}
+                    cohorts={cohorts}
                   />
                 ),
               },
