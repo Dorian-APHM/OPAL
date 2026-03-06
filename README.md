@@ -1,10 +1,10 @@
 # OPAL — OMOP Platform for Analytics & Lineage
 
-Plateforme web de qualité des données, construction de cohortes et mapping de vocabulaires pour les bases de données [OMOP CDM](https://ohdsi.github.io/CommonDataModel/).
+Plateforme web de qualite des donnees, construction de cohortes, mapping de vocabulaires et exploration de concepts pour les bases de donnees [OMOP CDM](https://ohdsi.github.io/CommonDataModel/).
 
 ---
 
-## Table des matières
+## Table des matieres
 
 1. [Apercu](#apercu)
 2. [Architecture](#architecture)
@@ -15,13 +15,15 @@ Plateforme web de qualité des données, construction de cohortes et mapping de 
    - [Analyse Qualite](#2-analyse-qualite)
    - [Constructeur de Cohortes](#3-constructeur-de-cohortes)
    - [Workflow de Mapping](#4-workflow-de-mapping)
-   - [Parametres](#5-parametres)
-6. [API Reference](#api-reference)
-7. [Modele de donnees](#modele-de-donnees)
-8. [Securite](#securite)
-9. [Internationalisation](#internationalisation)
-10. [Developpement](#developpement)
-11. [Stack technique](#stack-technique)
+   - [Explorateur de Concepts](#5-explorateur-de-concepts)
+   - [Outils OHDSI](#6-outils-ohdsi)
+   - [Parametres](#7-parametres)
+   - [Audit et Administration](#8-audit-et-administration)
+6. [Securite et Authentification](#securite-et-authentification)
+7. [Internationalisation](#internationalisation)
+8. [Developpement](#developpement)
+9. [Stack technique](#stack-technique)
+10. [Documentation](#documentation)
 
 ---
 
@@ -30,9 +32,12 @@ Plateforme web de qualité des données, construction de cohortes et mapping de 
 OPAL est une application web autonome qui se connecte a vos bases OMOP CDM existantes pour :
 
 - **Analyser la qualite** des donnees selon 11 domaines (Person, Condition, Drug, Measurement, etc.)
-- **Construire des cohortes** de patients via un query builder visuel
-- **Mapper les vocabulaires** source vers les concepts standard OMOP
+- **Construire des cohortes** de patients via un query builder visuel avec caracterisation Table 1
+- **Mapper les vocabulaires** source vers les concepts standard OMOP (6 strategies de suggestion)
+- **Explorer les concepts** OMOP avec hierarchie, relations et codes source
+- **Executer des outils OHDSI** (Achilles, DQD, CDM Onboarding) avec logs en temps reel
 - **Comparer des CDM** et detecter les regressions entre versions
+- **Administrer les utilisateurs** via Keycloak avec controle d'acces par role
 
 OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (optionnelle, opt-in) concerne la table `source_to_concept_map` lors de l'application des mappings valides.
 
@@ -41,22 +46,24 @@ OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (op
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    docker compose up                         │
-│                                                              │
-│  ┌────────────────┐         ┌────────────────┐              │
-│  │  opal-frontend │  /api/  │  opal-backend  │              │
-│  │  React + Nginx │────────>│  FastAPI        │              │
-│  │  :3000 -> :80  │         │  :8000          │              │
-│  └────────────────┘         └───────┬────────┘              │
-│                                     │                        │
-│                              ┌──────┴───────┐               │
-│                              │   opal-db     │               │
-│                              │  PostgreSQL 16│               │
-│                              │  :5432        │               │
-│                              └──────────────┘               │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       docker compose up                          │
+│                                                                  │
+│  ┌────────────────┐         ┌────────────────┐                  │
+│  │  opal-frontend │  /api/  │  opal-backend  │                  │
+│  │  React + Nginx │────────>│  FastAPI        │                  │
+│  │  :3000 -> :80  │         │  :8000          │                  │
+│  └────────────────┘         └───────┬────────┘                  │
+│                                     │                            │
+│                     ┌───────────────┼───────────────┐           │
+│                     │               │               │           │
+│              ┌──────┴───────┐ ┌─────┴──────┐ ┌──────┴───────┐  │
+│              │   opal-db     │ │opal-keycloak│ │ OHDSI Tools  │  │
+│              │  PostgreSQL 16│ │ Keycloak 24 │ │ (on-demand)  │  │
+│              │  :5432        │ │ :8080       │ │              │  │
+│              └──────────────┘ └────────────┘ └──────────────┘  │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
                          │
                          │ psycopg2 (lecture seule*)
                          ▼
@@ -72,8 +79,9 @@ OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (op
 | **opal-frontend** | SPA React servie par Nginx, proxy API | `node:20-alpine` → `nginx:alpine` |
 | **opal-backend** | API REST FastAPI, moteur d'analyse | `python:3.12-slim` |
 | **opal-db** | Base applicative (configs, snapshots, cohortes, decisions) | `postgres:16-alpine` |
+| **opal-keycloak** | Authentification OIDC, gestion des roles | `keycloak:24.0` |
 
-Les 3 services communiquent via le reseau Docker interne `opal-network`. Seuls les ports **3000** (frontend) et **8000** (backend, pour debug) sont exposes.
+Les 4 services communiquent via le reseau Docker interne `opal-network`. Ports exposes : **3000** (frontend), **8080** (Keycloak).
 
 ---
 
@@ -92,20 +100,22 @@ cd opal/
 # Generer une cle secrete pour le chiffrement des mots de passe
 export SECRET_KEY=$(openssl rand -hex 32)
 
-# Lancer les 3 services
+# Lancer tous les services
 docker compose up -d
 ```
 
 L'application est accessible sur **http://localhost:3000**.
+Keycloak est accessible sur **http://localhost:8080** (admin/admin par defaut).
 
 ### Premiers pas
 
-1. Acceder a la page **Gestion des CDM** (`/cdm`)
-2. Renseigner les coordonnees de connexion PostgreSQL de votre base OMOP
-3. Tester la connexion
-4. Enregistrer le CDM
-5. Selectionner le CDM dans le menu lateral
-6. Lancer une analyse qualite, construire une cohorte, ou explorer les mappings
+1. Se connecter via Keycloak (ou acceder directement si `AUTH_ENABLED=false`)
+2. Acceder a la page **Gestion des CDM** (`/cdm`)
+3. Renseigner les coordonnees de connexion PostgreSQL de votre base OMOP
+4. Tester la connexion
+5. Enregistrer le CDM
+6. Selectionner le CDM dans le menu lateral
+7. Lancer une analyse qualite, construire une cohorte, explorer les mappings ou les concepts
 
 ### Arret
 
@@ -125,7 +135,7 @@ docker compose down -v       # Arret + suppression des volumes (reset complet)
 | `DATABASE_URL` | `postgresql://opal:opal@opal-db:5432/opal` | Connexion a la base applicative OPAL |
 | `SECRET_KEY` | `change-me-in-production` | Cle pour le chiffrement Fernet des mots de passe CDM |
 | `AUTH_ENABLED` | `false` | Activer l'authentification Keycloak OIDC |
-| `KEYCLOAK_URL` | `http://keycloak:8080` | URL du serveur Keycloak |
+| `KEYCLOAK_URL` | `http://opal-keycloak:8080` | URL interne du serveur Keycloak |
 | `KEYCLOAK_REALM` | `opal` | Realm Keycloak |
 | `KEYCLOAK_CLIENT_ID` | `opal-frontend` | Client ID Keycloak |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Origines CORS autorisees |
@@ -149,24 +159,23 @@ Ces parametres sont configurables dans l'interface (page Parametres) pour chaque
 
 ### 1. Gestion des CDM
 
-**Route** : `/cdm`
+**Route** : `/cdm` | **API** : `/api/cdm/` | **Roles** : admin, omop-dim
 
 Enregistrez et gerez les connexions aux bases OMOP CDM externes.
 
-**Fonctionnalites** :
 - Formulaire de connexion (hote, port, base, utilisateur, mot de passe, schema OMOP)
-- Test de connexion avant enregistrement
+- Test de connexion avant enregistrement (affiche le nombre de patients)
 - Chiffrement Fernet des mots de passe (AES-128-CBC + HMAC)
-- Liste des CDM enregistres avec suppression
-- Test de connectivite des CDM existants
+- Liste des CDM enregistres avec test de connectivite et suppression
+- Configuration du schema OMOP par CDM
 
-**Securite** : Les mots de passe ne sont jamais stockes en clair. Ils sont chiffres via Fernet (bibliotheque `cryptography`) avec une cle generee au premier demarrage et stockee avec les permissions `0600`.
+> **Note** : `GET /api/cdm/` est accessible a tout utilisateur authentifie (necessaire pour le selecteur CDM du menu lateral).
 
 ---
 
 ### 2. Analyse Qualite
 
-**Route** : `/quality`
+**Route** : `/quality` | **API** : `/api/quality/` | **Roles** : admin, omop-dim, chercheur
 
 Moteur d'analyse des donnees type Achilles, execute des requetes SQL sur votre CDM et stocke les resultats sous forme de snapshots versiones.
 
@@ -199,28 +208,14 @@ Pour chaque domaine clinique (Condition, Drug, etc.), l'analyse produit :
    - Niveau ligne : lignes mappees vs non mappees
    - Top termes non mappes classes par frequence
 
-#### Analyse Person
-
-- Distribution par genre (camembert)
-- Distribution par annee de naissance (barres)
-- Distribution par race (camembert)
-- Distribution par ethnicite (camembert)
-
-#### Analyse ObservationPeriod
-
-- Age a la premiere observation (histogramme)
-- Age par genre (quantiles p10, p25, mediane, p75, p90)
-- Duree d'observation en mois (histogramme)
-- Duree par genre (quantiles)
-- Observation cumulative (% de personnes avec >= X mois)
-- Observation continue par annee calendaire
-
 #### Fonctionnalites transversales
 
-- **Analyse par lot** : lancer tous les domaines en une fois avec barre de progression (SSE streaming)
+- **Analyse par lot** : lancer tous les domaines en une fois avec progression temps reel (SSE streaming)
 - **Historique des snapshots** : chaque analyse cree une nouvelle version, consultable et comparable
 - **Export CSV** : chaque tableau de resultats est exportable en CSV
 - **Mode comparaison** : comparer deux CDM sur un meme domaine, avec detection d'alertes
+- **Rapports** : generation de rapports HTML et PDF (unitaire ou comparaison), bilingue (FR/EN)
+- **Timeline** : visualisation de l'historique des analyses
 
 #### Comparateur
 
@@ -235,7 +230,7 @@ Compare deux snapshots et detecte les ecarts significatifs :
 
 ### 3. Constructeur de Cohortes
 
-**Route** : `/cohorts`
+**Route** : `/cohorts` | **API** : `/api/cohorts/` | **Roles** : admin, omop-dim, chercheur, medecin
 
 Query builder visuel pour definir, executer et exporter des cohortes de patients OMOP.
 
@@ -244,33 +239,30 @@ Query builder visuel pour definir, executer et exporter des cohortes de patients
 | Panneau | Role |
 |---------|------|
 | **Gauche** — Criteres | Recherche de concepts OMOP, blocs domaine cliquables, filtre par vocabulaire |
-| **Centre** — Canvas | Construction visuelle de la requete (inclusion/exclusion, demographie) |
-| **Droite** — Resultats | Comptage, attrition, echantillon, export |
+| **Centre** — Canvas | Construction visuelle de la requete, caracterisation Table 1, comparaison, editeur SQL |
+| **Droite** — Resultats | Comptage, attrition, echantillon, preview SQL, export |
+
+#### Onglets du panneau central
+
+| Onglet | Description |
+|--------|-------------|
+| **Query Builder** | Construction visuelle des criteres d'inclusion/exclusion avec logique AND/OR |
+| **Table 1** | Caracterisation : demographie, prevalence par domaine, mesures, types de visite |
+| **Comparer** | Comparaison de deux cohortes avec calcul SMD (Standardized Mean Difference) |
+| **SQL Editor** | Execution de requetes SQL en lecture seule avec export CSV |
 
 #### Criteres supportes
 
 **Domaines** : Condition, Drug, Measurement, Observation, Procedure, Visit, Device, Death
 
-**Operateurs d'ensemble** :
-- Inclusion : AND / OR entre criteres
-- Exclusion : EXCEPT (retire les patients du resultat)
-
-**Contraintes par critere** :
-
 | Type | Options |
 |------|---------|
 | **Concepts** | Liste de concept_id + option "inclure descendants" via `concept_ancestor` |
-| **Temporel** | `any_time` (aucune restriction), `absolute_window` (dates fixes), `within_days` (N jours relatifs) |
+| **Codes source** | Codes source directs (ex: `E11.9`, `FGLF671`) |
+| **Temporel** | `any_time`, `absolute_window` (dates fixes), `within_days` (N jours relatifs) |
 | **Frequence** | `any`, `at_least N`, `exactly N`, `at_most N` (+ fenetre glissante optionnelle) |
-| **Valeur** | Operateurs numeriques (`>`, `<`, `>=`, `<=`, `=`, `between`), concept de valeur, unite |
+| **Valeur** | Operateurs numeriques (`>`, `<`, `>=`, `<=`, `=`, `between`), unite |
 | **Demographie** | Age (min/max), genre, race, ethnicite |
-
-#### Generation SQL
-
-Les criteres JSON sont traduits en requetes SQL avec CTEs :
-- Chaque critere produit un CTE retournant des `person_id`
-- Les CTEs sont combines par `INTERSECT` (AND), `UNION` (OR), `EXCEPT` (exclusion)
-- Les contraintes demographiques filtrent via la table `person`
 
 #### Execution
 
@@ -280,7 +272,9 @@ Les criteres JSON sont traduits en requetes SQL avec CTEs :
 | **Approximation** | Comptage rapide via `TABLESAMPLE` |
 | **Attrition** | Comptage incremental a chaque etape (critere par critere) |
 | **Echantillon** | 10 patients aleatoires avec demographie |
-| **Export CSV** | Liste des patient_id |
+| **Echantillon detaille** | Patients avec codes cliniques |
+| **Parcours patient** | Timeline des evenements cliniques d'un patient |
+| **Export CSV** | Liste des patient_id avec demographie |
 | **Export SQL** | Requete SQL generee |
 
 #### Versioning
@@ -293,73 +287,102 @@ Les criteres JSON sont traduits en requetes SQL avec CTEs :
 
 ### 4. Workflow de Mapping
 
-**Route** : `/mapping`
+**Route** : `/mapping` | **API** : `/api/mapping/` | **Roles** : admin, omop-dim, medecin
 
-Workflow complet de mapping des codes source vers les concepts standard OMOP, en 5 etapes.
+Workflow complet de mapping des codes source vers les concepts standard OMOP.
 
-#### Etape 1 — Dashboard
+#### 4 onglets
 
-Vue d'ensemble des taux de mapping par domaine :
-- Taux de mapping termes et lignes (barres)
+**Dashboard** — Vue d'ensemble :
+- Taux de mapping termes et lignes par domaine (barres)
 - Volume non mappe par domaine
 - Evolution du mapping a travers les versions de snapshots (courbe)
-- Nombre de decisions prises
+- Performance des strategies de suggestion (taux d'approbation/modification/rejet)
 
-#### Etape 2 — Exploration des non mappes
-
-Liste paginee des termes source non mappes (`concept_id = 0`) :
-- Filtrage par recherche (ILIKE sur source_value et source_name)
-- Pagination (jusqu'a 500 par page)
+**Exploration des non mappes** — Liste paginee :
+- Filtrage par domaine et recherche textuelle
 - Statistiques par terme : nombre de records, nombre de personnes
-- Export CSV de tous les termes non mappes
+- Export CSV
 
-#### Etape 3 — Suggestions automatiques
-
-Moteur de suggestion a 4 strategies, executees en cascade :
+**Suggestions** — Moteur de suggestion a 6 strategies :
 
 | Strategie | Confiance | Methode |
 |-----------|-----------|---------|
+| **SapBERT** | Variable | Embeddings semantiques pre-calcules (instantane) |
 | **Exact match** | 95% | `concept_code = source_value` avec `standard_concept = 'S'` |
 | **Relationships** | 85% | Via `concept_relationship` (`Maps to`) |
+| **Keyword** | ≤80% | Recherche progressive par mots-cles AND |
 | **Fuzzy** | ≤75% | Similarite trigramme PostgreSQL (`pg_trgm`) ou fallback ILIKE |
 | **Contextual** | 40% | Analyse des prefixes dans `source_to_concept_map` existant |
 
 - Suggestion unitaire ou par lot (top N termes non mappes)
-- Chaque suggestion affiche : concept cible, vocabulaire, score de confiance, source de suggestion
+- Configuration des strategies activees par domaine
+- Approbation en lot par seuil de confiance (≥80%, ≥90%)
 
-#### Etape 4 — Validation
+**Historique** — Audit complet :
+- Historique pagine avec filtres (domaine, action)
+- Rollback de decisions individuelles
+- Export CSV de l'historique
+- Application des mappings : preview d'impact → export STCM CSV ou ecriture CDM (opt-in)
 
-Workflow de decision pour chaque terme :
+#### Reference et SapBERT
 
-| Action | Description |
-|--------|-------------|
-| **Approuver** | Accepter la suggestion proposee |
-| **Modifier** | Choisir un concept cible different |
-| **Rejeter** | Marquer comme "pas de mapping" |
-| **Approuver en lot** | Approuver tous les termes au-dessus d'un seuil de confiance (80% ou 90%) |
-
-#### Etape 5 — Application
-
-Generation des lignes `source_to_concept_map` a partir des decisions approuvees :
-
-- **Preview** : visualiser l'impact (lignes et personnes affectees) avant d'appliquer
-- **Export STCM** : telecharger les mappings au format CSV `source_to_concept_map`
-- **Ecriture CDM** (optionnelle) : INSERT/UPSERT dans la table `source_to_concept_map` du CDM
-  - Upsert : `ON CONFLICT DO UPDATE` — jamais de suppression
-  - Transactionnel avec rollback en cas d'erreur
-
-#### Historique et audit
-
-- Historique pagine de toutes les decisions (filtre par domaine, action)
-- **Rollback** : annuler une decision specifique
-- Export complet de l'historique en CSV
-- Champs traces : source_value, action, concept cible, confiance, source de suggestion, utilisateur, date
+- **Codebooks de reference** : upload de CSV (CCAM, CIM-10…) pour enrichir les descriptions
+- **Mappings SapBERT** : upload de resultats pre-calcules pour suggestions instantanees
 
 ---
 
-### 5. Parametres
+### 5. Explorateur de Concepts
 
-**Route** : `/settings`
+**Route** : `/concepts` | **API** : `/api/concepts/` | **Roles** : admin, omop-dim, chercheur, medecin
+
+Navigation et exploration du vocabulaire OMOP.
+
+#### Deux modes de recherche
+
+**Par concept** :
+- Recherche par nom, code ou ID
+- Filtres : domaine, vocabulaire, concepts standard uniquement
+- Affichage : ID, nom, code, domaine, vocabulaire, classe, flag standard
+- Compteurs lazy-load (records/personnes) par concept
+
+**Par code source** :
+- Recherche dans les tables cliniques par `source_value` et `source_name`
+- Visualisation du concept mappe (si existant)
+- Export CSV des resultats
+
+#### Panneau de detail
+
+- **Info** : metadonnees completes du concept (synonymes inclus)
+- **Relations** : concepts lies avec type de relation (Maps to, Is a, etc.)
+- **Hierarchie** : ancetres et descendants via `concept_ancestor` avec niveaux de separation
+- **Codes source** : tous les codes source mappes vers ce concept (avec compteurs)
+
+---
+
+### 6. Outils OHDSI
+
+**Route** : `/ohdsi` | **API** : `/api/ohdsi/` | **Roles** : admin, omop-dim
+
+Lancement et supervision de conteneurs Docker OHDSI.
+
+| Service | Description |
+|---------|-------------|
+| **Achilles** | Characterization des donnees |
+| **Achilles Export** | Export des resultats Achilles |
+| **DQD** | Data Quality Dashboard |
+| **CDM Onboarding** | Rapport d'embarquement CDM |
+
+- Configuration : schema resultats, schema vocabulaire, version CDM
+- Logs en temps reel via SSE avec auto-reconnexion
+- Navigateur de fichiers de sortie avec telechargement
+- Statuts : idle, running, done, error
+
+---
+
+### 7. Parametres
+
+**Route** : `/settings` | **API** : `/api/cdm/{name}/settings` | **Roles** : admin, omop-dim
 
 Configuration des parametres d'analyse pour chaque CDM :
 
@@ -372,162 +395,73 @@ Configuration des parametres d'analyse pour chaque CDM :
 
 ---
 
-## API Reference
+### 8. Audit et Administration
 
-### CDM Management — `/api/cdm`
+#### Journal d'audit
 
-| Methode | Endpoint | Description |
-|---------|----------|-------------|
-| `GET` | `/api/cdm/` | Lister les CDM enregistres |
-| `POST` | `/api/cdm/` | Enregistrer un CDM |
-| `POST` | `/api/cdm/test` | Tester une connexion (sans sauvegarde) |
-| `POST` | `/api/cdm/{name}/test` | Tester un CDM enregistre |
-| `PUT` | `/api/cdm/{name}` | Modifier un CDM |
-| `DELETE` | `/api/cdm/{name}` | Supprimer un CDM |
-| `GET` | `/api/cdm/{name}/settings` | Obtenir les parametres d'analyse |
-| `PUT` | `/api/cdm/{name}/settings` | Modifier les parametres d'analyse |
+**Route** : `/audit` | **API** : `/api/audit/` | **Roles** : admin
 
-### Quality Analysis — `/api/quality`
+Suivi de toutes les actions utilisateur :
+- Filtres : plage de dates, utilisateur, type d'action
+- Statistiques : total evenements, utilisateurs actifs, actions par type
+- Codes HTTP colores (2xx vert, 4xx orange, 5xx rouge)
+- Export CSV
 
-| Methode | Endpoint | Description |
-|---------|----------|-------------|
-| `GET` | `/api/quality/domains` | Lister les domaines disponibles |
-| `POST` | `/api/quality/analyze` | Analyser un domaine |
-| `POST` | `/api/quality/analyze/batch` | Analyser plusieurs domaines |
-| `POST` | `/api/quality/analyze/batch/stream` | Analyse par lot avec progression SSE |
-| `GET` | `/api/quality/snapshots/{cdm}/{domain}` | Lister les snapshots |
-| `GET` | `/api/quality/snapshots/{cdm}/{domain}/latest` | Dernier snapshot |
-| `GET` | `/api/quality/snapshots/by-id/{id}` | Snapshot par ID |
-| `GET` | `/api/quality/export/{snapshot_id}/{table_type}` | Export CSV d'un tableau |
-| `POST` | `/api/quality/compare` | Comparer deux CDM/snapshots |
+#### Gestion des utilisateurs
 
-**Types de tableaux exportables** : `top_concepts`, `top_unmapped`, `domain_stats`, `mapping_stats`, `gender`, `birth_year`, `age_by_gender`, `duration_by_gender`
+**Route** : `/users` | **API** : `/api/admin/` | **Roles** : admin
 
-### Cohort Builder — `/api/cohorts`
+- Liste des utilisateurs Keycloak avec leurs roles
+- Attribution/retrait de roles via l'interface
+- Activation/desactivation de comptes
+- File d'attente des demandes d'acces avec approbation/rejet
+- Creation automatique du compte Keycloak a l'approbation (mot de passe temporaire)
 
-| Methode | Endpoint | Description |
-|---------|----------|-------------|
-| `POST` | `/api/cohorts/concepts/search` | Rechercher des concepts OMOP |
-| `GET` | `/api/cohorts/concepts/vocabularies` | Lister les vocabulaires |
-| `GET` | `/api/cohorts/domains` | Lister les domaines |
-| `GET` | `/api/cohorts/` | Lister les cohortes |
-| `POST` | `/api/cohorts/` | Creer une cohorte |
-| `GET` | `/api/cohorts/{id}` | Detail d'une cohorte |
-| `PUT` | `/api/cohorts/{id}` | Modifier une cohorte |
-| `DELETE` | `/api/cohorts/{id}` | Supprimer une cohorte |
-| `POST` | `/api/cohorts/count` | Compter les patients |
-| `POST` | `/api/cohorts/count/approximate` | Comptage approximatif |
-| `POST` | `/api/cohorts/attrition` | Diagramme d'attrition |
-| `POST` | `/api/cohorts/sample` | Echantillon de patients |
-| `POST` | `/api/cohorts/{id}/execute` | Executer et stocker le comptage |
-| `GET` | `/api/cohorts/{id}/export` | Exporter (CSV ou SQL) |
+#### Demandes d'acces
 
-### Mapping Workflow — `/api/mapping`
+**Route** : `/login` (onglet Sign Up) | **API** : `POST /api/access-requests` | **Public**
 
-| Methode | Endpoint | Description |
-|---------|----------|-------------|
-| `GET` | `/api/mapping/dashboard/{cdm}` | Taux de mapping par domaine |
-| `GET` | `/api/mapping/dashboard/{cdm}/evolution` | Evolution du mapping |
-| `GET` | `/api/mapping/unmapped/{cdm}/{domain}` | Termes non mappes (pagine) |
-| `GET` | `/api/mapping/unmapped/{cdm}/{domain}/export` | Export CSV des non mappes |
-| `POST` | `/api/mapping/suggest` | Suggestion unitaire |
-| `POST` | `/api/mapping/suggest/batch` | Suggestions par lot |
-| `POST` | `/api/mapping/decide` | Enregistrer une decision |
-| `POST` | `/api/mapping/decide/bulk` | Decisions en lot |
-| `POST` | `/api/mapping/apply` | Appliquer les mappings |
-| `POST` | `/api/mapping/apply/preview` | Preview de l'application |
-| `GET` | `/api/mapping/apply/export/{cdm}/{domain}` | Export STCM CSV |
-| `GET` | `/api/mapping/history/{cdm}` | Historique des decisions |
-| `POST` | `/api/mapping/history/{id}/rollback` | Rollback d'une decision |
-| `GET` | `/api/mapping/history/{cdm}/export` | Export historique CSV |
-
-### Autres
-
-| Methode | Endpoint | Description |
-|---------|----------|-------------|
-| `GET` | `/` | Racine |
-| `GET` | `/api/health` | Health check |
-| `GET` | `/api/i18n/{lang}` | Traductions (`en` ou `fr`) |
+Formulaire d'inscription en libre-service :
+- Champs : nom d'utilisateur, email, prenom, nom, role souhaite
+- L'administrateur valide la demande et un compte est cree automatiquement
 
 ---
 
-## Modele de donnees
-
-### Base applicative OPAL (`opal-db`)
-
-```
-┌──────────────────┐     ┌─────────────────────┐
-│   cdm_configs    │     │ analysis_snapshots   │
-├──────────────────┤     ├─────────────────────┤
-│ id (PK)          │     │ id (PK)             │
-│ name (unique)    │     │ cdm_name (idx)      │
-│ db_host          │     │ domain (idx)        │
-│ db_port          │     │ version             │
-│ db_name          │     │ results (JSON)      │
-│ db_user          │     │ created_at          │
-│ db_password_enc  │     └─────────────────────┘
-│ omop_schema      │
-│ created_at       │     ┌─────────────────────┐
-│ updated_at       │     │ analysis_settings   │
-└──────────────────┘     ├─────────────────────┤
-                         │ id (PK)             │
-┌──────────────────┐     │ cdm_name (unique)   │
-│    cohorts       │     │ omop_schema         │
-├──────────────────┤     │ top_unmapped_terms  │
-│ id (PK)          │     │ top_concepts        │
-│ cdm_name (idx)   │     │ max_records_pp      │
-│ name             │     │ max_obs_months      │
-│ description      │     │ alert_threshold     │
-│ created_at       │     └─────────────────────┘
-│ updated_at       │
-└────────┬─────────┘     ┌─────────────────────┐
-         │               │ mapping_decisions   │
-         │ 1:N           ├─────────────────────┤
-         ▼               │ id (PK)             │
-┌──────────────────┐     │ cdm_name (idx)      │
-│ cohort_versions  │     │ domain (idx)        │
-├──────────────────┤     │ source_value        │
-│ id (PK)          │     │ source_name         │
-│ cohort_id (FK)   │     │ action              │
-│ version          │     │ target_concept_id   │
-│ criteria_json    │     │ target_concept_name │
-│ generated_sql    │     │ target_vocab_id     │
-│ patient_count    │     │ previous_concept_id │
-│ created_at       │     │ suggestion_source   │
-└──────────────────┘     │ confidence_score    │
-                         │ user                │
-                         │ created_at          │
-                         └─────────────────────┘
-```
-
-### Initialisation
-
-Les tables sont creees automatiquement au demarrage du backend via `Base.metadata.create_all()`. Pas de systeme de migrations — les tables sont idempotentes.
-
----
-
-## Securite
+## Securite et Authentification
 
 ### Chiffrement des mots de passe CDM
 
 - **Algorithme** : Fernet (AES-128-CBC + HMAC-SHA256)
 - **Cle** : generee au premier demarrage, stockee dans `/app/data/.secret_key` (permissions `0600`)
-- **Volume** : le repertoire `data/` est monte via un volume Docker nomme (`opal_data`) pour persister la cle
+- **Volume** : le repertoire `data/` est monte via un volume Docker nomme (`opal_data`)
 
-### Authentification (optionnelle)
+### Authentification Keycloak (OIDC)
 
-- **Protocole** : OpenID Connect via Keycloak
-- **Activation** : `AUTH_ENABLED=true`
-- **Middleware** : valide le token Bearer via l'endpoint userinfo de Keycloak
+- **Protocole** : OpenID Connect avec PKCE (S256)
+- **Activation** : `AUTH_ENABLED=true` dans le backend
+- **Validation** : JWT valide localement via JWKS (pas de dependance au hostname de l'issuer)
+- **Refresh** : token renouvele automatiquement toutes les 30 secondes
 - **Desactive par defaut** : tous les utilisateurs sont traites comme admin
 
-### Acces aux CDM
+### Controle d'acces par role (RBAC)
 
-- OPAL se connecte aux CDM avec les identifiants fournis par l'utilisateur
-- Les connexions sont ouvertes a la demande et fermees apres chaque requete
-- Aucune connexion persistante aux CDM externes
+| Role | Pages accessibles | Description |
+|------|-------------------|-------------|
+| `admin` | Toutes | Acces complet + administration + audit |
+| `omop-dim` | Toutes | Data steward, acces complet sans audit |
+| `chercheur` | Quality, Cohorts, Concepts | Recherche et analyse |
+| `medecin` | Mapping, Cohorts, Concepts | Mapping et analyse |
 
-### Recommandations pour la production
+Le controle s'applique a deux niveaux :
+- **Backend** : middleware intercepte chaque requete et verifie le role
+- **Frontend** : les elements de menu sont filtres selon le role
+
+### Audit
+
+- Toutes les requetes API sont tracees (utilisateur, methode, chemin, statut, duree)
+- Logs stockes par jour, consultables et exportables via l'interface admin
+
+### Recommandations production
 
 | Point | Recommandation |
 |-------|----------------|
@@ -535,7 +469,8 @@ Les tables sont creees automatiquement au demarrage du backend via `Base.metadat
 | PostgreSQL opal-db | Changer le mot de passe par defaut (`opal`) |
 | HTTPS | Placer un reverse proxy TLS (Traefik, Caddy) devant le port 3000 |
 | Authentification | Activer Keycloak (`AUTH_ENABLED=true`) |
-| Reseau | Ne pas exposer le port 8000 en production |
+| Reseau | Ne pas exposer les ports 8000 et 5432 en production |
+| Keycloak | Changer le mot de passe admin par defaut |
 
 ---
 
@@ -545,8 +480,9 @@ OPAL est disponible en **francais** et **anglais**.
 
 - Changement de langue via le bouton dans le menu lateral
 - Persistance du choix dans `localStorage`
-- Bibliotheque : i18next + react-i18next
-- Fichiers de traduction : `frontend/src/i18n/en.json` et `frontend/src/i18n/fr.json`
+- Backend : fichiers JSON `backend/i18n/en.json` et `backend/i18n/fr.json`
+- Frontend : i18next + react-i18next, fichiers `frontend/src/i18n/en.json` et `frontend/src/i18n/fr.json`
+- Rapports qualite generables dans les deux langues
 
 ---
 
@@ -556,26 +492,35 @@ OPAL est disponible en **francais** et **anglais**.
 
 ```
 opal/
-├── docker-compose.yml        # Orchestration des 3 services
-├── README.md                 # Cette documentation
+├── docker-compose.yml        # Orchestration des services
+├── README.md                 # Documentation generale
+├── CLAUDE.md                 # Instructions pour Claude Code
+├── .env.example              # Template de configuration
+│
+├── docs/
+│   ├── API.md                # Reference API complete (71+ endpoints)
+│   ├── TECHNICAL.md          # Documentation technique
+│   └── USER_GUIDE.md         # Guide utilisateur
 │
 ├── backend/
 │   ├── Dockerfile            # Python 3.12-slim + uvicorn
-│   ├── requirements.txt      # 8 dependances Python
-│   ├── main.py               # Point d'entree FastAPI
+│   ├── requirements.txt      # Dependances Python
+│   ├── main.py               # Point d'entree FastAPI + endpoints systeme
 │   ├── config.py             # Variables d'environnement et constantes
 │   ├── auth/
-│   │   └── keycloak.py       # Middleware OIDC optionnel
+│   │   └── keycloak.py       # Middleware OIDC + RBAC
+│   ├── audit/
+│   │   └── logger.py         # Middleware d'audit (trace toutes les requetes)
 │   ├── db/
 │   │   ├── app_db.py         # Engine SQLAlchemy (base OPAL)
-│   │   ├── models.py         # 6 modeles SQLAlchemy
-│   │   └── omop_connector.py # Connexion dynamique aux CDM
+│   │   ├── models.py         # 8 modeles SQLAlchemy
+│   │   └── omop_connector.py # Connexion dynamique aux CDM (psycopg2)
 │   ├── utils/
 │   │   └── crypto.py         # Chiffrement Fernet
 │   ├── modules/
 │   │   ├── cdm_router.py     # CRUD des connexions CDM
 │   │   ├── quality/
-│   │   │   ├── router.py     # Endpoints analyse qualite
+│   │   │   ├── router.py     # Endpoints analyse qualite + rapports
 │   │   │   ├── engine.py     # Orchestration d'analyse
 │   │   │   ├── comparator.py # Comparaison de snapshots
 │   │   │   └── domains/      # SQL par domaine
@@ -584,12 +529,22 @@ opal/
 │   │   │       ├── observation_period.py
 │   │   │       └── clinical.py
 │   │   ├── cohort/
-│   │   │   ├── router.py     # CRUD et execution de cohortes
-│   │   │   └── sql_builder.py # JSON -> SQL
-│   │   └── mapping/
-│   │       ├── router.py     # Workflow de mapping
-│   │       └── suggest.py    # Moteur de suggestion (4 strategies)
-│   └── tests/                # Tests unitaires et d'integration
+│   │   │   ├── router.py     # CRUD, execution, caracterisation, SQL
+│   │   │   ├── sql_builder.py # JSON -> SQL
+│   │   │   ├── characterization.py # Table 1
+│   │   │   └── comparison.py # Comparaison de cohortes (SMD)
+│   │   ├── mapping/
+│   │   │   ├── router.py     # Workflow de mapping + reference + SapBERT
+│   │   │   └── suggest.py    # Moteur de suggestion (6 strategies)
+│   │   ├── concept/
+│   │   │   └── router.py     # Recherche, hierarchie, codes source
+│   │   └── ohdsi/
+│   │       └── router.py     # Orchestration Docker OHDSI
+│   ├── i18n/
+│   │   ├── en.json           # Traductions anglais
+│   │   └── fr.json           # Traductions francais
+│   └── tests/
+│       ├── conftest.py       # Fixtures SQLite in-memory
 │       ├── test_api.py
 │       ├── test_engine.py
 │       ├── test_comparator.py
@@ -597,40 +552,58 @@ opal/
 │       ├── test_cohort_api.py
 │       └── test_mapping_api.py
 │
-└── frontend/
-    ├── Dockerfile            # Node 20 build + Nginx runtime
-    ├── nginx.conf            # SPA routing + proxy API
-    ├── package.json          # Dependances React
-    ├── vite.config.ts        # Build Vite + proxy dev
-    ├── tsconfig.json         # TypeScript strict
-    └── src/
-        ├── main.tsx          # Point d'entree React
-        ├── App.tsx           # Routing et layout
-        ├── api/
-        │   └── client.ts     # Client Axios (45+ endpoints)
-        ├── types/
-        │   └── index.ts      # Interfaces TypeScript
-        ├── i18n/
-        │   ├── index.ts      # Configuration i18next
-        │   ├── en.json       # Traductions anglais
-        │   └── fr.json       # Traductions francais
-        ├── pages/
-        │   ├── QualityPage.tsx
-        │   ├── CohortPage.tsx
-        │   ├── MappingPage.tsx
-        │   ├── CdmManagementPage.tsx
-        │   └── SettingsPage.tsx
-        └── components/
-            ├── layout/
-            │   └── Sidebar.tsx
-            ├── quality/
-            │   ├── AnalysisResults.tsx
-            │   ├── ComparisonView.tsx
-            │   └── DomainSelector.tsx
-            └── cohort/
-                ├── CriteriaPanel.tsx
-                ├── QueryCanvas.tsx
-                └── ResultsPanel.tsx
+├── frontend/
+│   ├── Dockerfile            # Node 20 build + Nginx runtime
+│   ├── nginx.conf            # SPA routing + proxy API
+│   ├── package.json          # Dependances React
+│   ├── vite.config.ts        # Build Vite + proxy dev
+│   ├── tsconfig.json         # TypeScript strict
+│   └── src/
+│       ├── main.tsx          # Point d'entree React
+│       ├── App.tsx           # Routing et layout
+│       ├── auth/
+│       │   └── KeycloakContext.tsx  # Contexte auth + RBAC frontend
+│       ├── api/
+│       │   └── client.ts     # Client Axios (71+ endpoints)
+│       ├── types/
+│       │   └── index.ts      # Interfaces TypeScript
+│       ├── i18n/
+│       │   ├── index.ts      # Configuration i18next
+│       │   ├── en.json       # Traductions anglais
+│       │   └── fr.json       # Traductions francais
+│       ├── pages/
+│       │   ├── QualityPage.tsx
+│       │   ├── CohortPage.tsx
+│       │   ├── MappingPage.tsx
+│       │   ├── ConceptExplorerPage.tsx
+│       │   ├── CdmManagementPage.tsx
+│       │   ├── SettingsPage.tsx
+│       │   ├── OhdsiPage.tsx
+│       │   ├── AuditPage.tsx
+│       │   ├── UserManagementPage.tsx
+│       │   └── LoginPage.tsx
+│       └── components/
+│           ├── layout/
+│           │   └── Sidebar.tsx       # Navigation + CDM selector
+│           ├── quality/
+│           │   ├── AnalysisResults.tsx
+│           │   ├── ComparisonView.tsx
+│           │   ├── DomainSelector.tsx
+│           │   └── SnapshotTimeline.tsx
+│           └── cohort/
+│               ├── CriteriaPanel.tsx
+│               ├── QueryCanvas.tsx
+│               ├── ResultsPanel.tsx
+│               ├── CharacterizationPanel.tsx
+│               ├── CohortComparisonPanel.tsx
+│               └── PatientJourney.tsx
+│
+├── keycloak/
+│   ├── realm-export.json     # Configuration du realm OPAL
+│   └── themes/               # Theme personnalise
+│
+└── scripts/
+    └── sapbert_mapping.py    # Generation des embeddings SapBERT
 ```
 
 ### Developpement local (sans Docker)
@@ -660,7 +633,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP.
+Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP. Aucune base externe requise.
 
 ---
 
@@ -668,37 +641,49 @@ Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP.
 
 ### Backend
 
-| Technologie | Version | Role |
-|-------------|---------|------|
-| Python | 3.12 | Runtime |
-| FastAPI | ≥0.110 | Framework API REST |
-| Uvicorn | ≥0.27 | Serveur ASGI |
-| SQLAlchemy | ≥2.0 | ORM (base applicative) |
-| psycopg2 | ≥2.9 | Driver PostgreSQL (CDM externes) |
-| Pydantic | ≥2.0 | Validation des donnees |
-| cryptography | ≥42.0 | Chiffrement Fernet |
-| httpx | ≥0.27 | Client HTTP (Keycloak) |
+| Technologie | Role |
+|-------------|------|
+| Python 3.12 | Runtime |
+| FastAPI | Framework API REST |
+| Uvicorn | Serveur ASGI |
+| SQLAlchemy 2.x | ORM (base applicative) |
+| psycopg2 | Driver PostgreSQL (CDM externes, lecture seule) |
+| Pydantic 2.x | Validation des donnees |
+| cryptography | Chiffrement Fernet |
+| PyJWT | Validation JWT (Keycloak) |
 
 ### Frontend
 
-| Technologie | Version | Role |
-|-------------|---------|------|
-| React | 18.3 | Framework UI |
-| TypeScript | 5.3 | Typage statique |
-| Vite | 5.1 | Build et dev server |
-| Ant Design | 5.15 | Composants UI |
-| Recharts | 2.12 | Graphiques (barres, courbes, camemberts, aires) |
-| Axios | 1.6 | Client HTTP |
-| i18next | 23.10 | Internationalisation |
-| React Router | 6.22 | Routing SPA |
+| Technologie | Role |
+|-------------|------|
+| React 18 | Framework UI |
+| TypeScript 5 | Typage statique |
+| Vite 5 | Build et dev server |
+| Ant Design 5 | Composants UI |
+| Recharts | Graphiques (barres, courbes, camemberts, aires) |
+| Axios | Client HTTP |
+| i18next | Internationalisation |
+| React Router 6 | Routing SPA |
+| keycloak-js | Client OpenID Connect |
 
 ### Infrastructure
 
-| Technologie | Version | Role |
-|-------------|---------|------|
-| PostgreSQL | 16 (Alpine) | Base applicative |
-| Nginx | Alpine | Serveur web + reverse proxy |
-| Docker Compose | 3.8 | Orchestration |
+| Technologie | Role |
+|-------------|------|
+| PostgreSQL 16 | Base applicative |
+| Nginx Alpine | Serveur web + reverse proxy |
+| Keycloak 24 | Authentification OIDC + gestion des roles |
+| Docker Compose | Orchestration |
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/API.md](docs/API.md) | Reference API complete (71+ endpoints) |
+| [docs/TECHNICAL.md](docs/TECHNICAL.md) | Documentation technique (architecture, modeles, securite) |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Guide utilisateur complet |
 
 ---
 
