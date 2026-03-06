@@ -344,7 +344,7 @@ def _build_group(
         part_names = []
         for criterion in criteria:
             cte_name = next_cte_name(prefix)
-            sql = _build_criterion_cte(criterion, omop_schema, cte_name, ctes, cte_names, next_cte_name)
+            sql = _build_criterion_cte(criterion, omop_schema, cte_name, ctes, cte_names, next_cte_name, include_visit_id=same_visit)
             part_names.append(sql)
 
         if len(part_names) == 0:
@@ -352,13 +352,26 @@ def _build_group(
         if len(part_names) == 1:
             return part_names[0], part_names
 
-        set_op = "INTERSECT" if operator == "AND" else "UNION"
-        combined_name = next_cte_name(f"{prefix}_combined")
-        parts_sql = f"\n  {set_op}\n".join(f"  SELECT person_id FROM {n}" for n in part_names)
-        combined = f"{combined_name} AS (\n{parts_sql}\n)"
-        ctes.append(combined)
-        cte_names.append(combined_name)
-        return combined_name, part_names
+        if same_visit and operator == "AND" and len(part_names) >= 2:
+            # JOIN on person_id + visit_occurrence_id for same-visit
+            combined_name = next_cte_name(f"{prefix}_samevisit")
+            first = part_names[0]
+            join_sql = f"  SELECT DISTINCT a.person_id\n  FROM {first} a\n"
+            for j, pn in enumerate(part_names[1:], 1):
+                alias = chr(ord('a') + j)
+                join_sql += f"  JOIN {pn} {alias} ON a.person_id = {alias}.person_id AND a.visit_occurrence_id = {alias}.visit_occurrence_id\n"
+            combined = f"{combined_name} AS (\n{join_sql})"
+            ctes.append(combined)
+            cte_names.append(combined_name)
+            return combined_name, part_names
+        else:
+            set_op = "INTERSECT" if operator == "AND" else "UNION"
+            combined_name = next_cte_name(f"{prefix}_combined")
+            parts_sql = f"\n  {set_op}\n".join(f"  SELECT person_id FROM {n}" for n in part_names)
+            combined = f"{combined_name} AS (\n{parts_sql}\n)"
+            ctes.append(combined)
+            cte_names.append(combined_name)
+            return combined_name, part_names
 
 
 def _build_criterion_cte(
