@@ -977,3 +977,127 @@ def export_cohort(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ──── Patient Journey ────
+
+@router.get("/patient/{person_id}/journey")
+def patient_journey(
+    person_id: int,
+    cdm_name: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the full clinical timeline for a single patient across all OMOP domains.
+    Events are returned grouped by domain, each with date, concept_id, concept_name,
+    and source_value.  The frontend renders these on a horizontal timeline.
+    """
+    cdm, conn = _get_cdm_conn(db, cdm_name)
+    schema = _get_omop_schema(db, cdm)
+
+    # End-date columns for domains that have them
+    _end_date = {
+        "Condition": "condition_end_date",
+        "Drug": "drug_exposure_end_date",
+        "Visit": "visit_end_date",
+        "Device": "device_exposure_end_date",
+    }
+
+    # Extra value columns worth fetching
+    _extra_cols = {
+        "Measurement": ["value_as_number", "unit_source_value"],
+        "Drug": ["quantity"],
+    }
+
+    events: list[dict] = []
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Person demographics
+            cur.execute(
+                f"""
+                SELECT p.person_id, p.year_of_birth,
+                       g.concept_name AS gender,
+                       op.observation_period_start_date,
+                       op.observation_period_end_date
+                FROM {schema}.person p
+                LEFT JOIN {schema}.concept g
+                    ON g.concept_id = p.gender_concept_id
+                LEFT JOIN {schema}.observation_period op
+                    ON op.person_id = p.person_id
+                WHERE p.person_id = %s
+                LIMIT 1
+                """,
+                (person_id,),
+            )
+            person_row = cur.fetchone()
+            if not person_row:
+                raise HTTPException(status_code=404, detail="Person not found in CDM")
+            person_info = dict(person_row)
+            for k, v in person_info.items():
+                if hasattr(v, "isoformat"):
+                    person_info[k] = v.isoformat()
+
+            # Query each clinical domain
+            for domain_name, dcfg in DOMAIN_CONFIG.items():
+                table = dcfg["table"]
+                date_col = dcfg["date_col"]
+                concept_col = dcfg["concept_id"]
+                source_val = dcfg["source_value"]
+                end_date_col = _end_date.get(domain_name)
+                extras = _extra_cols.get(domain_name, [])
+
+                select_parts = [
+                    f"t.{date_col} AS start_date",
+                    f"t.{concept_col} AS concept_id",
+                    f"t.{source_val} AS source_value",
+                    "c.concept_name",
+                ]
+                if end_date_col:
+                    select_parts.append(f"t.{end_date_col} AS end_date")
+                for extra in extras:
+                    select_parts.append(f"t.{extra}")
+
+                sql = f"""
+                    SELECT {', '.join(select_parts)}
+                    FROM {schema}.{table} t
+                    LEFT JOIN {schema}.concept c
+                        ON c.concept_id = t.{concept_col}
+                    WHERE t.person_id = %s
+                    ORDER BY t.{date_col} NULLS LAST
+                    LIMIT 500
+                """
+                try:
+                    cur.execute(sql, (person_id,))
+                    rows = cur.fetchall()
+                except Exception:
+                    conn.rollback()
+                    continue
+
+                for row in rows:
+                    evt: dict = {
+                        "domain": domain_name,
+                        "start_date": row["start_date"].isoformat() if hasattr(row.get("start_date"), "isoformat") else row.get("start_date"),
+                        "concept_id": row.get("concept_id"),
+                        "concept_name": row.get("concept_name") or "",
+                        "source_value": row.get("source_value") or "",
+                    }
+                    if end_date_col and row.get("end_date"):
+                        evt["end_date"] = row["end_date"].isoformat() if hasattr(row["end_date"], "isoformat") else row["end_date"]
+                    for extra in extras:
+                        val = row.get(extra)
+                        if val is not None:
+                            evt[extra] = float(val) if isinstance(val, (int, float)) else str(val)
+                    events.append(evt)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Patient journey query failed")
+        raise HTTPException(status_code=500, detail=f"Journey query error: {e}")
+    finally:
+        conn.close()
+
+    # Sort all events chronologically
+    events.sort(key=lambda e: e.get("start_date") or "9999")
+
+    return {"person": person_info, "events": events}
