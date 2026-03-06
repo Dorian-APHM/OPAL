@@ -188,6 +188,10 @@ export const cohortApi = {
     api.post('/cohorts/export/direct', { cdm_name: cdmName, criteria }, { responseType: 'blob' }),
   characterize: (cdmName: string, criteria: CohortCriteria, topN?: number) =>
     api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25 }),
+  saveCharacterization: (cohortId: number, characterization: CharacterizationResult) =>
+    api.put(`/cohorts/${cohortId}/characterization`, { characterization }),
+  getCharacterization: (cohortId: number) =>
+    api.get<{ characterization: CharacterizationResult | null; characterized_at: string | null; version: number }>(`/cohorts/${cohortId}/characterization`),
 };
 
 // Mapping endpoints
