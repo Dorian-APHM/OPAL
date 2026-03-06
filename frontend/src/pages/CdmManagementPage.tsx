@@ -9,15 +9,12 @@ import {
   Space,
   message,
   Popconfirm,
-  Tag,
   Typography,
 } from 'antd';
 import {
   PlusOutlined,
   ApiOutlined,
   DeleteOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../api/client';

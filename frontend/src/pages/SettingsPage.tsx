@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { Card, Form, InputNumber, Input, Button, Typography, message, Alert } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../api/client';
-import type { AnalysisSettingsType } from '../types';
 
 const { Title } = Typography;
 

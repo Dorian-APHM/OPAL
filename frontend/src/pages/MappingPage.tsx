@@ -2,18 +2,18 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, Space, Typography,
   Statistic, Row, Col, Empty, Spin, message, Popconfirm, Tooltip,
-  Progress, Modal, InputNumber, Pagination, Checkbox,
+  Modal, InputNumber, Pagination, Checkbox,
 } from 'antd';
 import {
   BarChartOutlined, SearchOutlined, BulbOutlined, HistoryOutlined,
   DownloadOutlined, CheckOutlined, CloseOutlined, EditOutlined,
-  UndoOutlined, ThunderboltOutlined, ExportOutlined, WarningOutlined,
+  UndoOutlined, ThunderboltOutlined, WarningOutlined,
   StopOutlined, ReloadOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, LineChart, Line, Legend, Cell,
+  ResponsiveContainer, LineChart, Line, Legend,
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
 import { useAuth } from '../auth/KeycloakContext';
@@ -22,7 +22,7 @@ import type {
   SuggestionResult, MappingSuggestion, MappingDecisionEntry,
 } from '../types';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { TabPane } = Tabs;
 

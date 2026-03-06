@@ -5,7 +5,6 @@ Translates a structured cohort criteria JSON into optimized PostgreSQL
 using CTEs, temporal joins, and concept_ancestor expansion.
 """
 import logging
-from typing import Any
 
 from config import DOMAIN_CONFIG
 

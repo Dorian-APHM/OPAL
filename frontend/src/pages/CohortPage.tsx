@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Card, Button, Input, Typography, Space, Modal, List, Tag, message,
-  Tooltip, Popconfirm, Row, Col, Empty, Table, Spin, Tabs,
+  Popconfirm, Row, Col, Empty, Table, Spin, Tabs,
 } from 'antd';
 import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
-  PlusOutlined, PlayCircleOutlined, EditOutlined, UserOutlined,
+  PlusOutlined, PlayCircleOutlined, UserOutlined,
   TableOutlined, SwapOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
@@ -17,11 +17,11 @@ import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
 import { cohortApi } from '../api/client';
 import type {
-  CohortCriterion, CriteriaGroup, DemographicConstraints,
+  CohortCriterion,
   CohortCriteria, CohortSummary,
 } from '../types';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 function emptyCriteria(): CohortCriteria {
   return {
