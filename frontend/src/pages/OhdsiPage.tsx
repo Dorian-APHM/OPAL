@@ -82,6 +82,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   const eventSourcesRef = useRef<Record<string, EventSource>>({});
   const logOffsetRef = useRef<Record<string, number>>({});
   const logEndRef = useRef<HTMLDivElement>(null);
+  const prevLogCountRef = useRef<Record<string, number>>({});
 
   // File browser
   const [currentPath, setCurrentPath] = useState('');
@@ -218,9 +219,15 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     };
   }, [startSSE]);
 
-  // Auto-scroll logs
+  // Auto-scroll logs only when new lines arrive
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const key = activeLogTab;
+    const currentCount = services[key]?.logs?.length || 0;
+    const prevCount = prevLogCountRef.current[key] || 0;
+    if (currentCount > prevCount) {
+      logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevLogCountRef.current[key] = currentCount;
   }, [services, activeLogTab]);
 
   const handleRun = async (service: string) => {
