@@ -1044,6 +1044,7 @@ def patient_journey(
                 date_col = dcfg["date_col"]
                 concept_col = dcfg["concept_id"]
                 source_val = dcfg["source_value"]
+                source_concept_col = dcfg.get("source_concept_id")
                 end_date_col = _end_date.get(domain_name)
                 extras = _extra_cols.get(domain_name, [])
 
@@ -1053,16 +1054,27 @@ def patient_journey(
                     f"t.{source_val} AS source_value",
                     "c.concept_name",
                 ]
+                if source_concept_col:
+                    select_parts.append("sc.concept_name AS source_concept_name")
                 if end_date_col:
                     select_parts.append(f"t.{end_date_col} AS end_date")
                 for extra in extras:
                     select_parts.append(f"t.{extra}")
 
+                join_clause = f"""
+                    LEFT JOIN {schema}.concept c
+                        ON c.concept_id = t.{concept_col}
+                """
+                if source_concept_col:
+                    join_clause += f"""
+                    LEFT JOIN {schema}.concept sc
+                        ON sc.concept_id = t.{source_concept_col}
+                    """
+
                 sql = f"""
                     SELECT {', '.join(select_parts)}
                     FROM {schema}.{table} t
-                    LEFT JOIN {schema}.concept c
-                        ON c.concept_id = t.{concept_col}
+                    {join_clause}
                     WHERE t.person_id = %s
                     ORDER BY t.{date_col} NULLS LAST
                     LIMIT 500
@@ -1082,6 +1094,8 @@ def patient_journey(
                         "concept_name": row.get("concept_name") or "",
                         "source_value": row.get("source_value") or "",
                     }
+                    if row.get("source_concept_name"):
+                        evt["source_concept_name"] = row["source_concept_name"]
                     if end_date_col and row.get("end_date"):
                         evt["end_date"] = row["end_date"].isoformat() if hasattr(row["end_date"], "isoformat") else row["end_date"]
                     for extra in extras:
