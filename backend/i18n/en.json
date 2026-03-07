@@ -125,7 +125,20 @@
     "rejected": "Rejected",
     "avg_confidence": "Avg Confidence",
     "avg_conf_approved": "Avg Conf. (Approved)",
-    "no_strategy_data": "No mapping decisions yet"
+    "no_strategy_data": "No mapping decisions yet",
+    "manual": "Manual",
+    "manual_step1": "Step 1 — Select a local code",
+    "manual_step2": "Step 2 — Map to a concept",
+    "search_source_code": "Search local code...",
+    "search": "Search",
+    "enter_concept_id": "Concept ID",
+    "lookup": "Lookup",
+    "concept_not_found": "Concept not found",
+    "approve_mapping": "Approve Mapping",
+    "manual_description": "Search for a local code, then enter a target concept ID to create a manual mapping.",
+    "results_found": "results found",
+    "click_to_select": "click a row to select",
+    "decision_failed": "Decision failed"
   },
   "common": {
     "save": "Save",

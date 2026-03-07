@@ -125,7 +125,20 @@
     "rejected": "Rejeté",
     "avg_confidence": "Confiance moy.",
     "avg_conf_approved": "Conf. moy. (Approuvé)",
-    "no_strategy_data": "Aucune décision de mapping encore"
+    "no_strategy_data": "Aucune décision de mapping encore",
+    "manual": "Manuel",
+    "manual_step1": "Étape 1 — Sélectionner un code local",
+    "manual_step2": "Étape 2 — Mapper vers un concept",
+    "search_source_code": "Rechercher un code local...",
+    "search": "Rechercher",
+    "enter_concept_id": "Concept ID",
+    "lookup": "Vérifier",
+    "concept_not_found": "Concept introuvable",
+    "approve_mapping": "Approuver le mapping",
+    "manual_description": "Recherchez un code local, puis saisissez un Concept ID cible pour créer un mapping manuel.",
+    "results_found": "résultats trouvés",
+    "click_to_select": "cliquez sur une ligne pour sélectionner",
+    "decision_failed": "Échec de la décision"
   },
   "common": {
     "save": "Enregistrer",
