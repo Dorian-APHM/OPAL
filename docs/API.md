@@ -1,19 +1,20 @@
-# OPAL API - Documentation Technique
+# OPAL API — Reference Complete
 
-**Version** : 1.0.0
+**Version** : 2.0.0
 **Base URL** : `http://<host>:8000/api`
 **Authentification** : Keycloak (Bearer token) si `AUTH_ENABLED=true`
+**Total endpoints** : 71+
 
 ---
 
-## Quick Start - Chargement des donnees
+## Quick Start — Chargement des donnees
 
 Apres un `docker compose up -d`, la BDD applicative est vide. Voici comment charger les donnees necessaires.
 
 ### 1. Enregistrer un CDM
 
 ```bash
-curl --noproxy '*' -s -X POST "http://<host>:8000/api/cdm/" \
+curl -s -X POST "http://<host>:8000/api/cdm/" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "CHU_OMOP",
@@ -29,57 +30,36 @@ curl --noproxy '*' -s -X POST "http://<host>:8000/api/cdm/" \
 ### 2. Tester la connexion
 
 ```bash
-curl --noproxy '*' -s -X POST "http://<host>:8000/api/cdm/CHU_OMOP/test"
+curl -s -X POST "http://<host>:8000/api/cdm/CHU_OMOP/test"
 ```
 
 ### 3. Charger les codebooks de reference (mapping)
 
-Les codebooks enrichissent les suggestions de mapping avec des descriptions textuelles.
-
 ```bash
-# CCAM EN (descriptions anglaises, 9500 codes)
-curl --noproxy '*' -s -X POST "http://<host>:8000/api/mapping/reference/upload" \
-  -F "name=CCAM_EN" \
-  -F "domain=Procedure" \
-  -F "file=@data/ccam_athena.csv"
+# CCAM EN (descriptions anglaises)
+curl -s -X POST "http://<host>:8000/api/mapping/reference/upload" \
+  -F "name=CCAM_EN" -F "domain=Procedure" -F "file=@data/ccam_athena.csv"
 
-# CCAM FR (descriptions francaises, 1969 codes)
-curl --noproxy '*' -s -X POST "http://<host>:8000/api/mapping/reference/upload" \
-  -F "name=CCAM" \
-  -F "domain=Procedure" \
-  -F "file=@data/interhop-actes-ameli.csv"
+# CCAM FR (descriptions francaises)
+curl -s -X POST "http://<host>:8000/api/mapping/reference/upload" \
+  -F "name=CCAM" -F "domain=Procedure" -F "file=@data/interhop-actes-ameli.csv"
 ```
 
-Le CSV doit avoir au minimum 2 colonnes. Le delimiteur (`,` ou `;`) est auto-detecte. Les colonnes code et description sont detectees automatiquement parmi : `code`, `ccam`, `code_ccam`, `code_cim`, `description`, `libelle`, `label`, etc. Sinon, les deux premieres colonnes sont utilisees.
+Le CSV doit avoir au minimum 2 colonnes. Le delimiteur (`,` ou `;`) est auto-detecte. Les colonnes code/description sont detectees automatiquement.
 
 ### 4. Charger les mappings SapBERT pre-calcules
 
-Les mappings SapBERT fournissent des suggestions instantanees basees sur des embeddings semantiques. Le fichier CSV est genere par `scripts/sapbert_mapping.py`.
-
 ```bash
-curl --noproxy '*' -s -X POST "http://<host>:8000/api/mapping/sapbert/upload" \
-  -F "domain=Procedure" \
-  -F "file=@data/sapbert_results.csv"
+curl -s -X POST "http://<host>:8000/api/mapping/sapbert/upload" \
+  -F "domain=Procedure" -F "file=@data/sapbert_results.csv"
 ```
 
-**Format CSV attendu :**
-
-| Colonne | Description |
-|---------|-------------|
-| `source_code` | Code source (ex: `FGLF671`) |
-| `source_name` | Description source (ex: `Appendicectomie`) |
-| `rank` | Rang de la suggestion (1 = meilleure) |
-| `target_concept_id` | ID du concept OMOP cible |
-| `target_concept_code` | Code du concept cible |
-| `target_concept_name` | Nom du concept cible |
-| `target_vocabulary_id` | Vocabulaire cible (ex: `SNOMED`) |
-| `similarity` | Score de similarite (0.0 a 1.0) |
+**Format CSV** : `source_code, source_name, rank, target_concept_id, target_concept_code, target_concept_name, target_vocabulary_id, similarity`
 
 ### 5. Lancer une analyse qualite
 
 ```bash
-# Analyse complete (tous les domaines, avec progression SSE)
-curl --noproxy '*' -s -X POST "http://<host>:8000/api/quality/analyze/batch" \
+curl -s -X POST "http://<host>:8000/api/quality/analyze/batch" \
   -H "Content-Type: application/json" \
   -d '{"cdm_name": "CHU_OMOP", "domains": ["Dashboard", "Person", "Condition", "Drug", "Procedure"]}'
 ```
@@ -87,14 +67,9 @@ curl --noproxy '*' -s -X POST "http://<host>:8000/api/quality/analyze/batch" \
 ### 6. Verifier les donnees chargees
 
 ```bash
-# Codebooks de reference charges
-curl --noproxy '*' -s "http://<host>:8000/api/mapping/reference"
-
-# Sets SapBERT charges
-curl --noproxy '*' -s "http://<host>:8000/api/mapping/sapbert"
-
-# Snapshots qualite disponibles
-curl --noproxy '*' -s "http://<host>:8000/api/quality/snapshots/CHU_OMOP/Dashboard/latest"
+curl -s "http://<host>:8000/api/mapping/reference"
+curl -s "http://<host>:8000/api/mapping/sapbert"
+curl -s "http://<host>:8000/api/quality/snapshots/CHU_OMOP/Dashboard/latest"
 ```
 
 ---
@@ -108,8 +83,11 @@ curl --noproxy '*' -s "http://<host>:8000/api/quality/snapshots/CHU_OMOP/Dashboa
 5. [Mapping](#5-mapping)
 6. [Concept Explorer](#6-concept-explorer)
 7. [OHDSI Integration](#7-ohdsi-integration)
-8. [Modeles de donnees](#8-modeles-de-donnees)
-9. [Configuration](#9-configuration)
+8. [Audit](#8-audit)
+9. [Administration](#9-administration)
+10. [Modeles de donnees](#10-modeles-de-donnees)
+11. [Authentification et RBAC](#11-authentification-et-rbac)
+12. [Codes d'erreur HTTP](#12-codes-derreur-http)
 
 ---
 
@@ -117,7 +95,7 @@ curl --noproxy '*' -s "http://<host>:8000/api/quality/snapshots/CHU_OMOP/Dashboa
 
 ### `GET /api/health`
 
-Health check.
+Health check. **Public** (pas d'authentification).
 
 **Response :**
 ```json
@@ -126,7 +104,7 @@ Health check.
 
 ### `GET /api/i18n/{lang}`
 
-Retourne les traductions pour une langue (`en` ou `fr`).
+Retourne les traductions pour une langue. **Public**.
 
 | Param | Type | Description |
 |-------|------|-------------|
@@ -136,7 +114,7 @@ Retourne les traductions pour une langue (`en` ou `fr`).
 
 ### `GET /api/auth/me`
 
-Retourne l'utilisateur courant (depuis le token Keycloak).
+Retourne l'utilisateur courant (depuis le token Keycloak). **Authentifie** (tout role).
 
 **Response :**
 ```json
@@ -149,41 +127,15 @@ Retourne l'utilisateur courant (depuis le token Keycloak).
 
 **Erreur :** `401` si non authentifie.
 
-### `GET /api/audit/logs`
-
-Retourne les logs d'audit (admin uniquement).
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `date` | query, string | aujourd'hui | Date ISO (YYYY-MM-DD) |
-| `user` | query, string | - | Filtrer par username |
-| `limit` | query, int | 200 | Nombre max d'entrees |
-
-**Response :**
-```json
-{
-  "date": "2026-03-06",
-  "entries": [
-    {
-      "timestamp": "2026-03-06T10:30:00",
-      "user": "admin",
-      "method": "POST",
-      "path": "/api/quality/analyze",
-      "status": 200
-    }
-  ]
-}
-```
-
 ---
 
 ## 2. CDM Management
 
-Prefix : `/api/cdm`
+Prefix : `/api/cdm` | **Roles** : admin, omop-dim (sauf `GET /api/cdm/` accessible a tous)
 
 ### `GET /api/cdm/`
 
-Liste toutes les connexions CDM enregistrees.
+Liste toutes les connexions CDM enregistrees. Accessible a tout utilisateur authentifie (lecture seule pour le selecteur CDM).
 
 **Response :**
 ```json
@@ -237,16 +189,7 @@ Enregistre une nouvelle connexion CDM.
 
 Teste une connexion CDM sans la sauvegarder.
 
-**Body :**
-```json
-{
-  "db_host": "10.0.0.1",
-  "db_port": 5432,
-  "db_name": "omop_prod",
-  "db_user": "reader",
-  "db_password": "secret"
-}
-```
+**Body :** `{ "db_host", "db_port", "db_name", "db_user", "db_password" }`
 
 **Response :** `{ "success": true, "message": "...", "person_count": 150000 }`
 **Erreur :** `502` si connexion echouee.
@@ -258,14 +201,6 @@ Teste la connexion d'un CDM deja enregistre.
 ### `PUT /api/cdm/{cdm_name}`
 
 Met a jour une connexion CDM. Tous les champs sont optionnels.
-
-**Body :**
-```json
-{
-  "db_host": "10.0.0.2",
-  "db_password": "new_secret"
-}
-```
 
 ### `DELETE /api/cdm/{cdm_name}`
 
@@ -292,19 +227,11 @@ Retourne les parametres d'analyse pour un CDM.
 
 Met a jour les parametres d'analyse. Tous les champs sont optionnels.
 
-**Body :**
-```json
-{
-  "top_unmapped_terms": 100,
-  "comparison_alert_threshold": 10.0
-}
-```
-
 ---
 
 ## 3. Quality Analysis
 
-Prefix : `/api/quality`
+Prefix : `/api/quality` | **Roles** : admin, omop-dim, chercheur
 
 ### `GET /api/quality/domains`
 
@@ -323,10 +250,7 @@ Lance l'analyse d'un domaine unique. Sauvegarde automatiquement un snapshot vers
 
 **Body :**
 ```json
-{
-  "cdm_name": "CHU_OMOP",
-  "domain": "Condition"
-}
+{ "cdm_name": "CHU_OMOP", "domain": "Condition" }
 ```
 
 **Response :**
@@ -338,8 +262,15 @@ Lance l'analyse d'un domaine unique. Sauvegarde automatiquement un snapshot vers
   "cdm_name": "CHU_OMOP",
   "results": {
     "domain": "Condition",
-    "achilles_like": { "global": { "total_rows": 500000, "distinct_persons": 12000 }, "top_concepts": [...] },
-    "mapping": { "terms": { "total_terms": 200, "mapped_terms": 150, "pct_terms_mapped": 75.0 }, "rows": {...}, "top_unmapped_terms": [...] }
+    "achilles_like": {
+      "global": { "total_rows": 500000, "distinct_persons": 12000 },
+      "top_concepts": [...]
+    },
+    "mapping": {
+      "terms": { "total_terms": 200, "mapped_terms": 150, "pct_terms_mapped": 75.0 },
+      "rows": { "total_rows": 500000, "mapped_rows": 450000, "pct_rows_mapped": 90.0 },
+      "top_unmapped_terms": [...]
+    }
   }
 }
 ```
@@ -350,10 +281,7 @@ Lance l'analyse de plusieurs domaines. Retourne un resume synchrone.
 
 **Body :**
 ```json
-{
-  "cdm_name": "CHU_OMOP",
-  "domains": ["Dashboard", "Person", "Condition", "Drug"]
-}
+{ "cdm_name": "CHU_OMOP", "domains": ["Dashboard", "Person", "Condition", "Drug"] }
 ```
 
 **Response :**
@@ -408,11 +336,6 @@ Retourne un snapshot specifique par son ID.
 ### `GET /api/quality/export/{snapshot_id}/{table_type}`
 
 Exporte une table d'un snapshot en CSV.
-
-| Param | Type | Description |
-|-------|------|-------------|
-| `snapshot_id` | path, int | ID du snapshot |
-| `table_type` | path, string | Type de table a exporter |
 
 **Valeurs de `table_type` :**
 
@@ -472,8 +395,8 @@ Si `snapshot_id_a/b` sont `null`, utilise le dernier snapshot de chaque CDM.
   "threshold": 5.0,
   "snapshot_a": { "id": 42, "cdm_name": "CHU_OMOP", "version": 3 },
   "snapshot_b": { "id": 38, "cdm_name": "CHU_TEST", "version": 2 },
-  "results_a": { ... },
-  "results_b": { ... }
+  "results_a": { "..." },
+  "results_b": { "..." }
 }
 ```
 
@@ -485,7 +408,11 @@ Genere un rapport HTML qualite complet (tous les domaines).
 |-------|------|---------|-------------|
 | `lang` | query, string | `en` | Langue du rapport (`en`, `fr`) |
 
-**Response :** Fichier HTML (`Content-Disposition: attachment`).
+**Response :** Fichier HTML.
+
+### `GET /api/quality/report/{cdm_name}/pdf`
+
+Genere un rapport PDF qualite complet.
 
 ### `GET /api/quality/report/comparison`
 
@@ -495,33 +422,22 @@ Genere un rapport HTML de comparaison entre deux CDMs.
 |-------|------|-------------|
 | `cdm_name_a` | query, string | Premier CDM |
 | `cdm_name_b` | query, string | Second CDM |
-| `domain` | query, string, optional | Domaine specifique (sinon tous) |
+| `domain` | query, string, optional | Domaine specifique |
 | `lang` | query, string | Langue (`en`, `fr`) |
 
-**Response :** Fichier HTML.
+### `GET /api/quality/report/comparison/pdf`
+
+Genere un rapport PDF de comparaison.
 
 ---
 
 ## 4. Cohort Builder
 
-Prefix : `/api/cohorts`
+Prefix : `/api/cohorts` | **Roles** : admin, omop-dim, chercheur, medecin
 
-### `GET /api/cohorts/domains`
+### Recherche de concepts
 
-Liste les domaines OMOP disponibles pour les criteres de cohorte.
-
-**Response :**
-```json
-{
-  "domains": [
-    { "name": "Condition", "table": "condition_occurrence" },
-    { "name": "Drug", "table": "drug_exposure" },
-    { "name": "Procedure", "table": "procedure_occurrence" }
-  ]
-}
-```
-
-### `POST /api/cohorts/concepts/search`
+#### `POST /api/cohorts/concepts/search`
 
 Recherche de concepts OMOP par nom ou code.
 
@@ -554,7 +470,7 @@ Recherche de concepts OMOP par nom ou code.
 }
 ```
 
-### `GET /api/cohorts/concepts/vocabularies`
+#### `GET /api/cohorts/concepts/vocabularies`
 
 Liste les vocabulaires disponibles dans le CDM.
 
@@ -562,7 +478,13 @@ Liste les vocabulaires disponibles dans le CDM.
 |-------|------|-------------|
 | `cdm_name` | query, string | Nom du CDM |
 
-### `GET /api/cohorts/`
+#### `GET /api/cohorts/domains`
+
+Liste les domaines OMOP disponibles pour les criteres de cohorte.
+
+### CRUD Cohortes
+
+#### `GET /api/cohorts/`
 
 Liste toutes les cohortes sauvegardees.
 
@@ -588,7 +510,7 @@ Liste toutes les cohortes sauvegardees.
 }
 ```
 
-### `POST /api/cohorts/`
+#### `POST /api/cohorts/`
 
 Cree une nouvelle cohorte avec des criteres initiaux.
 
@@ -625,59 +547,53 @@ Cree une nouvelle cohorte avec des criteres initiaux.
 | `id` | string | Identifiant unique du critere |
 | `domain` | string | Domaine OMOP (Condition, Drug, Procedure...) |
 | `concepts` | array | Liste de concepts `{concept_id, concept_name}` |
-| `include_descendants` | bool | Inclure les descendants via `concept_ancestor` (default: true) |
+| `include_descendants` | bool | Inclure les descendants via `concept_ancestor` |
 | `source_codes` | array | Codes source directs (ex: `["E11.9", "FGLF671"]`) |
 | `temporal.type` | string | `any_time`, `before`, `after`, `between` |
-| `occurrence.type` | string | `any`, `at_least`, `exactly` |
+| `occurrence.type` | string | `any`, `at_least`, `exactly`, `at_most` |
 | `occurrence.count` | int | Nombre d'occurrences |
-| `operatorWithNext` | string | `AND` ou `OR` — operateur avec le critere suivant |
+| `occurrence.within_days` | int | Fenetre glissante en jours (optionnel) |
+| `value.operator` | string | `>`, `<`, `>=`, `<=`, `=`, `between` |
+| `value.value` / `value.low`, `value.high` | number | Valeur(s) numerique(s) |
+| `operatorWithNext` | string | `AND` ou `OR` |
 | `sameVisit` | bool | JOIN sur `visit_occurrence_id` pour les criteres AND |
-
-**Logique SQL :** Les criteres consecutifs en `OR` sont groupes en `UNION`, les groupes `AND` sont combines par `INTERSECT`.
 
 **Response :**
 ```json
 { "id": 1, "name": "Diabetiques T2", "version": 1, "generated_sql": "SELECT DISTINCT..." }
 ```
 
-### `GET /api/cohorts/{cohort_id}`
+#### `GET /api/cohorts/{cohort_id}`
 
 Details d'une cohorte avec toutes ses versions.
 
-### `PUT /api/cohorts/{cohort_id}`
+#### `PUT /api/cohorts/{cohort_id}`
 
 Met a jour une cohorte. Si les criteres changent, cree une nouvelle version.
 
-### `DELETE /api/cohorts/{cohort_id}`
+#### `DELETE /api/cohorts/{cohort_id}`
 
 Supprime une cohorte (admin/omop-dim uniquement).
 
-### `POST /api/cohorts/count`
+### Execution
+
+#### `POST /api/cohorts/count`
 
 Execute les criteres et retourne le nombre de patients.
 
-**Body :**
-```json
-{
-  "cdm_name": "CHU_OMOP",
-  "criteria": { ... }
-}
-```
+**Body :** `{ "cdm_name": "CHU_OMOP", "criteria": { ... } }`
 
-**Response :**
-```json
-{ "patient_count": 1250, "sql": "SELECT COUNT(DISTINCT person_id)..." }
-```
+**Response :** `{ "patient_count": 1250, "sql": "SELECT COUNT(DISTINCT person_id)..." }`
 
-### `POST /api/cohorts/count/approximate`
+#### `POST /api/cohorts/count/approximate`
 
-Comptage rapide (identique au count exact pour l'instant, TABLESAMPLE prevu).
+Comptage rapide via `TABLESAMPLE`.
 
-### `POST /api/cohorts/attrition`
+**Response :** `{ "patient_count": 1200, "approximate": true, "total_persons": 150000 }`
+
+#### `POST /api/cohorts/attrition`
 
 Analyse d'attrition : execute chaque critere incrementalement.
-
-**Body :** Identique a `/count`.
 
 **Response :**
 ```json
@@ -690,18 +606,11 @@ Analyse d'attrition : execute chaque critere incrementalement.
 }
 ```
 
-### `POST /api/cohorts/sample`
+#### `POST /api/cohorts/sample`
 
 Retourne un echantillon aleatoire de patients.
 
-**Body :**
-```json
-{
-  "cdm_name": "CHU_OMOP",
-  "criteria": { ... },
-  "limit": 10
-}
-```
+**Body :** `{ "cdm_name": "CHU_OMOP", "criteria": { ... }, "limit": 10 }`
 
 **Response :**
 ```json
@@ -720,19 +629,27 @@ Retourne un echantillon aleatoire de patients.
 }
 ```
 
-### `POST /api/cohorts/export/direct`
+#### `POST /api/cohorts/sample/detailed`
+
+Echantillon detaille avec codes cliniques.
+
+**Body :** `{ "cdm_name": "CHU_OMOP", "criteria": { ... }, "limit": 10 }`
+
+**Response :** Patients avec colonnes supplementaires (codes source, concept_id, etc.).
+
+### Export
+
+#### `POST /api/cohorts/export/direct`
 
 Exporte la liste complete des patients en CSV (sans sauvegarder la cohorte).
 
-**Body :** Identique a `/count`.
+**Response :** Fichier CSV : `person_id, year_of_birth, gender, race, observation_period_start_date, observation_period_end_date`.
 
-**Response :** Fichier CSV avec colonnes : `person_id, year_of_birth, gender, race, observation_period_start_date, observation_period_end_date`.
-
-### `POST /api/cohorts/{cohort_id}/execute`
+#### `POST /api/cohorts/{cohort_id}/execute`
 
 Execute la derniere version d'une cohorte sauvegardee et enregistre le `patient_count`.
 
-### `GET /api/cohorts/{cohort_id}/export`
+#### `GET /api/cohorts/{cohort_id}/export`
 
 Exporte une cohorte sauvegardee.
 
@@ -740,11 +657,97 @@ Exporte une cohorte sauvegardee.
 |-------|------|---------|-------------|
 | `format` | query, string | `csv` | `csv` (person_ids) ou `sql` (requete SQL generee) |
 
+### SQL Execution
+
+#### `POST /api/cohorts/sql/execute`
+
+Execute une requete SQL en lecture seule (SELECT, WITH, EXPLAIN uniquement).
+
+**Body :**
+```json
+{ "cdm_name": "CHU_OMOP", "sql": "SELECT COUNT(*) FROM person", "limit": 1000 }
+```
+
+**Response :**
+```json
+{ "columns": ["count"], "rows": [[150000]], "row_count": 1, "truncated": false }
+```
+
+#### `POST /api/cohorts/sql/export`
+
+Execute une requete SQL et exporte les resultats en CSV.
+
+### Caracterisation
+
+#### `POST /api/cohorts/characterize`
+
+Genere un Table 1 (caracterisation) pour une cohorte.
+
+**Body :**
+```json
+{ "cdm_name": "CHU_OMOP", "criteria": { "..." }, "top_n": 10, "visit_level": false }
+```
+
+**Response :**
+```json
+{
+  "demographics": { "age": { "mean": 65.2, "std": 12.1, "..." }, "gender": [...], "..." },
+  "domain_prevalence": { "Condition": { "pct_with_data": 92.5, "top_concepts": [...] }, "..." },
+  "measurements": [...],
+  "visit_types": [...],
+  "observation_periods": { "..." }
+}
+```
+
+#### `POST /api/cohorts/compare`
+
+Compare deux cohortes via caracterisation avec calcul SMD (Standardized Mean Difference).
+
+**Body :**
+```json
+{ "cdm_name": "CHU_OMOP", "cohort_id_a": 1, "cohort_id_b": 2, "visit_level": false }
+```
+
+#### `PUT /api/cohorts/{cohort_id}/characterization`
+
+Sauvegarde les resultats de caracterisation.
+
+#### `GET /api/cohorts/{cohort_id}/characterization`
+
+Recupere la caracterisation sauvegardee.
+
+### Parcours patient
+
+#### `GET /api/cohorts/patient/{person_id}/journey`
+
+Timeline des evenements cliniques d'un patient.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `cdm_name` | query, string | Nom du CDM |
+
+**Response :**
+```json
+{
+  "person": { "person_id": 12345, "year_of_birth": 1965, "gender": "FEMALE", "..." },
+  "events": [
+    {
+      "domain": "Condition",
+      "start_date": "2020-01-15",
+      "end_date": "2020-01-20",
+      "concept_id": 201826,
+      "concept_name": "Type 2 diabetes mellitus",
+      "source_value": "E11.9"
+    }
+  ]
+}
+```
+
 ---
 
 ## 5. Mapping
 
-Prefix : `/api/mapping`
+Prefix : `/api/mapping` | **Roles** : admin, omop-dim, medecin
 
 ### 5.1 Dashboard
 
@@ -783,11 +786,31 @@ Evolution du taux de mapping a travers les versions.
 |-------|------|-------------|
 | `domain` | query, string | Domaine |
 
+#### `GET /api/mapping/strategies/{cdm_name}`
+
+Statistiques de performance des strategies de suggestion.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `domain` | query, string, optional | Filtrer par domaine |
+
+**Response :**
+```json
+{
+  "cdm_name": "CHU_OMOP",
+  "domain": "Procedure",
+  "strategies": [
+    { "source": "sapbert", "total": 100, "approved": 85, "modified": 5, "rejected": 10 }
+  ],
+  "total_decisions": 100
+}
+```
+
 ### 5.2 Unmapped Exploration
 
 #### `GET /api/mapping/unmapped/{cdm_name}/{domain}`
 
-Liste paginee des termes source non mappes, requetee directement depuis le CDM.
+Liste paginee des termes source non mappes.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -804,12 +827,7 @@ Liste paginee des termes source non mappes, requetee directement depuis le CDM.
   "page_size": 50,
   "total_pages": 9,
   "items": [
-    {
-      "source_value": "FGLF671",
-      "source_name": "Appendicectomie",
-      "n_records": 1200,
-      "n_persons": 950
-    }
+    { "source_value": "FGLF671", "source_name": "Appendicectomie", "n_records": 1200, "n_persons": 950 }
   ]
 }
 ```
@@ -834,16 +852,16 @@ Suggestions de mapping pour un terme source unique.
 }
 ```
 
-**Strategies de suggestion (par ordre de priorite) :**
+**Strategies (par ordre de priorite) :**
 
 | Strategie | Description |
 |-----------|-------------|
 | `sapbert` | Pre-calcule par SapBERT (embeddings semantiques). Instantane. |
-| `exact` | Correspondance exacte dans `concept.concept_name` ou `concept_code` |
+| `exact` | Correspondance exacte `concept_name` ou `concept_code` |
 | `relationship` | Concepts lies via `concept_relationship` |
 | `keyword` | Recherche progressive par mots-cles AND |
 | `fuzzy` | Recherche floue par trigrammes (`pg_trgm`) |
-| `contextual` | Recherche dans le meme domaine avec scoring par forme/marque (Drug) |
+| `contextual` | Recherche dans le meme domaine avec scoring contextuel |
 
 **Response :**
 ```json
@@ -882,27 +900,12 @@ Suggestions pour les top N termes non mappes d'un domaine.
 ```
 
 Les termes deja approuves/rejetes sont automatiquement exclus.
-Les termes avec des resultats SapBERT ne passent pas par les strategies SQL (performance).
-
-**Response :**
-```json
-{
-  "domain": "Procedure",
-  "results": [
-    {
-      "source_value": "FGLF671",
-      "source_name": "Appendicectomie",
-      "suggestions": [...]
-    }
-  ]
-}
-```
 
 ### 5.4 Validation Workflow
 
 #### `POST /api/mapping/decide`
 
-Enregistre une decision de mapping (approuver, modifier, rejeter).
+Enregistre une decision de mapping.
 
 **Body :**
 ```json
@@ -924,12 +927,12 @@ Enregistre une decision de mapping (approuver, modifier, rejeter).
 | Champ | Type | Description |
 |-------|------|-------------|
 | `action` | string | `approved`, `modified`, ou `rejected` |
-| `reason` | string | Raison (optionnelle, affichee dans l'historique) |
+| `reason` | string | Raison (optionnelle) |
 | `target_concept_id` | int, null | Concept cible (null si rejected) |
 
 #### `POST /api/mapping/decide/bulk`
 
-Decision en masse (approuver ou rejeter au-dessus d'un seuil de confiance).
+Decision en masse au-dessus d'un seuil de confiance.
 
 **Body :**
 ```json
@@ -950,16 +953,12 @@ Genere les entrees `source_to_concept_map` a partir des decisions approuvees.
 
 **Body :**
 ```json
-{
-  "cdm_name": "CHU_OMOP",
-  "domain": "Procedure",
-  "write_to_cdm": false
-}
+{ "cdm_name": "CHU_OMOP", "domain": "Procedure", "write_to_cdm": false }
 ```
 
 | Champ | Type | Description |
 |-------|------|-------------|
-| `write_to_cdm` | bool | Si `true`, ecrit directement dans la table `source_to_concept_map` du CDM (UPSERT) |
+| `write_to_cdm` | bool | Si `true`, ecrit dans la table `source_to_concept_map` du CDM (UPSERT) |
 
 **Response :**
 ```json
@@ -984,65 +983,30 @@ Genere les entrees `source_to_concept_map` a partir des decisions approuvees.
 
 #### `POST /api/mapping/apply/preview`
 
-Previsualise l'impact avant application (nombre de lignes/patients concernes).
+Previsualise l'impact avant application.
 
-**Response :**
-```json
-{
-  "total_decisions": 45,
-  "impacted_rows": 25000,
-  "impacted_persons": 8000
-}
-```
+**Response :** `{ "total_decisions": 45, "impacted_rows": 25000, "impacted_persons": 8000 }`
 
 #### `GET /api/mapping/apply/export/{cdm_name}/{domain}`
 
-Exporte les mappings approuves au format CSV `source_to_concept_map`.
+Exporte les mappings approuves au format CSV STCM.
 
 ### 5.6 History & Audit
 
 #### `GET /api/mapping/history/{cdm_name}`
 
-Historique pagine des decisions de mapping.
+Historique pagine des decisions.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `domain` | query, string | - | Filtrer par domaine |
-| `action` | query, string | - | Filtrer par action (`approved`, `modified`, `rejected`, `rolled_back`) |
+| `action` | query, string | - | `approved`, `modified`, `rejected`, `rolled_back` |
 | `page` | query, int | 1 | Page |
 | `page_size` | query, int | 50 | Taille (max 200) |
 
-**Response :**
-```json
-{
-  "total": 60,
-  "page": 1,
-  "page_size": 50,
-  "total_pages": 2,
-  "items": [
-    {
-      "id": 1,
-      "domain": "Procedure",
-      "source_value": "FGLF671",
-      "source_name": "Appendicectomie",
-      "action": "approved",
-      "target_concept_id": 4097430,
-      "target_concept_name": "Appendectomy",
-      "target_vocabulary_id": "SNOMED",
-      "previous_concept_id": null,
-      "suggestion_source": "sapbert",
-      "confidence_score": 92.0,
-      "user": "admin",
-      "reason": "Correspondance exacte",
-      "created_at": "2026-03-06T10:30:00"
-    }
-  ]
-}
-```
-
 #### `POST /api/mapping/history/{decision_id}/rollback`
 
-Annule une decision de mapping. Cree une entree `rolled_back` et supprime l'originale.
+Annule une decision de mapping. Cree une entree `rolled_back`.
 
 #### `GET /api/mapping/history/{cdm_name}/export`
 
@@ -1052,22 +1016,13 @@ Exporte l'historique complet en CSV.
 
 #### `POST /api/mapping/reference/upload`
 
-Upload d'un codebook de reference CSV (CCAM, CIM-10...).
-
-**Content-Type :** `multipart/form-data`
+Upload d'un codebook de reference CSV. **Content-Type :** `multipart/form-data`
 
 | Champ | Type | Description |
 |-------|------|-------------|
-| `name` | form, string | Nom du codebook (ex: `CCAM`, `CIM-10`) |
-| `domain` | form, string | Domaine associe (ex: `Procedure`, `Condition`) |
+| `name` | form, string | Nom du codebook |
+| `domain` | form, string | Domaine associe |
 | `file` | form, file | Fichier CSV |
-
-Le CSV est auto-detecte (delimiteur `,` ou `;`, colonnes code/description). Les entrees existantes pour ce nom sont remplacees.
-
-**Response :**
-```json
-{ "name": "CCAM", "domain": "Procedure", "count": 9500 }
-```
 
 #### `GET /api/mapping/reference`
 
@@ -1081,34 +1036,16 @@ Supprime un codebook.
 
 #### `POST /api/mapping/sapbert/upload`
 
-Upload des resultats SapBERT pre-calcules (CSV genere par `scripts/sapbert_mapping.py`).
-
-**Content-Type :** `multipart/form-data`
+Upload des resultats SapBERT. **Content-Type :** `multipart/form-data`
 
 | Champ | Type | Description |
 |-------|------|-------------|
-| `domain` | form, string | Domaine (ex: `Procedure`) |
-| `file` | form, file | CSV avec colonnes: `source_code, source_name, rank, target_concept_id, target_concept_code, target_concept_name, target_vocabulary_id, similarity` |
-
-Les entrees existantes pour ce domaine sont remplacees.
-
-**Response :**
-```json
-{ "domain": "Procedure", "count": 47500 }
-```
+| `domain` | form, string | Domaine |
+| `file` | form, file | CSV : `source_code, source_name, rank, target_concept_id, target_concept_code, target_concept_name, target_vocabulary_id, similarity` |
 
 #### `GET /api/mapping/sapbert`
 
 Liste les sets SapBERT charges.
-
-**Response :**
-```json
-{
-  "sapbert_sets": [
-    { "domain": "Procedure", "count": 47500, "source_count": 9500, "uploaded_at": "2026-03-04T16:33:00" }
-  ]
-}
-```
 
 #### `DELETE /api/mapping/sapbert/{domain}`
 
@@ -1118,7 +1055,7 @@ Supprime les mappings SapBERT d'un domaine.
 
 ## 6. Concept Explorer
 
-Prefix : `/api/concepts`
+Prefix : `/api/concepts` | **Roles** : admin, omop-dim, chercheur, medecin
 
 ### `GET /api/concepts/search`
 
@@ -1127,10 +1064,10 @@ Recherche de concepts par nom, code ou ID.
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cdm_name` | query, string | - | Nom du CDM (requis) |
-| `q` | query, string | - | Terme de recherche (texte ou concept_id numerique) |
+| `q` | query, string | - | Terme de recherche |
 | `domain` | query, string | - | Filtrer par domaine |
 | `vocabulary` | query, string | - | Filtrer par vocabulaire |
-| `standard_only` | query, bool | false | Uniquement les concepts standard |
+| `standard_only` | query, bool | false | Concepts standard uniquement |
 | `limit` | query, int | 50 | Limite (max 200) |
 | `offset` | query, int | 0 | Offset pour pagination |
 
@@ -1168,7 +1105,7 @@ Details complets d'un concept : relations, synonymes.
 **Response :**
 ```json
 {
-  "concept": { "concept_id": 201826, "concept_name": "...", ... },
+  "concept": { "concept_id": 201826, "concept_name": "...", "..." },
   "relationships": [
     {
       "relationship_id": "Maps to",
@@ -1187,7 +1124,7 @@ Details complets d'un concept : relations, synonymes.
 
 ### `GET /api/concepts/hierarchy/{concept_id}`
 
-Ancetres et descendants via la table `concept_ancestor`.
+Ancetres et descendants via `concept_ancestor`.
 
 **Response :**
 ```json
@@ -1197,7 +1134,6 @@ Ancetres et descendants via la table `concept_ancestor`.
     {
       "concept_id": 4008576,
       "concept_name": "Endocrine disease",
-      "concept_code": "362969004",
       "vocabulary_id": "SNOMED",
       "min_levels_of_separation": 2,
       "max_levels_of_separation": 4
@@ -1216,7 +1152,7 @@ Ancetres et descendants via la table `concept_ancestor`.
 
 ### `GET /api/concepts/source-values/{concept_id}`
 
-Trouve les valeurs source dans les tables cliniques mappees vers ce concept.
+Trouve les valeurs source mappees vers ce concept dans les tables cliniques.
 
 **Response :**
 ```json
@@ -1230,17 +1166,15 @@ Trouve les valeurs source dans les tables cliniques mappees vers ce concept.
 
 ### `GET /api/concepts/search-source-value`
 
-Recherche dans les tables cliniques par code source OU label (quand disponible).
+Recherche dans les tables cliniques par code source OU label.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cdm_name` | query, string | - | Nom du CDM |
-| `q` | query, string | - | Recherche (code ou label, ex: `HYDROXYZINE` ou `N3412`) |
+| `q` | query, string | - | Recherche (code ou label) |
 | `domain` | query, string | - | Filtrer par domaine |
 | `limit` | query, int | 50 | Limite (max 200) |
 | `offset` | query, int | 0 | Offset |
-
-Recherche dans `source_value` ET `source_name` (pour Drug et Measurement qui ont une colonne `source_name` dans le CDM).
 
 **Response :**
 ```json
@@ -1253,9 +1187,7 @@ Recherche dans `source_value` ET `source_name` (pour Drug et Measurement qui ont
       "n_records": 850,
       "n_persons": 420,
       "mapped_concept_id": 0,
-      "mapped_concept_name": null,
-      "mapped_vocabulary_id": null,
-      "mapped_standard_concept": null
+      "mapped_concept_name": null
     }
   ],
   "total": 5,
@@ -1270,12 +1202,9 @@ Exporte les resultats de recherche source en CSV.
 
 ### `POST /api/concepts/counts`
 
-Compteurs (records/persons) pour une liste de concept_ids a travers toutes les tables cliniques.
+Compteurs (records/persons) pour une liste de concept_ids.
 
-**Body :**
-```json
-{ "concept_ids": [201826, 4097430, 1332419] }
-```
+**Body :** `{ "concept_ids": [201826, 4097430, 1332419] }`
 
 | Param | Type | Description |
 |-------|------|-------------|
@@ -1305,18 +1234,18 @@ Liste les `vocabulary_id` distincts de la table `concept`.
 
 ## 7. OHDSI Integration
 
-Prefix : `/api/ohdsi`
+Prefix : `/api/ohdsi` | **Roles** : admin, omop-dim
 
-Lance des conteneurs Docker OHDSI (Achilles, DQD, CDM Onboarding) et streame leurs logs.
+Lance des conteneurs Docker OHDSI et streame leurs logs.
 
 ### Services disponibles
 
-| Service | Description | Image Docker |
-|---------|-------------|-------------|
-| `achilles` | Characterization (Achilles) | `ohdsi-docker-achilles` |
-| `achilles-export` | Export Achilles Results | `ohdsi-docker-achilles-export` |
-| `dqd` | Data Quality Dashboard | `ohdsi-docker-dqd` |
-| `cdmonboarding` | CDM Onboarding Report | `ohdsi-docker-cdmonboarding` |
+| Service | Description |
+|---------|-------------|
+| `achilles` | Characterization (Achilles) |
+| `achilles-export` | Export Achilles Results |
+| `dqd` | Data Quality Dashboard |
+| `cdmonboarding` | CDM Onboarding Report |
 
 ### `POST /api/ohdsi/run/{service_name}`
 
@@ -1338,7 +1267,7 @@ Lance un service OHDSI.
 
 ### `POST /api/ohdsi/stop/{service_name}`
 
-Arrete un service OHDSI en cours.
+Arrete un service en cours.
 
 ### `GET /api/ohdsi/status`
 
@@ -1348,9 +1277,7 @@ Statut de tous les services.
 ```json
 {
   "achilles": { "status": "done", "log_count": 250 },
-  "dqd": { "status": "idle", "log_count": 0 },
-  "achilles-export": { "status": "running", "log_count": 42 },
-  "cdmonboarding": { "status": "idle", "log_count": 0 }
+  "dqd": { "status": "idle", "log_count": 0 }
 }
 ```
 
@@ -1379,12 +1306,200 @@ Retourne tous les logs accumules (pour rechargement de page).
 
 Browse et telecharge les fichiers de sortie OHDSI.
 
-- Si `path` est un dossier : retourne la liste des fichiers.
+- Si `path` est un dossier : retourne la liste des fichiers (JSON array).
 - Si `path` est un fichier : retourne le fichier en telechargement.
 
 ---
 
-## 8. Modeles de donnees
+## 8. Audit
+
+Prefix : `/api/audit` | **Roles** : admin
+
+### `GET /api/audit/logs`
+
+Retourne les logs d'audit.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `date_from` | query, string | - | Date debut (YYYY-MM-DD) |
+| `date_to` | query, string | - | Date fin (YYYY-MM-DD) |
+| `date` | query, string | aujourd'hui | Date unique (YYYY-MM-DD) |
+| `user` | query, string | - | Filtrer par username |
+| `action` | query, string | - | Filtrer par type (quality, cohort, mapping...) |
+| `page` | query, int | 1 | Page |
+| `page_size` | query, int | 50 | Taille de page |
+
+**Response :**
+```json
+{
+  "entries": [
+    {
+      "timestamp": "2026-03-06T10:30:00",
+      "user": "admin",
+      "action": "quality",
+      "method": "POST",
+      "path": "/api/quality/analyze",
+      "status": 200,
+      "duration_ms": 1250,
+      "ip": "172.18.0.1"
+    }
+  ],
+  "total": 150,
+  "page": 1,
+  "page_size": 50,
+  "total_pages": 3
+}
+```
+
+### `GET /api/audit/stats`
+
+Statistiques des logs d'audit.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `date_from` | query, string | Date debut |
+| `date_to` | query, string | Date fin |
+
+**Response :**
+```json
+{
+  "total_events": 1500,
+  "by_user": [{ "user": "admin", "count": 800 }],
+  "by_action": [{ "action": "quality", "count": 300 }]
+}
+```
+
+### `GET /api/audit/dates`
+
+Liste les dates ayant des logs.
+
+### `GET /api/audit/export`
+
+Exporte les logs en CSV.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `date_from` | query, string | Date debut |
+| `date_to` | query, string | Date fin |
+| `user` | query, string | Filtrer par username |
+| `action` | query, string | Filtrer par type |
+
+---
+
+## 9. Administration
+
+Prefix : `/api/admin` | **Roles** : admin
+
+### Gestion des utilisateurs
+
+#### `GET /api/admin/users`
+
+Liste les utilisateurs Keycloak.
+
+**Response :**
+```json
+{
+  "users": [
+    {
+      "id": "uuid",
+      "username": "chercheur1",
+      "email": "chercheur1@example.com",
+      "first_name": "Jean",
+      "last_name": "Dupont",
+      "enabled": true,
+      "created_at": "2026-01-15T10:00:00",
+      "roles": ["chercheur"]
+    }
+  ]
+}
+```
+
+#### `POST /api/admin/users/{user_id}/roles`
+
+Attribue un role a un utilisateur.
+
+**Body :** `{ "role": "chercheur" }`
+
+**Response :** `{ "status": "ok", "user_id": "uuid", "role": "chercheur", "action": "assigned" }`
+
+#### `DELETE /api/admin/users/{user_id}/roles/{role_name}`
+
+Retire un role.
+
+#### `PUT /api/admin/users/{user_id}/toggle`
+
+Active ou desactive un utilisateur.
+
+**Body :** `{ "enabled": false }`
+
+### Demandes d'acces
+
+#### `POST /api/access-requests` (**Public**)
+
+Soumet une demande d'acces (formulaire d'inscription).
+
+**Body :**
+```json
+{
+  "username": "nouveau_user",
+  "email": "user@example.com",
+  "first_name": "Marie",
+  "last_name": "Martin",
+  "requested_role": "chercheur"
+}
+```
+
+**Response :** `{ "status": "pending", "id": 1 }`
+
+#### `GET /api/admin/access-requests`
+
+Liste les demandes d'acces.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `status_filter` | query, string | `pending` | `pending`, `approved`, `rejected`, `all` |
+
+**Response :**
+```json
+{
+  "requests": [
+    {
+      "id": 1,
+      "username": "nouveau_user",
+      "email": "user@example.com",
+      "first_name": "Marie",
+      "last_name": "Martin",
+      "requested_role": "chercheur",
+      "status": "pending",
+      "reviewed_by": null,
+      "reviewed_at": null,
+      "created_at": "2026-03-06T10:00:00"
+    }
+  ]
+}
+```
+
+#### `POST /api/admin/access-requests/{request_id}/approve`
+
+Approuve une demande. Cree automatiquement le compte Keycloak.
+
+**Response :**
+```json
+{
+  "status": "approved",
+  "username": "nouveau_user",
+  "keycloak_user_id": "uuid",
+  "temporary_password": "abc123XYZ"
+}
+```
+
+#### `POST /api/admin/access-requests/{request_id}/reject`
+
+Rejette une demande.
+
+---
+
+## 10. Modeles de donnees
 
 ### Tables de la BDD applicative (`opal`)
 
@@ -1394,7 +1509,7 @@ Browse et telecharge les fichiers de sortie OHDSI.
 | `analysis_snapshots` | Snapshots d'analyse versionnees (resultats JSON) |
 | `analysis_settings` | Parametres d'analyse par CDM |
 | `cohorts` | Definitions de cohortes |
-| `cohort_versions` | Versions des criteres de cohorte (criteres JSON + SQL genere) |
+| `cohort_versions` | Versions des criteres (criteres JSON + SQL genere + patient_count) |
 | `mapping_decisions` | Decisions de mapping (audit trail complet) |
 | `reference_codebooks` | Codebooks de reference (CCAM, CIM-10...) |
 | `sapbert_mappings` | Mappings SapBERT pre-calcules |
@@ -1414,30 +1529,42 @@ Browse et telecharge les fichiers de sortie OHDSI.
 
 ---
 
-## 9. Configuration
+## 11. Authentification et RBAC
 
-### Variables d'environnement
+### Flux d'authentification
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://opal:opal@opal-db:5432/opal` | URL PostgreSQL de la BDD applicative |
-| `SECRET_KEY` | `change-me-in-production` | Cle pour le chiffrement Fernet des mots de passe CDM |
-| `AUTH_ENABLED` | `false` | Active l'authentification Keycloak |
-| `KEYCLOAK_URL` | `http://keycloak:8080` | URL interne Keycloak |
-| `KEYCLOAK_REALM` | `opal` | Realm Keycloak |
-| `KEYCLOAK_CLIENT_ID` | `opal-frontend` | Client ID Keycloak |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Origines CORS autorisees (separees par virgule) |
+1. Le frontend initie un flux OIDC (PKCE) vers Keycloak
+2. L'utilisateur se connecte sur Keycloak
+3. Le frontend recoit un JWT (access token)
+4. Chaque requete API inclut le token via `Authorization: Bearer <token>`
+5. Le middleware backend valide le JWT via JWKS (signature + expiration)
+6. Les roles sont extraits du token (`realm_access.roles` ou claim `roles`)
 
-### Roles Keycloak
+### Matrice des permissions
 
-| Role | Acces |
-|------|-------|
-| `admin` | Acces complet + audit logs + suppression |
-| `omop-dim` | Quality, Cohort, Mapping, Concepts, OHDSI |
-| `chercheur` | Quality, Cohort, Concepts |
-| `medecin` | Mapping, Cohort, Concepts |
+| Endpoint | Public | chercheur | medecin | admin / omop-dim |
+|----------|--------|-----------|---------|-------------------|
+| `GET /api/health` | OK | OK | OK | OK |
+| `GET /api/i18n/{lang}` | OK | OK | OK | OK |
+| `POST /api/access-requests` | OK | OK | OK | OK |
+| `GET /api/auth/me` | 401 | OK | OK | OK |
+| `GET /api/cdm/` | 401 | OK | OK | OK |
+| `POST/PUT/DELETE /api/cdm/*` | 401 | 403 | 403 | OK |
+| `/api/quality/*` | 401 | OK | 403 | OK |
+| `/api/cohorts/*` | 401 | OK | OK | OK |
+| `/api/mapping/*` | 401 | 403 | OK | OK |
+| `/api/concepts/*` | 401 | OK | OK | OK |
+| `/api/ohdsi/*` | 401 | 403 | 403 | OK |
+| `/api/audit/*` | 401 | 403 | 403 | OK |
+| `/api/admin/*` | 401 | 403 | 403 | OK |
 
-### Codes d'erreur HTTP
+### Token via query parameter
+
+Pour les endpoints SSE (Server-Sent Events) et les telechargements, le token peut etre passe en query param : `?token=<JWT>`.
+
+---
+
+## 12. Codes d'erreur HTTP
 
 | Code | Signification |
 |------|---------------|

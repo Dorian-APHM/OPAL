@@ -1,23 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Card, Input, Select, Tag, List, Typography, Spin, Empty, Space, Button } from 'antd';
+import { Card, Input, Select, Tag, List, Typography, Spin, Empty, Space } from 'antd';
 import { SearchOutlined, PlusOutlined, CodeOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { cohortApi, conceptApi } from '../../api/client';
-import type { OmopConcept, CohortCriterion, TemporalConstraint, OccurrenceConstraint } from '../../types';
+import type { OmopConcept, CohortCriterion } from '../../types';
 
 const { Text } = Typography;
 const { Option } = Select;
-
-const DOMAIN_COLORS: Record<string, string> = {
-  Condition: '#e74c3c',
-  Drug: '#3498db',
-  Measurement: '#2ecc71',
-  Observation: '#f39c12',
-  Procedure: '#9b59b6',
-  Visit: '#1abc9c',
-  Device: '#e67e22',
-  Death: '#7f8c8d',
-};
 
 interface Props {
   cdmName: string;
@@ -79,19 +68,6 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
     };
     onAddCriterion(criterion);
     setSelectedConcepts([]);
-  };
-
-  const addDomainBlock = (domainName: string) => {
-    const criterion: CohortCriterion = {
-      id: Math.random().toString(36).slice(2) + Date.now().toString(36),
-      domain: domainName,
-      concepts: [],
-      include_descendants: true,
-      source_codes: [],
-      temporal: { type: 'any_time' },
-      occurrence: { type: 'any', count: 1 },
-    };
-    onAddCriterion(criterion);
   };
 
   const [sourceCodeDomain, setSourceCodeDomain] = useState<string>('Procedure');

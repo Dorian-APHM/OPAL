@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Card, Button, Input, Typography, Space, Modal, List, Tag, message,
-  Tooltip, Popconfirm, Row, Col, Empty, Table, Spin, Tabs,
+  Popconfirm, Row, Col, Empty, Table, Spin, Tabs, Alert,
 } from 'antd';
 import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
-  PlusOutlined, PlayCircleOutlined, EditOutlined, UserOutlined,
-  TableOutlined, SwapOutlined,
+  PlusOutlined, PlayCircleOutlined, UserOutlined,
+  TableOutlined, SwapOutlined, CodeOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -15,13 +15,14 @@ import QueryCanvas from '../components/cohort/QueryCanvas';
 import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
+import PatientJourney from '../components/cohort/PatientJourney';
 import { cohortApi } from '../api/client';
 import type {
-  CohortCriterion, CriteriaGroup, DemographicConstraints,
+  CohortCriterion,
   CohortCriteria, CohortSummary,
 } from '../types';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 function emptyCriteria(): CohortCriteria {
   return {
@@ -169,6 +170,9 @@ export default function CohortPage({ selectedCdm }: Props) {
   const [sampleColumns, setSampleColumns] = useState<{ key: string; label: string; domain: string }[]>([]);
   const [sampleLoading, setSampleLoading] = useState(false);
 
+  // Patient journey state
+  const [journeyPersonId, setJourneyPersonId] = useState<number | null>(null);
+
   const runDetailedSample = async () => {
     if (!selectedCdm) return;
     const backendCriteria = toBackendCriteria(criteria);
@@ -286,7 +290,14 @@ export default function CohortPage({ selectedCdm }: Props) {
                           pagination={false}
                           scroll={{ x: true }}
                           columns={[
-                            { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' },
+                            {
+                              title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90, fixed: 'left' as const,
+                              render: (v: number) => (
+                                <a onClick={() => setJourneyPersonId(v)} title={t('cohort.view_journey', 'View patient journey')}>
+                                  {v}
+                                </a>
+                              ),
+                            },
                             { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
                             ...sampleColumns.map(col => ({
                               title: col.label,
@@ -338,6 +349,18 @@ export default function CohortPage({ selectedCdm }: Props) {
                   />
                 ),
               },
+              {
+                key: 'sql',
+                label: (
+                  <Space size={4}>
+                    <CodeOutlined />
+                    SQL
+                  </Space>
+                ),
+                children: (
+                  <SqlEditorPanel cdmName={selectedCdm || ''} />
+                ),
+              },
             ]}
           />
         </Col>
@@ -351,6 +374,14 @@ export default function CohortPage({ selectedCdm }: Props) {
           />
         </Col>
       </Row>
+
+      {/* Patient Journey modal */}
+      <PatientJourney
+        cdmName={selectedCdm || ''}
+        personId={journeyPersonId}
+        open={journeyPersonId !== null}
+        onClose={() => setJourneyPersonId(null)}
+      />
 
       {/* Load modal */}
       <Modal
@@ -409,6 +440,125 @@ export default function CohortPage({ selectedCdm }: Props) {
           )}
         />
       </Modal>
+    </div>
+  );
+}
+
+// ──── SQL Editor Panel ────
+
+function SqlEditorPanel({ cdmName }: { cdmName: string }) {
+  const { t } = useTranslation();
+  const [sql, setSql] = useState('SELECT * FROM omop_cdm.person LIMIT 10');
+  const [columns, setColumns] = useState<string[]>([]);
+  const [rows, setRows] = useState<Record<string, any>[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rowCount, setRowCount] = useState(0);
+  const [truncated, setTruncated] = useState(false);
+
+  const handleExecute = async () => {
+    if (!sql.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const resp = await cohortApi.executeSql(cdmName, sql);
+      setColumns(resp.data.columns);
+      setRows(resp.data.rows);
+      setRowCount(resp.data.row_count);
+      setTruncated(resp.data.truncated);
+    } catch (e: any) {
+      setError(e.message || 'Query failed');
+      setColumns([]);
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExport = async () => {
+    if (!sql.trim()) return;
+    try {
+      const resp = await cohortApi.exportSql(cdmName, sql);
+      const blob = new Blob([resp.data], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'sql_export.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch (e: any) {
+      message.error(e.message || 'Export failed');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleExecute();
+    }
+  };
+
+  return (
+    <div>
+      <Card size="small" style={{ marginBottom: 8 }}>
+        <Input.TextArea
+          value={sql}
+          onChange={e => setSql(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="SELECT * FROM omop_cdm.person LIMIT 10"
+          autoSize={{ minRows: 4, maxRows: 12 }}
+          style={{ fontFamily: 'monospace', fontSize: 13 }}
+        />
+        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={handleExecute}
+            loading={loading}
+          >
+            {t('cohort.run_sql', 'Execute')} (Ctrl+Enter)
+          </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={handleExport}
+            disabled={!sql.trim()}
+          >
+            CSV
+          </Button>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            {t('cohort.sql_readonly', 'Read-only queries only (SELECT/WITH)')}
+          </Typography.Text>
+        </div>
+      </Card>
+
+      {error && (
+        <Alert message={error} type="error" showIcon closable onClose={() => setError(null)} style={{ marginBottom: 8 }} />
+      )}
+
+      {rows.length > 0 && (
+        <Card size="small">
+          <div style={{ marginBottom: 8 }}>
+            <Tag color="blue">{rowCount} {t('cohort.sql_rows', 'rows')}</Tag>
+            {truncated && <Tag color="orange">{t('cohort.sql_truncated', 'Truncated (add LIMIT to control)')}</Tag>}
+          </div>
+          <Table
+            size="small"
+            dataSource={rows}
+            rowKey={(_, idx) => String(idx)}
+            pagination={{ pageSize: 50, size: 'small', showSizeChanger: true }}
+            scroll={{ x: true }}
+            columns={columns.map(col => ({
+              title: col,
+              dataIndex: col,
+              key: col,
+              ellipsis: true,
+              width: 150,
+              render: (v: any) => v != null ? String(v) : <Typography.Text type="secondary">NULL</Typography.Text>,
+            }))}
+          />
+        </Card>
+      )}
     </div>
   );
 }
