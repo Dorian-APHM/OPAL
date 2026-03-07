@@ -7,7 +7,9 @@
     "mapping": "Mapping",
     "settings": "Settings",
     "concepts": "Concepts",
-    "ohdsi": "OHDSI Tools"
+    "ohdsi": "OHDSI Tools",
+    "audit": "Audit Log",
+    "users": "Users"
   },
   "cdm": {
     "title": "CDM Management",
