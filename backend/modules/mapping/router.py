@@ -6,13 +6,12 @@ validation workflow, apply mapping, and audit history.
 """
 import csv
 import io
-import json
 import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
@@ -30,16 +29,16 @@ router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 # ──── Request models ────
 
 class SuggestRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    source_value: str
-    source_name: str = ""
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    source_value: str = Field(..., min_length=1, max_length=1000)
+    source_name: str = Field(default="", max_length=1000)
 
 
 class SuggestBatchRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    limit: int = 20
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    limit: int = Field(default=20, ge=1, le=200)
     enable_fuzzy: bool = True
     enable_keyword: bool = True
     enable_contextual: bool = True
@@ -47,30 +46,30 @@ class SuggestBatchRequest(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    source_value: str
-    source_name: str = ""
-    action: str  # approved, modified, rejected
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    source_value: str = Field(..., min_length=1, max_length=1000)
+    source_name: str = Field(default="", max_length=1000)
+    action: str = Field(..., pattern=r"^(approved|modified|rejected)$")
     target_concept_id: int | None = None
-    target_concept_name: str = ""
-    target_vocabulary_id: str = ""
-    suggestion_source: str = ""
-    confidence_score: float | None = None
-    reason: str = ""
+    target_concept_name: str = Field(default="", max_length=500)
+    target_vocabulary_id: str = Field(default="", max_length=100)
+    suggestion_source: str = Field(default="", max_length=50)
+    confidence_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    reason: str = Field(default="", max_length=5000)
 
 
 class BulkDecisionRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    action: str  # approved, rejected
-    min_confidence: float = 80.0
-    source_values: list[str] | None = None
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., pattern=r"^(approved|rejected)$")
+    min_confidence: float = Field(default=80.0, ge=0.0, le=100.0)
+    source_values: list[str] | None = Field(default=None, max_length=1000)
 
 
 class ApplyMappingRequest(BaseModel):
-    cdm_name: str
-    domain: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
     write_to_cdm: bool = False
 
 
@@ -171,6 +170,75 @@ def mapping_evolution(cdm_name: str, domain: str, db: Session = Depends(get_db))
             "unmapped_terms": terms.get("unmapped_terms", 0),
         })
     return {"cdm_name": cdm_name, "domain": domain, "evolution": evolution}
+
+
+# ──── 5.1b Strategy Confidence Statistics ────
+
+@router.get("/strategies/{cdm_name}")
+def strategy_stats(
+    cdm_name: str,
+    domain: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Compute confidence statistics per suggestion strategy.
+    Returns per-strategy: total decisions, approval rate, avg confidence,
+    rejection rate, and modification rate.
+    """
+    query = db.query(MappingDecision).filter(
+        MappingDecision.cdm_name == cdm_name,
+        MappingDecision.suggestion_source.isnot(None),
+        MappingDecision.suggestion_source != "",
+        MappingDecision.suggestion_source != "bulk",
+    )
+    if domain:
+        query = query.filter(MappingDecision.domain == domain)
+
+    decisions = query.all()
+
+    # Group by suggestion_source
+    by_source: dict[str, list] = {}
+    for d in decisions:
+        source = d.suggestion_source or "unknown"
+        # Normalize: strip "rollback of #..." entries
+        if source.startswith("rollback"):
+            continue
+        by_source.setdefault(source, []).append(d)
+
+    strategies = []
+    for source, items in sorted(by_source.items()):
+        total = len(items)
+        approved = sum(1 for d in items if d.action == "approved")
+        modified = sum(1 for d in items if d.action == "modified")
+        rejected = sum(1 for d in items if d.action == "rejected")
+
+        confidences = [d.confidence_score for d in items if d.confidence_score is not None]
+        approved_conf = [d.confidence_score for d in items if d.action == "approved" and d.confidence_score is not None]
+        rejected_conf = [d.confidence_score for d in items if d.action == "rejected" and d.confidence_score is not None]
+
+        strategies.append({
+            "strategy": source,
+            "total_decisions": total,
+            "approved": approved,
+            "modified": modified,
+            "rejected": rejected,
+            "approval_rate": round(approved / total * 100, 1) if total > 0 else 0,
+            "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0,
+            "modification_rate": round(modified / total * 100, 1) if total > 0 else 0,
+            "avg_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
+            "avg_confidence_approved": round(sum(approved_conf) / len(approved_conf), 1) if approved_conf else None,
+            "avg_confidence_rejected": round(sum(rejected_conf) / len(rejected_conf), 1) if rejected_conf else None,
+        })
+
+    # Sort by approval rate descending
+    strategies.sort(key=lambda s: s["approval_rate"], reverse=True)
+
+    return {
+        "cdm_name": cdm_name,
+        "domain": domain,
+        "strategies": strategies,
+        "total_decisions": sum(s["total_decisions"] for s in strategies),
+    }
 
 
 # ──── 5.2 Unmapped Exploration ────

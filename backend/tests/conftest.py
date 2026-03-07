@@ -8,6 +8,7 @@ import pytest
 # Override DATABASE_URL before importing any app modules
 os.environ["DATABASE_URL"] = "sqlite:///./test_opal.db"
 
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -15,6 +16,15 @@ from sqlalchemy.orm import sessionmaker
 from db.models import Base
 from db.app_db import get_db
 from main import app
+
+
+class _FakeAuthMiddleware(BaseHTTPMiddleware):
+    """Inject a default admin user for tests (mimics KeycloakMiddleware when AUTH_ENABLED=false)."""
+    async def dispatch(self, request, call_next):
+        request.state.user = {"sub": "test", "preferred_username": "testuser", "roles": ["admin"]}
+        return await call_next(request)
+
+app.add_middleware(_FakeAuthMiddleware)
 
 # Single test engine shared across all test files
 test_engine = create_engine(

@@ -12,6 +12,7 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
   chercheur: ['/quality', '/cohorts', '/concepts'],
   medecin: ['/mapping', '/cohorts', '/concepts'],
 };
+// /audit and /users are implicitly admin-only since they're not in chercheur/medecin lists
 
 interface AuthContextType {
   authenticated: boolean;
@@ -19,6 +20,7 @@ interface AuthContextType {
   username: string;
   roles: OpalRole[];
   token: string | undefined;
+  login: () => void;
   logout: () => void;
   hasPageAccess: (path: string) => boolean;
 }
@@ -29,6 +31,7 @@ const AuthContext = createContext<AuthContextType>({
   username: '',
   roles: [],
   token: undefined,
+  login: () => {},
   logout: () => {},
   hasPageAccess: () => false,
 });
@@ -48,6 +51,16 @@ const keycloak = new Keycloak({
   clientId: 'opal-frontend',
 });
 
+function extractRoles(tokenParsed: any): OpalRole[] {
+  const tokenRoles: string[] =
+    tokenParsed?.roles ||
+    tokenParsed?.realm_access?.roles ||
+    [];
+  return tokenRoles.filter((r): r is OpalRole =>
+    ['admin', 'omop-dim', 'chercheur', 'medecin'].includes(r)
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -55,44 +68,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [roles, setRoles] = useState<OpalRole[]>([]);
   const [token, setToken] = useState<string | undefined>();
 
+  const applyAuth = useCallback(() => {
+    setTokenGetter(() => keycloak.token);
+    setToken(keycloak.token);
+    setAuthenticated(true);
+    setUsername(keycloak.tokenParsed?.preferred_username || '');
+    setRoles(extractRoles(keycloak.tokenParsed));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     // If already authenticated (StrictMode double-mount), just read state
     if (keycloak.authenticated) {
-      setTokenGetter(() => keycloak.token);
-      setToken(keycloak.token);
-      setAuthenticated(true);
-      setUsername(keycloak.tokenParsed?.preferred_username || '');
-      const tokenRoles: string[] =
-        keycloak.tokenParsed?.roles ||
-        keycloak.tokenParsed?.realm_access?.roles ||
-        [];
-      setRoles(tokenRoles.filter((r): r is OpalRole =>
-        ['admin', 'omop-dim', 'chercheur', 'medecin'].includes(r)
-      ));
+      applyAuth();
       setInitialized(true);
     } else {
       keycloak
         .init({
-          onLoad: 'login-required',
+          onLoad: 'check-sso',
           checkLoginIframe: false,
           pkceMethod: 'S256',
+          silentCheckSsoRedirectUri: undefined,
         })
         .then((auth: boolean) => {
           if (cancelled) return;
-          setAuthenticated(auth);
           if (auth) {
-            setToken(keycloak.token);
-            setUsername(keycloak.tokenParsed?.preferred_username || '');
-            setTokenGetter(() => keycloak.token);
-            const tokenRoles: string[] =
-              keycloak.tokenParsed?.roles ||
-              keycloak.tokenParsed?.realm_access?.roles ||
-              [];
-            setRoles(tokenRoles.filter((r): r is OpalRole =>
-              ['admin', 'omop-dim', 'chercheur', 'medecin'].includes(r)
-            ));
+            applyAuth();
           }
           setInitialized(true);
         })
@@ -124,6 +126,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(interval);
     };
+  }, [applyAuth]);
+
+  const login = useCallback(() => {
+    keycloak.login({ redirectUri: window.location.origin });
   }, []);
 
   const logout = useCallback(() => {
@@ -145,7 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ authenticated, initialized, username, roles, token, logout, hasPageAccess }}
+      value={{ authenticated, initialized, username, roles, token, login, logout, hasPageAccess }}
     >
       {children}
     </AuthContext.Provider>

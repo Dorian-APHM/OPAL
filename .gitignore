@@ -29,6 +29,11 @@ Thumbs.db
 opal_pgdata/
 opal_data/
 
+# Environment files (may contain secrets)
+.env
+.env.local
+.env.*.local
+
 # Misc
 *.png
 demo.html

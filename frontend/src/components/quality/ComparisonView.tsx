@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Row, Col, Select, Button, Card, Alert, Tag, Table, Typography, message, Statistic } from 'antd';
+import { Row, Col, Select, Button, Card, Alert, Tag, Table, Typography, message } from 'antd';
 import { SwapOutlined, WarningOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, qualityApi } from '../../api/client';

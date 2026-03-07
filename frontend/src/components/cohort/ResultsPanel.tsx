@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Card, Statistic, Button, Typography, Space, Tag, Tooltip, Spin, Alert } from 'antd';
+import { Card, Statistic, Button, Typography, Space, Tooltip, Spin, Alert } from 'antd';
 import {
   PlayCircleOutlined, TeamOutlined, BarChartOutlined,
   DownloadOutlined, ThunderboltOutlined, StopOutlined,
@@ -12,7 +12,7 @@ import {
 import { cohortApi, authDownload } from '../../api/client';
 import type { CohortCriteria, AttritionStep } from '../../types';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 interface Props {
   cdmName: string;
@@ -66,27 +66,6 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       setError(e.response?.data?.detail || 'Attrition failed');
     } finally {
       setAttritionLoading(false);
-    }
-  };
-
-  const [exportLoading, setExportLoading] = useState(false);
-  const runExport = async () => {
-    if (!cdmName || !hasCriteria) return;
-    setExportLoading(true);
-    setError('');
-    try {
-      const resp = await cohortApi.exportDirect(cdmName, criteria);
-      const blob = new Blob([resp.data], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'cohort_patients.csv';
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Export failed');
-    } finally {
-      setExportLoading(false);
     }
   };
 
@@ -204,24 +183,17 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       {/* Export */}
       <Card size="small" title={<Space><DownloadOutlined />{t('cohort.export', 'Export')}</Space>}>
         <Space wrap>
-          <Button
-            size="small"
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={runExport}
-            loading={exportLoading}
-            disabled={!hasCriteria || !cdmName}
-          >
-            {t('cohort.export_patients', 'Export patients (CSV)')}
-          </Button>
           {savedCohortId && (
             <>
               <Button
                 size="small"
+                type="primary"
                 icon={<DownloadOutlined />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
               >
-                CSV (IDs only)
+                {criteria.inclusion.sameVisit
+                  ? 'CSV (Patient + Visit IDs)'
+                  : 'CSV (Patient IDs)'}
               </Button>
               <Button
                 size="small"
