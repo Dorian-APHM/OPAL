@@ -290,6 +290,12 @@ export const mappingApi = {
     api.post(`/mapping/history/${decisionId}/rollback`),
   exportHistoryUrl: (cdmName: string, domain?: string) =>
     `/api/mapping/history/${cdmName}/export${domain ? `?domain=${domain}` : ''}`,
+  conceptLookup: (cdmName: string, conceptId: number) =>
+    api.get<{
+      concept_id: number; concept_name: string; concept_code: string;
+      vocabulary_id: string; domain_id: string; standard_concept: string | null;
+      concept_class_id: string;
+    }>(`/mapping/concept-lookup/${cdmName}/${conceptId}`),
 };
 
 // Concept Explorer endpoints

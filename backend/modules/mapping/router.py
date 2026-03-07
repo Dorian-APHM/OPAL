@@ -400,6 +400,47 @@ def export_unmapped(
     )
 
 
+# ──── 5.2b Concept Lookup (for manual mapping) ────
+
+@router.get("/concept-lookup/{cdm_name}/{concept_id}")
+def concept_lookup(cdm_name: str, concept_id: int, db: Session = Depends(get_db)):
+    """
+    Look up a single concept by ID from the CDM vocabulary.
+    Used by the manual mapping workflow to validate a concept_id.
+    """
+    cdm, conn = _get_cdm_conn(db, cdm_name)
+    schema = _get_schema(db, cdm)
+
+    try:
+        from psycopg2.extras import DictCursor
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute(f"""
+                SELECT concept_id, concept_name, concept_code,
+                       vocabulary_id, domain_id, standard_concept, concept_class_id
+                FROM {schema}.concept
+                WHERE concept_id = %(cid)s
+            """, {"cid": concept_id})
+            row = cur.fetchone()
+    except Exception as e:
+        logger.exception("Concept lookup failed")
+        raise HTTPException(status_code=500, detail=f"Lookup error: {e}")
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Concept {concept_id} not found")
+
+    return {
+        "concept_id": row["concept_id"],
+        "concept_name": row["concept_name"],
+        "concept_code": row["concept_code"],
+        "vocabulary_id": row["vocabulary_id"],
+        "domain_id": row["domain_id"],
+        "standard_concept": row["standard_concept"],
+        "concept_class_id": row["concept_class_id"],
+    }
+
+
 # ──── 5.3 Auto-Suggestion ────
 
 def _get_sapbert_suggestions(db: Session, source_value: str, domain: str) -> list[dict]:
