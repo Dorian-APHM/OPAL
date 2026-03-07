@@ -2,27 +2,28 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, Space, Typography,
   Statistic, Row, Col, Empty, Spin, message, Popconfirm, Tooltip,
-  Progress, Modal, InputNumber, Pagination, Checkbox,
+  Modal, InputNumber, Pagination, Checkbox,
 } from 'antd';
 import {
   BarChartOutlined, SearchOutlined, BulbOutlined, HistoryOutlined,
   DownloadOutlined, CheckOutlined, CloseOutlined, EditOutlined,
-  UndoOutlined, ThunderboltOutlined, ExportOutlined, WarningOutlined,
+  UndoOutlined, ThunderboltOutlined, WarningOutlined,
   StopOutlined, ReloadOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, LineChart, Line, Legend, Cell,
+  ResponsiveContainer, LineChart, Line, Legend,
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
 import { useAuth } from '../auth/KeycloakContext';
 import type {
   MappingDomainStat, MappingEvolutionPoint, UnmappedItem,
   SuggestionResult, MappingSuggestion, MappingDecisionEntry,
+  StrategyStats,
 } from '../types';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { TabPane } = Tabs;
 
@@ -73,6 +74,8 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   const [evolution, setEvolution] = useState<MappingEvolutionPoint[]>([]);
   const [evoDomain, setEvoDomain] = useState('Condition');
   const [loading, setLoading] = useState(true);
+  const [strategyData, setStrategyData] = useState<StrategyStats[]>([]);
+  const [strategyDomain, setStrategyDomain] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     setLoading(true);
@@ -87,6 +90,12 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       .then(r => setEvolution(r.data.evolution))
       .catch(() => setEvolution([]));
   }, [cdmName, evoDomain]);
+
+  useEffect(() => {
+    mappingApi.strategyStats(cdmName, strategyDomain)
+      .then(r => setStrategyData(r.data.strategies))
+      .catch(() => setStrategyData([]));
+  }, [cdmName, strategyDomain]);
 
   if (loading) return <Spin />;
 
@@ -140,6 +149,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             {DOMAIN_LIST.map(d => <Option key={d} value={d}>{d}</Option>)}
           </Select>
         }
+        style={{ marginBottom: 16 }}
       >
         {evolution.length > 0 ? (
           <ResponsiveContainer width="100%" height={250}>
@@ -155,6 +165,64 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
           </ResponsiveContainer>
         ) : (
           <Text type="secondary">{t('mapping.no_evolution', 'Run multiple analyses to see evolution')}</Text>
+        )}
+      </Card>
+
+      {/* Strategy Confidence Stats */}
+      <Card
+        title={t('mapping.strategy_stats', 'Strategy Performance')}
+        extra={
+          <Select
+            size="small"
+            value={strategyDomain}
+            onChange={setStrategyDomain}
+            style={{ width: 150 }}
+            allowClear
+            placeholder={t('mapping.all_domains', 'All domains')}
+          >
+            {DOMAIN_LIST.map(d => <Option key={d} value={d}>{d}</Option>)}
+          </Select>
+        }
+      >
+        {strategyData.length > 0 ? (
+          <>
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={strategyData} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} />
+                <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} />
+                <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} />
+                <Legend />
+                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill="#52c41a" stackId="a" />
+                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill="#faad14" stackId="a" />
+                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill="#ff4d4f" stackId="a" />
+              </BarChart>
+            </ResponsiveContainer>
+            <Table
+              size="small"
+              dataSource={strategyData}
+              rowKey="strategy"
+              pagination={false}
+              style={{ marginTop: 12 }}
+              columns={[
+                { title: t('mapping.strategy', 'Strategy'), dataIndex: 'strategy', key: 'strategy',
+                  render: (v: string) => <Tag>{v}</Tag> },
+                { title: t('mapping.total_decisions', 'Decisions'), dataIndex: 'total_decisions', key: 'total' },
+                { title: t('mapping.approved', 'Approved'), dataIndex: 'approved', key: 'approved',
+                  render: (v: number, r: StrategyStats) => <span style={{ color: '#52c41a' }}>{v} ({r.approval_rate}%)</span> },
+                { title: t('mapping.modified', 'Modified'), dataIndex: 'modified', key: 'modified',
+                  render: (v: number, r: StrategyStats) => <span style={{ color: '#faad14' }}>{v} ({r.modification_rate}%)</span> },
+                { title: t('mapping.rejected', 'Rejected'), dataIndex: 'rejected', key: 'rejected',
+                  render: (v: number, r: StrategyStats) => <span style={{ color: '#ff4d4f' }}>{v} ({r.rejection_rate}%)</span> },
+                { title: t('mapping.avg_confidence', 'Avg Confidence'), dataIndex: 'avg_confidence', key: 'conf',
+                  render: (v: number | null) => v != null ? `${v}%` : '—' },
+                { title: t('mapping.avg_conf_approved', 'Avg Conf. (Approved)'), dataIndex: 'avg_confidence_approved', key: 'conf_a',
+                  render: (v: number | null) => v != null ? <span style={{ color: '#52c41a' }}>{v}%</span> : '—' },
+              ]}
+            />
+          </>
+        ) : (
+          <Empty description={t('mapping.no_strategy_data', 'No mapping decisions yet. Approve or reject suggestions to see strategy performance.')} />
         )}
       </Card>
     </div>

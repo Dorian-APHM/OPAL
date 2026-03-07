@@ -18,6 +18,13 @@ import type {
   SuggestionResult,
   MappingDecisionEntry,
   CohortComparisonResult,
+  StrategyStats,
+  PatientJourneyEvent,
+  PatientJourneyInfo,
+  AuditEntry,
+  AuditStats,
+  AdminUser,
+  AccessRequest,
 } from '../types';
 
 const api = axios.create({
@@ -38,6 +45,30 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// Unified error response interceptor
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response) {
+      const { status, data } = error.response;
+      const detail = data?.detail || data?.message || data?.error;
+      if (detail && typeof detail === 'string') {
+        error.message = detail;
+      }
+      if (status === 401) {
+        error.message = 'Session expired. Please log in again.';
+      } else if (status === 504) {
+        error.message = detail || 'Query timed out. Try a simpler query.';
+      } else if (status === 502) {
+        error.message = detail || 'External database connection error.';
+      }
+    } else if (error.code === 'ERR_NETWORK') {
+      error.message = 'Network error. Please check your connection.';
+    }
+    return Promise.reject(error);
+  },
+);
 
 /** Get current auth token (for fetch/download calls outside axios) */
 export function getAuthToken(): string | undefined {
@@ -150,8 +181,12 @@ export const qualityApi = {
     ),
   reportUrl: (cdmName: string, lang: string = 'en') =>
     `/api/quality/report/${cdmName}?lang=${lang}`,
+  reportPdfUrl: (cdmName: string, lang: string = 'en') =>
+    `/api/quality/report/${cdmName}/pdf?lang=${lang}`,
   comparisonReportUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
     `/api/quality/report/comparison?cdm_name_a=${encodeURIComponent(cdmNameA)}&cdm_name_b=${encodeURIComponent(cdmNameB)}&lang=${lang}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
+  comparisonReportPdfUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
+    `/api/quality/report/comparison/pdf?cdm_name_a=${encodeURIComponent(cdmNameA)}&cdm_name_b=${encodeURIComponent(cdmNameB)}&lang=${lang}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
 };
 
 // Cohort endpoints
@@ -185,8 +220,6 @@ export const cohortApi = {
     api.get<{ vocabularies: { vocabulary_id: string; vocabulary_name: string }[] }>('/cohorts/concepts/vocabularies', { params: { cdm_name: cdmName } }),
   listDomains: () =>
     api.get<{ domains: { name: string; table: string }[] }>('/cohorts/domains'),
-  exportDirect: (cdmName: string, criteria: CohortCriteria) =>
-    api.post('/cohorts/export/direct', { cdm_name: cdmName, criteria }, { responseType: 'blob' }),
   characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, signal?: AbortSignal, visitLevel?: boolean) =>
     api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25, visit_level: visitLevel || false }, { signal }),
   saveCharacterization: (cohortId: number, characterization: CharacterizationResult) =>
@@ -200,12 +233,26 @@ export const cohortApi = {
       cohort_id_b: cohortIdB,
       visit_level: visitLevel || false,
     }),
+  executeSql: (cdmName: string, sql: string, limit?: number) =>
+    api.post<{ columns: string[]; rows: Record<string, any>[]; row_count: number; truncated: boolean }>(
+      '/cohorts/sql/execute', { cdm_name: cdmName, sql, limit: limit || 1000 }
+    ),
+  exportSql: (cdmName: string, sql: string) =>
+    api.post('/cohorts/sql/export', { cdm_name: cdmName, sql }, { responseType: 'blob' }),
+  patientJourney: (cdmName: string, personId: number) =>
+    api.get<{ person: PatientJourneyInfo; events: PatientJourneyEvent[] }>(
+      `/cohorts/patient/${personId}/journey`, { params: { cdm_name: cdmName } }
+    ),
 };
 
 // Mapping endpoints
 export const mappingApi = {
   dashboard: (cdmName: string) =>
     api.get<MappingDashboardData>(`/mapping/dashboard/${cdmName}`),
+  strategyStats: (cdmName: string, domain?: string) =>
+    api.get<{ cdm_name: string; domain: string | null; strategies: StrategyStats[]; total_decisions: number }>(
+      `/mapping/strategies/${cdmName}`, { params: domain ? { domain } : {} }
+    ),
   evolution: (cdmName: string, domain: string) =>
     api.get<{ evolution: MappingEvolutionPoint[] }>(`/mapping/dashboard/${cdmName}/evolution`, { params: { domain } }),
   unmapped: (cdmName: string, domain: string, page?: number, pageSize?: number, search?: string) =>
@@ -231,10 +278,6 @@ export const mappingApi = {
     target_vocabulary_id?: string; suggestion_source?: string; confidence_score?: number;
     reason?: string;
   }) => api.post('/mapping/decide', data),
-  decideBulk: (data: {
-    cdm_name: string; domain: string; action: string;
-    min_confidence?: number; source_values?: string[];
-  }) => api.post('/mapping/decide/bulk', data),
   apply: (cdmName: string, domain: string, writeToCdm?: boolean) =>
     api.post('/mapping/apply', { cdm_name: cdmName, domain, write_to_cdm: writeToCdm || false }),
   applyPreview: (cdmName: string, domain: string) =>
@@ -251,17 +294,6 @@ export const mappingApi = {
     api.post(`/mapping/history/${decisionId}/rollback`),
   exportHistoryUrl: (cdmName: string, domain?: string) =>
     `/api/mapping/history/${cdmName}/export${domain ? `?domain=${domain}` : ''}`,
-  listReferences: () =>
-    api.get<{ references: { name: string; domain: string; count: number; uploaded_at: string | null }[] }>('/mapping/reference'),
-  uploadReference: (name: string, domain: string, file: File) => {
-    const form = new FormData();
-    form.append('name', name);
-    form.append('domain', domain);
-    form.append('file', file);
-    return api.post<{ name: string; domain: string; count: number }>('/mapping/reference/upload', form);
-  },
-  deleteReference: (name: string) =>
-    api.delete(`/mapping/reference/${name}`),
 };
 
 // Concept Explorer endpoints
@@ -331,9 +363,51 @@ export const ohdsiApi = {
   fileUrl: (path: string) => `/api/ohdsi/files/${path}`,
 };
 
-// i18n
-export const i18nApi = {
-  getTranslations: (lang: string) => api.get(`/i18n/${lang}`),
+// Audit endpoints (admin only)
+export const auditApi = {
+  logs: (params: {
+    date_from?: string; date_to?: string; date?: string;
+    user?: string; action?: string; page?: number; page_size?: number;
+  }) => api.get<{
+    entries: AuditEntry[]; total: number; page: number;
+    page_size: number; total_pages: number;
+  }>('/audit/logs', { params }),
+  stats: (params?: { date_from?: string; date_to?: string }) =>
+    api.get<AuditStats>('/audit/stats', { params }),
+  dates: () => api.get<{ dates: string[] }>('/audit/dates'),
+  exportUrl: (params: { date_from?: string; date_to?: string; user?: string; action?: string }) => {
+    const qs = new URLSearchParams();
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    if (params.user) qs.set('user', params.user);
+    if (params.action) qs.set('action', params.action);
+    return `/api/audit/export?${qs.toString()}`;
+  },
+};
+
+// Admin endpoints (admin only)
+export const adminApi = {
+  users: () => api.get<{ users: AdminUser[]; error?: string }>('/admin/users'),
+  assignRole: (userId: string, role: string) =>
+    api.post(`/admin/users/${userId}/roles`, { role }),
+  removeRole: (userId: string, role: string) =>
+    api.delete(`/admin/users/${userId}/roles/${role}`),
+  toggleUser: (userId: string, enabled: boolean) =>
+    api.put(`/admin/users/${userId}/toggle`, { enabled }),
+  accessRequests: (statusFilter = 'pending') =>
+    api.get<{ requests: AccessRequest[] }>('/admin/access-requests', { params: { status_filter: statusFilter } }),
+  approveRequest: (id: number) =>
+    api.post(`/admin/access-requests/${id}/approve`),
+  rejectRequest: (id: number) =>
+    api.post(`/admin/access-requests/${id}/reject`),
+};
+
+// Public endpoint (no auth needed)
+export const publicApi = {
+  submitAccessRequest: (data: {
+    username: string; email: string;
+    first_name: string; last_name: string; requested_role: string;
+  }) => api.post('/access-requests', data),
 };
 
 export default api;

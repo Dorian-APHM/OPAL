@@ -18,9 +18,16 @@ COPY . .
 ENV http_proxy=""
 ENV https_proxy=""
 
-# Create data directory
-RUN mkdir -p /app/data
+# Create non-root user and required directories
+RUN addgroup --system opal && adduser --system --ingroup opal opal \
+    && mkdir -p /app/data /app/logs \
+    && chown -R opal:opal /app/data /app/logs
+
+USER opal
 
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

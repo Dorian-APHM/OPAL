@@ -332,6 +332,28 @@ export interface AttritionStep {
   error?: string;
 }
 
+/** Patient journey event (from timeline endpoint) */
+export interface PatientJourneyEvent {
+  domain: string;
+  start_date: string | null;
+  end_date?: string;
+  concept_id: number | null;
+  concept_name: string;
+  source_value: string;
+  value_as_number?: number;
+  unit_source_value?: string;
+  quantity?: number;
+}
+
+/** Patient info returned with journey */
+export interface PatientJourneyInfo {
+  person_id: number;
+  year_of_birth: number;
+  gender: string;
+  observation_period_start_date: string | null;
+  observation_period_end_date: string | null;
+}
+
 /** Sample patient row */
 export interface SamplePatient {
   person_id: number;
@@ -522,6 +544,21 @@ export interface MappingDomainStat {
   snapshot_date: string | null;
 }
 
+/** Strategy confidence statistics */
+export interface StrategyStats {
+  strategy: string;
+  total_decisions: number;
+  approved: number;
+  modified: number;
+  rejected: number;
+  approval_rate: number;
+  rejection_rate: number;
+  modification_rate: number;
+  avg_confidence: number | null;
+  avg_confidence_approved: number | null;
+  avg_confidence_rejected: number | null;
+}
+
 /** Mapping dashboard response */
 export interface MappingDashboardData {
   cdm_name: string;
@@ -581,5 +618,56 @@ export interface MappingDecisionEntry {
   confidence_score: number | null;
   user: string;
   reason: string;
+  created_at: string | null;
+}
+
+// ──── Audit types ────
+
+/** Audit log entry */
+export interface AuditEntry {
+  ts: string;
+  user: string;
+  roles: string[];
+  action: string;
+  method: string;
+  path: string;
+  status: number;
+  duration_ms: number;
+  ip: string;
+  params?: Record<string, string>;
+}
+
+/** Audit stats */
+export interface AuditStats {
+  total_events: number;
+  by_user: { user: string; count: number }[];
+  by_action: { action: string; count: number }[];
+}
+
+// ──── Admin user types ────
+
+/** Keycloak user */
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  enabled: boolean;
+  created_at: number | null;
+  roles: string[];
+}
+
+/** Access request */
+export interface AccessRequest {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  requested_role: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   created_at: string | null;
 }

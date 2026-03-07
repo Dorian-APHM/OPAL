@@ -1,4 +1,4 @@
-import { Card, Statistic, Row, Col, Table, Typography, Tag, Button, Space } from 'antd';
+import { Card, Statistic, Row, Col, Table, Typography, Tag, Button } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import {
@@ -42,7 +42,7 @@ function formatNumber(n: number | null | undefined): string {
   return n.toLocaleString();
 }
 
-function ExportButton({ snapshotId, tableType, label }: { snapshotId?: number; tableType: string; label: string }) {
+function ExportButton({ snapshotId, tableType }: { snapshotId?: number; tableType: string }) {
   const { t } = useTranslation();
   if (!snapshotId) return null;
   return (
@@ -58,16 +58,15 @@ function ExportButton({ snapshotId, tableType, label }: { snapshotId?: number; t
 
 interface Props {
   results: any;
-  titlePrefix?: string;
   snapshotId?: number;
 }
 
-export default function AnalysisResults({ results, titlePrefix = '', snapshotId }: Props) {
+export default function AnalysisResults({ results, snapshotId }: Props) {
   if (!results) return null;
   const domain = results.domain;
 
   if (domain === 'Dashboard') return <DashboardView data={results} snapshotId={snapshotId} />;
-  if (domain === 'Person') return <PersonView data={results} snapshotId={snapshotId} />;
+  if (domain === 'Person') return <PersonView data={results} />;
   if (domain === 'ObservationPeriod') return <ObsPeriodView data={results} snapshotId={snapshotId} />;
   return <ClinicalView data={results} snapshotId={snapshotId} />;
 }
@@ -75,7 +74,7 @@ export default function AnalysisResults({ results, titlePrefix = '', snapshotId 
 // ============ SPARKLINE MINI CHART ============
 function MiniSparkline({ data }: { data?: number[] }) {
   if (!data || data.length === 0) return <span>-</span>;
-  const chartData = data.map((v, i) => ({ v }));
+  const chartData = data.map((v) => ({ v }));
   return (
     <ResponsiveContainer width={80} height={24}>
       <AreaChart data={chartData} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
@@ -128,7 +127,7 @@ function DashboardView({ data, snapshotId }: { data: DashboardResults; snapshotI
       <Card
         title={t('quality.domain_stats')}
         style={{ marginBottom: 16 }}
-        extra={<ExportButton snapshotId={snapshotId} tableType="domain_stats" label="CSV" />}
+        extra={<ExportButton snapshotId={snapshotId} tableType="domain_stats" />}
       >
         <Table
           dataSource={summary.domains.filter(d => !d.error)}
@@ -152,7 +151,7 @@ function DashboardView({ data, snapshotId }: { data: DashboardResults; snapshotI
 }
 
 // ============ PERSON ============
-function PersonView({ data, snapshotId }: { data: PersonResults; snapshotId?: number }) {
+function PersonView({ data }: { data: PersonResults }) {
   const { t } = useTranslation();
   const ps = data.achilles_like.person_summary;
 
@@ -316,7 +315,7 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
           <Card
             title={t('quality.age_by_gender')}
             style={{ marginBottom: 16 }}
-            extra={<ExportButton snapshotId={snapshotId} tableType="age_by_gender" label="CSV" />}
+            extra={<ExportButton snapshotId={snapshotId} tableType="age_by_gender" />}
           >
             <Table
               dataSource={al.age_by_gender.rows}
@@ -355,7 +354,7 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
           <Card
             title={t('quality.duration_by_gender')}
             style={{ marginBottom: 16 }}
-            extra={<ExportButton snapshotId={snapshotId} tableType="duration_by_gender" label="CSV" />}
+            extra={<ExportButton snapshotId={snapshotId} tableType="duration_by_gender" />}
           >
             <Table
               dataSource={al.duration_by_gender.rows}
@@ -489,7 +488,7 @@ function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?
       <Card
         title={t('quality.top_concepts')}
         style={{ marginBottom: 16 }}
-        extra={<ExportButton snapshotId={snapshotId} tableType="top_concepts" label="CSV" />}
+        extra={<ExportButton snapshotId={snapshotId} tableType="top_concepts" />}
       >
         <Table dataSource={al.top_concepts} columns={conceptColumns} rowKey="concept_id" pagination={{ pageSize: 20 }} size="small" scroll={{ x: true }} />
       </Card>
@@ -522,7 +521,7 @@ function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?
       {mapping.top_unmapped_terms && mapping.top_unmapped_terms.length > 0 && (
         <Card
           title={t('quality.top_unmapped')}
-          extra={<ExportButton snapshotId={snapshotId} tableType="top_unmapped" label="CSV" />}
+          extra={<ExportButton snapshotId={snapshotId} tableType="top_unmapped" />}
         >
           <Table dataSource={mapping.top_unmapped_terms} columns={unmappedColumns} rowKey="source_value" pagination={{ pageSize: 20 }} size="small" />
         </Card>
