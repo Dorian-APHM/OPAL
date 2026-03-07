@@ -181,12 +181,8 @@ export const qualityApi = {
     ),
   reportUrl: (cdmName: string, lang: string = 'en') =>
     `/api/quality/report/${cdmName}?lang=${lang}`,
-  reportPdfUrl: (cdmName: string, lang: string = 'en') =>
-    `/api/quality/report/${cdmName}/pdf?lang=${lang}`,
   comparisonReportUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
     `/api/quality/report/comparison?cdm_name_a=${encodeURIComponent(cdmNameA)}&cdm_name_b=${encodeURIComponent(cdmNameB)}&lang=${lang}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
-  comparisonReportPdfUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
-    `/api/quality/report/comparison/pdf?cdm_name_a=${encodeURIComponent(cdmNameA)}&cdm_name_b=${encodeURIComponent(cdmNameB)}&lang=${lang}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
 };
 
 // Cohort endpoints
