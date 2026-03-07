@@ -6,7 +6,6 @@ import {
 import {
   PlayCircleOutlined, ThunderboltOutlined, SwapOutlined, HistoryOutlined,
   DownloadOutlined, LineChartOutlined, CheckCircleOutlined, StopOutlined,
-  FilePdfOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { qualityApi, authDownload } from '../api/client';
@@ -235,16 +234,6 @@ export default function QualityPage({ selectedCdm }: Props) {
               )}
             >
               HTML
-            </Button>
-            <Button
-              icon={<FilePdfOutlined />}
-              onClick={() => authDownload(
-                compareMode && compareCdm
-                  ? qualityApi.comparisonReportPdfUrl(selectedCdm, compareCdm, i18n.language, selectedDomain || undefined)
-                  : qualityApi.reportPdfUrl(selectedCdm, i18n.language)
-              )}
-            >
-              PDF
             </Button>
             <SwapOutlined />
             <Switch
