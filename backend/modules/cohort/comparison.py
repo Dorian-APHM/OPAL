@@ -6,7 +6,6 @@ Takes two CharacterizationResult dicts and computes SMD for every variable:
   - Binary:    (p_A - p_B) / sqrt((p_A*(1-p_A) + p_B*(1-p_B)) / 2)
 """
 import math
-from typing import Any
 
 
 def compute_smd_continuous(

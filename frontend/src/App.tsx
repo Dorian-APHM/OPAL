@@ -1,17 +1,66 @@
-import { useState } from 'react';
+import { useState, lazy, Suspense, Component, type ReactNode, type ErrorInfo } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Layout, ConfigProvider, theme as antTheme, Result, Spin } from 'antd';
+import { Layout, ConfigProvider, theme as antTheme, Result, Spin, Button } from 'antd';
 import Sidebar from './components/layout/Sidebar';
-import QualityPage from './pages/QualityPage';
-import CohortPage from './pages/CohortPage';
-import MappingPage from './pages/MappingPage';
-import CdmManagementPage from './pages/CdmManagementPage';
-import SettingsPage from './pages/SettingsPage';
-import ConceptExplorerPage from './pages/ConceptExplorerPage';
-import OhdsiPage from './pages/OhdsiPage';
 import { useAuth } from './auth/KeycloakContext';
 
+// Lazy-loaded pages for code splitting
+const QualityPage = lazy(() => import('./pages/QualityPage'));
+const CohortPage = lazy(() => import('./pages/CohortPage'));
+const MappingPage = lazy(() => import('./pages/MappingPage'));
+const CdmManagementPage = lazy(() => import('./pages/CdmManagementPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const ConceptExplorerPage = lazy(() => import('./pages/ConceptExplorerPage'));
+const OhdsiPage = lazy(() => import('./pages/OhdsiPage'));
+const AuditPage = lazy(() => import('./pages/AuditPage'));
+const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+
 const { Content } = Layout;
+
+// Error Boundary for catching render errors
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('ErrorBoundary caught:', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Result
+          status="error"
+          title="Something went wrong"
+          subTitle={this.state.error?.message || 'An unexpected error occurred.'}
+          extra={
+            <Button type="primary" onClick={() => this.setState({ hasError: false })}>
+              Try Again
+            </Button>
+          }
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function PageSuspense({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spin size="large" /></div>}>
+      <ErrorBoundary>{children}</ErrorBoundary>
+    </Suspense>
+  );
+}
 
 function ForbiddenPage() {
   return (
@@ -28,7 +77,7 @@ function ProtectedRoute({ path, children }: { path: string; children: React.Reac
   return hasPageAccess(path) ? <>{children}</> : <ForbiddenPage />;
 }
 
-const ALL_PAGES = ['/quality', '/cohorts', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings'];
+const ALL_PAGES = ['/quality', '/cohorts', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
 
 function DefaultRedirect() {
   const { hasPageAccess } = useAuth();
@@ -37,7 +86,7 @@ function DefaultRedirect() {
 }
 
 export default function App() {
-  const { initialized, authenticated } = useAuth();
+  const { initialized, authenticated, login } = useAuth();
   const [selectedCdm, setSelectedCdm] = useState<string | null>(
     localStorage.getItem('opal-selected-cdm')
   );
@@ -67,9 +116,9 @@ export default function App() {
 
   if (!authenticated) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Result status="error" title="Authentication Failed" subTitle="Unable to authenticate. Please try again." />
-      </div>
+      <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><Spin size="large" /></div>}>
+        <LoginPage onSignIn={login} />
+      </Suspense>
     );
   }
 
@@ -131,28 +180,36 @@ export default function App() {
               <Route path="/" element={<DefaultRedirect />} />
               <Route
                 path="/quality"
-                element={<ProtectedRoute path="/quality"><QualityPage selectedCdm={selectedCdm} /></ProtectedRoute>}
+                element={<ProtectedRoute path="/quality"><PageSuspense><QualityPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
               />
-              <Route path="/cdm" element={<ProtectedRoute path="/cdm"><CdmManagementPage /></ProtectedRoute>} />
+              <Route path="/cdm" element={<ProtectedRoute path="/cdm"><PageSuspense><CdmManagementPage /></PageSuspense></ProtectedRoute>} />
               <Route
                 path="/settings"
-                element={<ProtectedRoute path="/settings"><SettingsPage selectedCdm={selectedCdm} /></ProtectedRoute>}
+                element={<ProtectedRoute path="/settings"><PageSuspense><SettingsPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
               />
               <Route
                 path="/cohorts"
-                element={<ProtectedRoute path="/cohorts"><CohortPage selectedCdm={selectedCdm} /></ProtectedRoute>}
+                element={<ProtectedRoute path="/cohorts"><PageSuspense><CohortPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
               />
               <Route
                 path="/mapping"
-                element={<ProtectedRoute path="/mapping"><MappingPage selectedCdm={selectedCdm} /></ProtectedRoute>}
+                element={<ProtectedRoute path="/mapping"><PageSuspense><MappingPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
               />
               <Route
                 path="/concepts"
-                element={<ProtectedRoute path="/concepts"><ConceptExplorerPage selectedCdm={selectedCdm} /></ProtectedRoute>}
+                element={<ProtectedRoute path="/concepts"><PageSuspense><ConceptExplorerPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
               />
               <Route
                 path="/ohdsi"
-                element={<ProtectedRoute path="/ohdsi"><OhdsiPage selectedCdm={selectedCdm} /></ProtectedRoute>}
+                element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/audit"
+                element={<ProtectedRoute path="/audit"><PageSuspense><AuditPage /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/users"
+                element={<ProtectedRoute path="/users"><PageSuspense><UserManagementPage /></PageSuspense></ProtectedRoute>}
               />
               <Route path="*" element={<ForbiddenPage />} />
             </Routes>

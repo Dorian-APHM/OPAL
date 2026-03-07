@@ -6,13 +6,12 @@ attrition, sampling), and CSV export.
 """
 import csv
 import io
-import json
 import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -39,35 +38,35 @@ router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
 # ──── Request / Response models ────
 
 class CohortCreateRequest(BaseModel):
-    cdm_name: str
-    name: str
-    description: str = ""
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    name: str = Field(..., min_length=1, max_length=500)
+    description: str = Field(default="", max_length=5000)
     criteria: dict
 
 
 class CohortUpdateRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(default=None, max_length=500)
+    description: str | None = Field(default=None, max_length=5000)
     criteria: dict | None = None
 
 
 class CohortCountRequest(BaseModel):
-    cdm_name: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
 
 
 class CohortSampleRequest(BaseModel):
-    cdm_name: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
-    limit: int = 10
+    limit: int = Field(default=10, ge=1, le=1000)
 
 
 class ConceptSearchRequest(BaseModel):
-    cdm_name: str
-    query: str
-    domain: str | None = None
-    vocabulary_id: str | None = None
-    limit: int = 30
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    query: str = Field(..., min_length=1, max_length=500)
+    domain: str | None = Field(default=None, max_length=100)
+    vocabulary_id: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=30, ge=1, le=200)
 
 
 # ──── Helpers ────
@@ -587,6 +586,124 @@ def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
     )
 
 
+class RawSqlRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    sql: str = Field(..., min_length=1, max_length=50000)
+    limit: int = Field(default=1000, ge=1, le=10000)
+
+
+@router.post("/sql/execute")
+def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+    """
+    Execute a raw read-only SQL query against a CDM.
+    Only SELECT statements are allowed.
+    """
+    import re
+    sql_stripped = req.sql.strip().rstrip(";")
+
+    # Only allow SELECT statements (block DML/DDL)
+    first_keyword = re.split(r"\s+", sql_stripped, maxsplit=1)[0].upper()
+    if first_keyword not in ("SELECT", "WITH", "EXPLAIN"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SELECT, WITH (CTE), and EXPLAIN queries are allowed",
+        )
+
+    # Block dangerous keywords anywhere in the query
+    sql_upper = sql_stripped.upper()
+    blocked = ["INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ",
+                "TRUNCATE ", "GRANT ", "REVOKE ", "COPY ", "\\\\"]
+    for kw in blocked:
+        if kw in sql_upper:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Forbidden keyword detected: {kw.strip()}",
+            )
+
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+
+    # Wrap in a read-only transaction for safety
+    try:
+        conn.set_session(readonly=True, autocommit=False)
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Apply LIMIT if not already present
+            if "LIMIT" not in sql_upper:
+                final_sql = f"{sql_stripped}\nLIMIT {req.limit}"
+            else:
+                final_sql = sql_stripped
+            cur.execute(final_sql)
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            rows = [dict(r) for r in cur.fetchall()]
+            # Convert non-serializable types
+            for row in rows:
+                for k, v in row.items():
+                    if hasattr(v, 'isoformat'):
+                        row[k] = v.isoformat()
+                    elif isinstance(v, (bytes, memoryview)):
+                        row[k] = str(v)
+    except Exception as e:
+        logger.exception("Raw SQL execution failed")
+        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+    finally:
+        conn.close()
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "row_count": len(rows),
+        "truncated": len(rows) >= req.limit,
+    }
+
+
+@router.post("/sql/export")
+def export_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+    """Execute a raw SQL query and return results as CSV."""
+    import re
+    sql_stripped = req.sql.strip().rstrip(";")
+
+    first_keyword = re.split(r"\s+", sql_stripped, maxsplit=1)[0].upper()
+    if first_keyword not in ("SELECT", "WITH"):
+        raise HTTPException(status_code=400, detail="Only SELECT/WITH queries allowed")
+
+    sql_upper = sql_stripped.upper()
+    blocked = ["INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ",
+                "TRUNCATE ", "GRANT ", "REVOKE ", "COPY ", "\\\\"]
+    for kw in blocked:
+        if kw in sql_upper:
+            raise HTTPException(status_code=400, detail=f"Forbidden keyword: {kw.strip()}")
+
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+
+    try:
+        conn.set_session(readonly=True, autocommit=False)
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql_stripped)
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+    finally:
+        conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([
+            v.isoformat() if hasattr(v, 'isoformat') else v
+            for v in (row[c] for c in columns)
+        ])
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=sql_export.csv"},
+    )
+
+
 class CharacterizationRequest(BaseModel):
     cdm_name: str
     criteria: dict
@@ -824,12 +941,15 @@ def export_cohort(
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
-    # CSV: execute and export patient IDs
+    # CSV: export patient IDs (+ visit_occurrence_id when sameVisit)
     cdm, conn = _get_cdm_conn(db, cohort.cdm_name)
     schema = _get_omop_schema(db, cdm)
+    has_same_visit = bool(
+        latest.criteria_json.get("inclusion", {}).get("sameVisit", False)
+    )
 
     try:
-        sql = build_cohort_sql(latest.criteria_json, schema)
+        sql = build_cohort_sql(latest.criteria_json, schema, include_visit_id=has_same_visit)
         from psycopg2.extras import DictCursor
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute(sql)
@@ -837,9 +957,14 @@ def export_cohort(
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["person_id"])
-        for row in rows:
-            writer.writerow([row["person_id"]])
+        if has_same_visit:
+            writer.writerow(["person_id", "visit_occurrence_id"])
+            for row in rows:
+                writer.writerow([row["person_id"], row["visit_occurrence_id"]])
+        else:
+            writer.writerow(["person_id"])
+            for row in rows:
+                writer.writerow([row["person_id"]])
         output.seek(0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export error: {e}")
@@ -852,3 +977,127 @@ def export_cohort(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ──── Patient Journey ────
+
+@router.get("/patient/{person_id}/journey")
+def patient_journey(
+    person_id: int,
+    cdm_name: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the full clinical timeline for a single patient across all OMOP domains.
+    Events are returned grouped by domain, each with date, concept_id, concept_name,
+    and source_value.  The frontend renders these on a horizontal timeline.
+    """
+    cdm, conn = _get_cdm_conn(db, cdm_name)
+    schema = _get_omop_schema(db, cdm)
+
+    # End-date columns for domains that have them
+    _end_date = {
+        "Condition": "condition_end_date",
+        "Drug": "drug_exposure_end_date",
+        "Visit": "visit_end_date",
+        "Device": "device_exposure_end_date",
+    }
+
+    # Extra value columns worth fetching
+    _extra_cols = {
+        "Measurement": ["value_as_number", "unit_source_value"],
+        "Drug": ["quantity"],
+    }
+
+    events: list[dict] = []
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Person demographics
+            cur.execute(
+                f"""
+                SELECT p.person_id, p.year_of_birth,
+                       g.concept_name AS gender,
+                       op.observation_period_start_date,
+                       op.observation_period_end_date
+                FROM {schema}.person p
+                LEFT JOIN {schema}.concept g
+                    ON g.concept_id = p.gender_concept_id
+                LEFT JOIN {schema}.observation_period op
+                    ON op.person_id = p.person_id
+                WHERE p.person_id = %s
+                LIMIT 1
+                """,
+                (person_id,),
+            )
+            person_row = cur.fetchone()
+            if not person_row:
+                raise HTTPException(status_code=404, detail="Person not found in CDM")
+            person_info = dict(person_row)
+            for k, v in person_info.items():
+                if hasattr(v, "isoformat"):
+                    person_info[k] = v.isoformat()
+
+            # Query each clinical domain
+            for domain_name, dcfg in DOMAIN_CONFIG.items():
+                table = dcfg["table"]
+                date_col = dcfg["date_col"]
+                concept_col = dcfg["concept_id"]
+                source_val = dcfg["source_value"]
+                end_date_col = _end_date.get(domain_name)
+                extras = _extra_cols.get(domain_name, [])
+
+                select_parts = [
+                    f"t.{date_col} AS start_date",
+                    f"t.{concept_col} AS concept_id",
+                    f"t.{source_val} AS source_value",
+                    "c.concept_name",
+                ]
+                if end_date_col:
+                    select_parts.append(f"t.{end_date_col} AS end_date")
+                for extra in extras:
+                    select_parts.append(f"t.{extra}")
+
+                sql = f"""
+                    SELECT {', '.join(select_parts)}
+                    FROM {schema}.{table} t
+                    LEFT JOIN {schema}.concept c
+                        ON c.concept_id = t.{concept_col}
+                    WHERE t.person_id = %s
+                    ORDER BY t.{date_col} NULLS LAST
+                    LIMIT 500
+                """
+                try:
+                    cur.execute(sql, (person_id,))
+                    rows = cur.fetchall()
+                except Exception:
+                    conn.rollback()
+                    continue
+
+                for row in rows:
+                    evt: dict = {
+                        "domain": domain_name,
+                        "start_date": row["start_date"].isoformat() if hasattr(row.get("start_date"), "isoformat") else row.get("start_date"),
+                        "concept_id": row.get("concept_id"),
+                        "concept_name": row.get("concept_name") or "",
+                        "source_value": row.get("source_value") or "",
+                    }
+                    if end_date_col and row.get("end_date"):
+                        evt["end_date"] = row["end_date"].isoformat() if hasattr(row["end_date"], "isoformat") else row["end_date"]
+                    for extra in extras:
+                        val = row.get(extra)
+                        if val is not None:
+                            evt[extra] = float(val) if isinstance(val, (int, float)) else str(val)
+                    events.append(evt)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Patient journey query failed")
+        raise HTTPException(status_code=500, detail=f"Journey query error: {e}")
+    finally:
+        conn.close()
+
+    # Sort all events chronologically
+    events.sort(key=lambda e: e.get("start_date") or "9999")
+
+    return {"person": person_info, "events": events}
