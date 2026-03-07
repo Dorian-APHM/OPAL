@@ -97,7 +97,11 @@
     "group_by_domain": "Par domaine",
     "no_events": "Aucun événement pour les domaines sélectionnés",
     "obs_period": "Période d'obs.",
-    "events": "événements"
+    "events": "événements",
+    "unmapped": "non mappé",
+    "source_concept": "Concept source",
+    "source_value": "Valeur source",
+    "standard_concept": "Concept standard"
   },
   "mapping": {
     "title": "Workflow de Mapping",
