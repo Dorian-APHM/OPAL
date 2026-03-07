@@ -340,6 +340,7 @@ export interface PatientJourneyEvent {
   concept_id: number | null;
   concept_name: string;
   source_value: string;
+  source_concept_name?: string;
   value_as_number?: number;
   unit_source_value?: string;
   quantity?: number;
