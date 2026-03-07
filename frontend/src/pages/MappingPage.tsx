@@ -8,7 +8,7 @@ import {
   BarChartOutlined, SearchOutlined, BulbOutlined, HistoryOutlined,
   DownloadOutlined, CheckOutlined, CloseOutlined, EditOutlined,
   UndoOutlined, ThunderboltOutlined, WarningOutlined,
-  StopOutlined, ReloadOutlined,
+  StopOutlined, ReloadOutlined, FormOutlined, LinkOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import {
@@ -57,6 +57,9 @@ export default function MappingPage({ selectedCdm }: Props) {
       </TabPane>
       <TabPane tab={<span><BulbOutlined /> {t('mapping.suggestions', 'Suggestions')}</span>} key="suggestions">
         <SuggestionWorkflowTab cdmName={selectedCdm} />
+      </TabPane>
+      <TabPane tab={<span><FormOutlined /> {t('mapping.manual', 'Manual')}</span>} key="manual">
+        <ManualMappingTab cdmName={selectedCdm} />
       </TabPane>
       <TabPane tab={<span><HistoryOutlined /> {t('mapping.history', 'History')}</span>} key="history">
         <MappingHistoryTab cdmName={selectedCdm} refreshKey={historyKey} />
@@ -561,7 +564,283 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   );
 }
 
-// ============ TAB 4: MAPPING HISTORY ============
+// ============ TAB 4: MANUAL MAPPING ============
+
+function ManualMappingTab({ cdmName }: { cdmName: string }) {
+  const { t } = useTranslation();
+  const [domain, setDomain] = useState('Condition');
+  const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<UnmappedItem[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedSource, setSelectedSource] = useState<UnmappedItem | null>(null);
+
+  // Concept lookup state
+  const [conceptIdInput, setConceptIdInput] = useState<number | null>(null);
+  const [conceptLoading, setConceptLoading] = useState(false);
+  const [conceptInfo, setConceptInfo] = useState<{
+    concept_id: number; concept_name: string; concept_code: string;
+    vocabulary_id: string; domain_id: string; standard_concept: string | null;
+    concept_class_id: string;
+  } | null>(null);
+  const [conceptError, setConceptError] = useState('');
+
+  // Decision state
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Search source values
+  const handleSearch = useCallback(() => {
+    if (!search.trim()) return;
+    setSearchLoading(true);
+    setSelectedSource(null);
+    setConceptInfo(null);
+    setConceptIdInput(null);
+    setConceptError('');
+    mappingApi.unmapped(cdmName, domain, 1, 20, search)
+      .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
+      .catch(() => { setSearchResults([]); setSearchTotal(0); })
+      .finally(() => setSearchLoading(false));
+  }, [cdmName, domain, search]);
+
+  // Lookup concept by ID
+  const handleConceptLookup = useCallback(() => {
+    if (!conceptIdInput) return;
+    setConceptLoading(true);
+    setConceptInfo(null);
+    setConceptError('');
+    mappingApi.conceptLookup(cdmName, conceptIdInput)
+      .then(r => setConceptInfo(r.data))
+      .catch((e: any) => {
+        setConceptError(e.response?.data?.detail || t('mapping.concept_not_found', 'Concept not found'));
+      })
+      .finally(() => setConceptLoading(false));
+  }, [cdmName, conceptIdInput, t]);
+
+  // Submit manual mapping
+  const handleApprove = async () => {
+    if (!selectedSource || !conceptInfo) return;
+    setSubmitting(true);
+    try {
+      await mappingApi.decide({
+        cdm_name: cdmName,
+        domain,
+        source_value: selectedSource.source_value,
+        source_name: selectedSource.source_name || '',
+        action: 'approved',
+        target_concept_id: conceptInfo.concept_id,
+        target_concept_name: conceptInfo.concept_name,
+        target_vocabulary_id: conceptInfo.vocabulary_id,
+        suggestion_source: 'manual',
+        confidence_score: 100,
+        reason: reason || '',
+      });
+      message.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${conceptInfo.concept_name}`);
+      // Reset form
+      setSelectedSource(null);
+      setConceptInfo(null);
+      setConceptIdInput(null);
+      setConceptError('');
+      setReason('');
+      // Refresh search results to remove mapped item
+      if (search.trim()) {
+        mappingApi.unmapped(cdmName, domain, 1, 20, search)
+          .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
+          .catch(() => {});
+      }
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || t('mapping.decision_failed', 'Decision failed'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      {/* Step 1: Search for a source code */}
+      <Card
+        size="small"
+        title={<span><SearchOutlined style={{ marginRight: 6 }} />{t('mapping.manual_step1', 'Step 1 — Select a local code')}</span>}
+        style={{ marginBottom: 12 }}
+      >
+        <Space style={{ marginBottom: 12 }}>
+          <Select value={domain} onChange={v => { setDomain(v); setSearchResults([]); setSelectedSource(null); }} style={{ width: 150 }}>
+            {DOMAIN_LIST.map(d => <Option key={d} value={d}>{d}</Option>)}
+          </Select>
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder={t('mapping.search_source_code', 'Search local code...')}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onPressEnter={handleSearch}
+            allowClear
+            style={{ width: 300 }}
+          />
+          <Button type="primary" onClick={handleSearch} loading={searchLoading}>
+            {t('mapping.search', 'Search')}
+          </Button>
+        </Space>
+
+        {searchResults.length > 0 && (
+          <Table
+            dataSource={searchResults}
+            rowKey="source_value"
+            size="small"
+            pagination={false}
+            onRow={(record) => ({
+              onClick: () => {
+                setSelectedSource(record);
+                setConceptInfo(null);
+                setConceptIdInput(null);
+                setConceptError('');
+              },
+              style: {
+                cursor: 'pointer',
+                background: selectedSource?.source_value === record.source_value ? '#e6f4ff' : undefined,
+              },
+            })}
+            columns={[
+              { title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
+              { title: t('mapping.source_name', 'Source Name'), dataIndex: 'source_name', key: 'sn', ellipsis: true,
+                render: (v: string) => v || <Text type="secondary">—</Text> },
+              { title: t('mapping.n_records', 'Records'), dataIndex: 'n_records', key: 'nr',
+                render: (v: number) => v.toLocaleString() },
+              { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
+                render: (v: number) => v.toLocaleString() },
+            ]}
+            footer={() => <Text type="secondary">{searchTotal} {t('mapping.results_found', 'results found')} — {t('mapping.click_to_select', 'click a row to select')}</Text>}
+          />
+        )}
+      </Card>
+
+      {/* Step 2: Selected source info + concept ID input */}
+      {selectedSource && (
+        <Card
+          size="small"
+          title={<span><LinkOutlined style={{ marginRight: 6 }} />{t('mapping.manual_step2', 'Step 2 — Map to a concept')}</span>}
+          style={{ marginBottom: 12 }}
+        >
+          {/* Selected source summary */}
+          <div style={{ background: '#f0f5ff', border: '1px solid #adc6ff', borderRadius: 6, padding: '10px 16px', marginBottom: 16 }}>
+            <Row gutter={24}>
+              <Col span={8}>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('mapping.source_value', 'Source Value')}</Text>
+                <div><Text strong style={{ fontSize: 14 }}>{selectedSource.source_value}</Text></div>
+              </Col>
+              <Col span={8}>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('mapping.source_name', 'Source Name')}</Text>
+                <div><Text style={{ fontSize: 14 }}>{selectedSource.source_name || '—'}</Text></div>
+              </Col>
+              <Col span={4}>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('mapping.n_records', 'Records')}</Text>
+                <div><Text strong style={{ fontSize: 14 }}>{selectedSource.n_records.toLocaleString()}</Text></div>
+              </Col>
+              <Col span={4}>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('mapping.n_persons', 'Persons')}</Text>
+                <div><Text strong style={{ fontSize: 14 }}>{selectedSource.n_persons.toLocaleString()}</Text></div>
+              </Col>
+            </Row>
+          </div>
+
+          {/* Concept ID input */}
+          <Space style={{ marginBottom: 12 }}>
+            <Text>{t('mapping.enter_concept_id', 'Concept ID')} :</Text>
+            <InputNumber
+              style={{ width: 180 }}
+              placeholder="e.g. 4329847"
+              value={conceptIdInput}
+              onChange={v => { setConceptIdInput(v); setConceptInfo(null); setConceptError(''); }}
+              onPressEnter={handleConceptLookup}
+              min={1}
+            />
+            <Button onClick={handleConceptLookup} loading={conceptLoading} disabled={!conceptIdInput}>
+              {t('mapping.lookup', 'Lookup')}
+            </Button>
+          </Space>
+
+          {/* Concept error */}
+          {conceptError && (
+            <div style={{ color: '#ff4d4f', marginBottom: 12 }}>
+              <CloseOutlined style={{ marginRight: 4 }} />{conceptError}
+            </div>
+          )}
+
+          {/* Concept info display */}
+          {conceptInfo && (
+            <div style={{ background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, padding: '10px 16px', marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col span={6}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Concept ID</Text>
+                  <div><Text strong>{conceptInfo.concept_id}</Text></div>
+                </Col>
+                <Col span={8}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Concept Name</Text>
+                  <div><Text strong>{conceptInfo.concept_name}</Text></div>
+                </Col>
+                <Col span={4}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Vocabulary</Text>
+                  <div><Tag>{conceptInfo.vocabulary_id}</Tag></div>
+                </Col>
+                <Col span={3}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Domain</Text>
+                  <div><Tag>{conceptInfo.domain_id}</Tag></div>
+                </Col>
+                <Col span={3}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>Standard</Text>
+                  <div>
+                    {conceptInfo.standard_concept === 'S'
+                      ? <Tag color="green">Standard</Tag>
+                      : conceptInfo.standard_concept === 'C'
+                      ? <Tag color="orange">Classification</Tag>
+                      : <Tag color="red">Non-standard</Tag>}
+                  </div>
+                </Col>
+              </Row>
+              <div style={{ marginTop: 8 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>Code: </Text>
+                <Text code>{conceptInfo.concept_code}</Text>
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 16 }}>Class: </Text>
+                <Text>{conceptInfo.concept_class_id}</Text>
+              </div>
+            </div>
+          )}
+
+          {/* Reason + approve button */}
+          {conceptInfo && (
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Input.TextArea
+                rows={2}
+                placeholder={t('mapping.reason_placeholder', 'Reason (optional)')}
+                value={reason}
+                onChange={e => setReason(e.target.value)}
+              />
+              <Button
+                type="primary"
+                icon={<CheckOutlined />}
+                onClick={handleApprove}
+                loading={submitting}
+                size="large"
+                style={{ width: '100%' }}
+              >
+                {t('mapping.approve_mapping', 'Approve Mapping')}: {selectedSource.source_value} → {conceptInfo.concept_name} ({conceptInfo.concept_id})
+              </Button>
+            </Space>
+          )}
+        </Card>
+      )}
+
+      {/* Empty state */}
+      {!selectedSource && searchResults.length === 0 && !searchLoading && (
+        <Empty
+          description={t('mapping.manual_description', 'Search for a local code, then enter a target concept ID to create a manual mapping.')}
+          style={{ marginTop: 48 }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============ TAB 5: MAPPING HISTORY ============
 
 function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKey?: number }) {
   const { t } = useTranslation();
