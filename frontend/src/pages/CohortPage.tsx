@@ -7,6 +7,7 @@ import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
   PlusOutlined, PlayCircleOutlined, UserOutlined,
   TableOutlined, SwapOutlined, CodeOutlined, DownloadOutlined,
+  AppstoreOutlined, BarChartOutlined, LineChartOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -16,6 +17,9 @@ import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
 import PatientJourney from '../components/cohort/PatientJourney';
+import ConceptSetPage from './ConceptSetPage';
+import IncidencePage from './IncidencePage';
+import EstimationPage from './EstimationPage';
 import { cohortApi } from '../api/client';
 import type {
   CohortCriterion,
@@ -258,10 +262,14 @@ export default function CohortPage({ selectedCdm }: Props) {
                       inclusion={criteria.inclusion}
                       exclusion={criteria.exclusion}
                       demographics={criteria.demographics || {}}
+                      exitCriteria={criteria.exit_criteria}
+                      initialEventId={criteria.initial_event_criterion_id}
                       cdmName={selectedCdm || ''}
                       onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
                       onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
                       onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
+                      onUpdateExitCriteria={exit => setCriteria(prev => ({ ...prev, exit_criteria: exit }))}
+                      onUpdateInitialEvent={id => setCriteria(prev => ({ ...prev, initial_event_criterion_id: id }))}
                     />
 
                     {/* Detailed Sample */}
@@ -360,6 +368,36 @@ export default function CohortPage({ selectedCdm }: Props) {
                 children: (
                   <SqlEditorPanel cdmName={selectedCdm || ''} />
                 ),
+              },
+              {
+                key: 'concept-sets',
+                label: (
+                  <Space size={4}>
+                    <AppstoreOutlined />
+                    {t('app.concept_sets', 'Concept Sets')}
+                  </Space>
+                ),
+                children: <ConceptSetPage selectedCdm={selectedCdm} />,
+              },
+              {
+                key: 'incidence',
+                label: (
+                  <Space size={4}>
+                    <BarChartOutlined />
+                    {t('app.incidence', 'Incidence')}
+                  </Space>
+                ),
+                children: <IncidencePage selectedCdm={selectedCdm} />,
+              },
+              {
+                key: 'estimation',
+                label: (
+                  <Space size={4}>
+                    <LineChartOutlined />
+                    {t('app.estimation', 'Estimation')}
+                  </Space>
+                ),
+                children: <EstimationPage selectedCdm={selectedCdm} />,
               },
             ]}
           />
@@ -565,7 +603,7 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
 
 // ──── Helpers to convert between frontend and backend criteria ────
 
-function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
+function mapGroupToBackend(group: import('../types').CriteriaGroup): import('../types').CriteriaGroup {
   const mapCriterion = (c: CohortCriterion) => ({
     ...c,
     concepts: c.concepts.map(con => ({
@@ -579,21 +617,24 @@ function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
     })),
   });
   return {
-    inclusion: {
-      operator: criteria.inclusion.operator,
-      criteria: criteria.inclusion.criteria.map(mapCriterion),
-      sameVisit: criteria.inclusion.sameVisit,
-    },
-    exclusion: {
-      operator: criteria.exclusion.operator,
-      criteria: criteria.exclusion.criteria.map(mapCriterion),
-      sameVisit: criteria.exclusion.sameVisit,
-    },
-    demographics: criteria.demographics,
+    operator: group.operator,
+    criteria: (group.criteria || []).map(mapCriterion),
+    groups: group.groups?.map(mapGroupToBackend),
+    sameVisit: group.sameVisit,
   };
 }
 
-function fromBackendCriteria(backendCriteria: any): CohortCriteria {
+function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
+  return {
+    inclusion: mapGroupToBackend(criteria.inclusion),
+    exclusion: mapGroupToBackend(criteria.exclusion),
+    demographics: criteria.demographics,
+    exit_criteria: criteria.exit_criteria,
+    initial_event_criterion_id: criteria.initial_event_criterion_id,
+  };
+}
+
+function mapGroupFromBackend(group: any): import('../types').CriteriaGroup {
   const mapCriteria = (criteria: any[]) =>
     (criteria || []).map((c: any) => ({
       id: c.id || Math.random().toString(36).slice(2) + Date.now().toString(36),
@@ -612,14 +653,19 @@ function fromBackendCriteria(backendCriteria: any): CohortCriteria {
     }));
 
   return {
-    inclusion: {
-      operator: backendCriteria.inclusion?.operator || 'AND',
-      criteria: mapCriteria(backendCriteria.inclusion?.criteria),
-    },
-    exclusion: {
-      operator: backendCriteria.exclusion?.operator || 'OR',
-      criteria: mapCriteria(backendCriteria.exclusion?.criteria),
-    },
+    operator: group?.operator || 'AND',
+    criteria: mapCriteria(group?.criteria),
+    groups: group?.groups?.map(mapGroupFromBackend),
+    sameVisit: group?.sameVisit,
+  };
+}
+
+function fromBackendCriteria(backendCriteria: any): CohortCriteria {
+  return {
+    inclusion: mapGroupFromBackend(backendCriteria.inclusion),
+    exclusion: mapGroupFromBackend(backendCriteria.exclusion || { operator: 'OR', criteria: [] }),
     demographics: backendCriteria.demographics || {},
+    exit_criteria: backendCriteria.exit_criteria,
+    initial_event_criterion_id: backendCriteria.initial_event_criterion_id,
   };
 }

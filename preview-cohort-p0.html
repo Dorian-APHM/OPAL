@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OPAL — P0 Features Preview: Nested Groups + Temporal Relations</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; }
+    h1 { color: #58a6ff; font-size: 22px; margin-bottom: 4px; }
+    h2 { color: #8b949e; font-size: 14px; font-weight: 400; margin-bottom: 20px; }
+    h3 { color: #f0f6fc; font-size: 16px; margin: 24px 0 12px; }
+
+    .preview-container { max-width: 900px; margin: 0 auto; }
+
+    /* Tags */
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin: 0 2px; }
+    .tag-blue { background: #1f3a5f; color: #58a6ff; }
+    .tag-orange { background: #3d2e1a; color: #f0883e; }
+    .tag-purple { background: #2d1b4e; color: #bc8cff; }
+    .tag-green { background: #1b3a2a; color: #3fb950; }
+    .tag-red { background: #3d1a1a; color: #f85149; }
+    .tag-domain { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: #fff; }
+
+    /* Cards */
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+    .card-header { padding: 8px 12px; border-bottom: 1px solid #21262d; display: flex; justify-content: space-between; align-items: center; }
+    .card-body { padding: 10px 12px; }
+
+    /* Criterion cards */
+    .criterion-card { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 8px 12px; margin: 4px 0; display: flex; justify-content: space-between; align-items: flex-start; }
+
+    /* Group cards */
+    .group-card { border-radius: 8px; margin: 4px 0; overflow: hidden; }
+    .group-card-inner { padding: 8px; }
+
+    /* Operator badge */
+    .operator-badge { text-align: center; padding: 3px 0; }
+    .operator-badge span { cursor: pointer; padding: 2px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+    .op-and { background: #1f3a5f; color: #58a6ff; }
+    .op-or { background: #3d2e1a; color: #f0883e; }
+
+    /* Buttons */
+    .btn { padding: 4px 10px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; font-size: 11px; cursor: pointer; }
+    .btn:hover { background: #30363d; }
+    .btn-danger { border-color: #f85149; color: #f85149; }
+    .btn-sub { border-color: #bc8cff; color: #bc8cff; }
+
+    /* Temporal panel */
+    .temporal-panel { padding: 10px; border-radius: 6px; border: 1px solid #722ed1; background: rgba(114, 46, 209, 0.06); margin-top: 6px; }
+    .temporal-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+    .temporal-label { font-size: 11px; color: #8b949e; }
+    .temporal-select { padding: 3px 8px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; font-size: 11px; }
+    .temporal-input { padding: 3px 6px; border-radius: 4px; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; font-size: 11px; width: 50px; text-align: center; }
+
+    /* Timeline diagram */
+    .timeline-diagram { padding: 8px 10px; background: #010409; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 20px; margin-top: 6px; }
+
+    /* Formula bar */
+    .formula-bar { padding: 6px 12px; background: #010409; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 13px; color: #3fb950; font-weight: 500; margin-top: 8px; }
+
+    /* Constraint summary */
+    .constraint-summary { font-size: 11px; color: #8b949e; margin-top: 4px; cursor: pointer; }
+    .constraint-summary:hover { color: #c9d1d9; }
+
+    /* Section divider */
+    .section { margin: 32px 0; padding: 20px; background: #161b22; border-radius: 12px; border: 1px solid #30363d; }
+    .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #484f58; margin-bottom: 16px; }
+
+    /* Action buttons row */
+    .actions { display: flex; gap: 4px; flex-direction: column; }
+
+    /* Depth indicators */
+    .depth-0 { border-left: 3px solid #1677ff; }
+    .depth-1 { border-left: 3px solid #fa8c16; }
+    .depth-2 { border-left: 3px solid #722ed1; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 0; margin-bottom: 20px; }
+    .tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; color: #8b949e; font-size: 14px; }
+    .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .tab:hover { color: #c9d1d9; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState } = React;
+
+    // ════════════════════════════════════════════════════════════
+    //  DOMAIN COLORS
+    // ════════════════════════════════════════════════════════════
+    const DOMAIN_COLORS = {
+      Condition: '#e74c3c',
+      Drug: '#3498db',
+      Measurement: '#2ecc71',
+      Observation: '#f39c12',
+      Procedure: '#9b59b6',
+      Visit: '#1abc9c',
+      Device: '#e67e22',
+      Death: '#7f8c8d',
+    };
+
+    const DEPTH_COLORS = ['#1677ff', '#fa8c16', '#722ed1', '#13c2c2'];
+
+    const RELATIONS = {
+      before:        'occurs before',
+      after:         'occurs after',
+      starts_before: 'starts before',
+      starts_after:  'starts after',
+      ends_before:   'ends before',
+      ends_after:    'ends after',
+      overlaps:      'overlaps with',
+      contains:      'contains',
+      during:        'occurs during',
+    };
+
+    const DIAGRAMS = {
+      before:        { a: [0, 30], b: [40, 70] },
+      after:         { a: [40, 70], b: [0, 30] },
+      starts_before: { a: [0, 50], b: [20, 60] },
+      starts_after:  { a: [20, 60], b: [0, 50] },
+      ends_before:   { a: [0, 40], b: [10, 60] },
+      ends_after:    { a: [10, 60], b: [0, 40] },
+      overlaps:      { a: [0, 45], b: [25, 70] },
+      contains:      { a: [0, 70], b: [15, 55] },
+      during:        { a: [15, 55], b: [0, 70] },
+    };
+
+    // ════════════════════════════════════════════════════════════
+    //  TEMPORAL DIAGRAM
+    // ════════════════════════════════════════════════════════════
+    function TemporalDiagram({ relation, daysBefore, daysAfter }) {
+      const d = DIAGRAMS[relation] || DIAGRAMS.before;
+      const makeBar = (range) => {
+        const dots1 = '\u00b7'.repeat(Math.round(range[0] / 5));
+        const blocks = '\u2588'.repeat(Math.max(1, Math.round((range[1] - range[0]) / 5)));
+        const dots2 = '\u00b7'.repeat(Math.max(0, Math.round((70 - range[1]) / 5)));
+        return dots1 + blocks + dots2;
+      };
+      const windowLabel = (daysBefore || daysAfter)
+        ? ` (${daysBefore ? `\u2212${daysBefore}d` : ''}${daysBefore && daysAfter ? ' / ' : ''}${daysAfter ? `+${daysAfter}d` : ''})`
+        : '';
+      return (
+        <div className="timeline-diagram">
+          <div style={{ color: '#484f58' }}>{'\u2500'.repeat(12)} time \u2500\u2500\u25b8</div>
+          <div><span style={{ color: '#58a6ff' }}>{makeBar(d.a)}</span> <span style={{ color: '#58a6ff' }}>A (this)</span></div>
+          <div><span style={{ color: '#f78166' }}>{makeBar(d.b)}</span> <span style={{ color: '#f78166' }}>B (ref)</span></div>
+          <div style={{ color: '#8b949e', marginTop: 2 }}>{RELATIONS[relation]}{windowLabel}</div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  TEMPORAL EDITOR (P0-2)
+    // ════════════════════════════════════════════════════════════
+    function TemporalEditor({ relation: initRelation, refLabel, refDomain }) {
+      const [relation, setRelation] = useState(initRelation || 'before');
+      const [daysBefore, setDaysBefore] = useState(0);
+      const [daysAfter, setDaysAfter] = useState(30);
+
+      return (
+        <div className="temporal-panel">
+          <div className="temporal-row">
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#c9d1d9' }}>This criterion</span>
+            <select className="temporal-select" value={relation} onChange={e => setRelation(e.target.value)}>
+              {Object.entries(RELATIONS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            <span>
+              <span className="tag-domain" style={{ background: DOMAIN_COLORS[refDomain] || '#666' }}>{refDomain}</span>
+              {' '}
+              <span style={{ fontSize: 12, color: '#c9d1d9' }}>{refLabel}</span>
+            </span>
+          </div>
+
+          <div className="temporal-row">
+            <span className="temporal-label">within window (optional):</span>
+            <span style={{ fontSize: 11, color: '#8b949e' }}>&minus;</span>
+            <input className="temporal-input" type="number" value={daysBefore} onChange={e => setDaysBefore(Number(e.target.value))} />
+            <span style={{ fontSize: 11, color: '#8b949e' }}>d</span>
+            <span style={{ fontSize: 11, color: '#8b949e', margin: '0 4px' }}>/</span>
+            <span style={{ fontSize: 11, color: '#8b949e' }}>+</span>
+            <input className="temporal-input" type="number" value={daysAfter} onChange={e => setDaysAfter(Number(e.target.value))} />
+            <span style={{ fontSize: 11, color: '#8b949e' }}>d</span>
+          </div>
+
+          <TemporalDiagram relation={relation} daysBefore={daysBefore} daysAfter={daysAfter} />
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  CRITERION CARD
+    // ════════════════════════════════════════════════════════════
+    function CriterionCard({ domain, label, constraints, showTemporal, temporalProps, expanded: initExpanded }) {
+      const [expanded, setExpanded] = useState(initExpanded || false);
+      const domainColor = DOMAIN_COLORS[domain] || '#666';
+
+      return (
+        <div className="criterion-card" style={{ borderLeft: `3px solid ${domainColor}` }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+              <span className="tag-domain" style={{ background: domainColor }}>{domain}</span>
+              <span className="tag tag-blue">{label}</span>
+            </div>
+            <div className="constraint-summary" onClick={() => setExpanded(!expanded)}>
+              {expanded ? '\u25be' : '\u25b8'} Constraints{constraints ? `: ${constraints}` : ''}
+            </div>
+            {expanded && showTemporal && (
+              <TemporalEditor {...temporalProps} />
+            )}
+            {expanded && !showTemporal && (
+              <div style={{ marginTop: 6, padding: 8, background: '#010409', borderRadius: 4, fontSize: 11, color: '#8b949e' }}>
+                <div style={{ marginBottom: 4 }}><span style={{ color: '#3fb950' }}>\u25cf</span> Include descendants: ON</div>
+                <div style={{ marginBottom: 4 }}>\u23f0 Time: Any time</div>
+                <div>\u0023 Frequency: Any occurrence</div>
+              </div>
+            )}
+          </div>
+          <div className="actions">
+            <button className="btn" title="Move up">\u2191</button>
+            <button className="btn" title="Move down">\u2193</button>
+            <button className="btn btn-danger" title="Delete">\u2715</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  OPERATOR BADGE
+    // ════════════════════════════════════════════════════════════
+    function OperatorBadge({ op, onClick }) {
+      return (
+        <div className="operator-badge">
+          <span className={op === 'AND' ? 'op-and' : 'op-or'} onClick={onClick}>
+            {op} \u21c4
+          </span>
+        </div>
+      );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  MAIN APP
+    // ════════════════════════════════════════════════════════════
+    function App() {
+      const [activeTab, setActiveTab] = useState('p01');
+      const [subGroupOp, setSubGroupOp] = useState('OR');
+      const [topOp, setTopOp] = useState('AND');
+
+      return (
+        <div className="preview-container">
+          <h1>OPAL Cohort Builder — P0 Features Preview</h1>
+          <h2>Interactive mockup of nested criteria groups & temporal sequence relations</h2>
+
+          <div className="tabs">
+            <div className={`tab ${activeTab === 'p01' ? 'active' : ''}`} onClick={() => setActiveTab('p01')}>
+              P0-1: Nested Groups
+            </div>
+            <div className={`tab ${activeTab === 'p02' ? 'active' : ''}`} onClick={() => setActiveTab('p02')}>
+              P0-2: Temporal Relations
+            </div>
+            <div className={`tab ${activeTab === 'combined' ? 'active' : ''}`} onClick={() => setActiveTab('combined')}>
+              Combined Example
+            </div>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════
+              TAB 1: NESTED GROUPS (P0-1)
+              ═══════════════════════════════════════════════════════ */}
+          {activeTab === 'p01' && (
+            <div className="section">
+              <div className="section-label">P0-1 \u2014 Nested Criteria Groups</div>
+
+              {/* Root group */}
+              <div className="card depth-0">
+                <div className="card-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className={`tag ${topOp === 'AND' ? 'tag-blue' : 'tag-orange'}`}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => setTopOp(topOp === 'AND' ? 'OR' : 'AND')}>
+                      {topOp} \u21c4
+                    </span>
+                    <span style={{ color: '#3fb950', fontSize: 13, fontWeight: 600 }}>Inclusion Criteria</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <label style={{ fontSize: 11, color: '#8b949e' }}>
+                      <input type="checkbox" style={{ marginRight: 4 }} /> Same visit
+                    </label>
+                    <button className="btn btn-sub">\u229e Sub-group</button>
+                  </div>
+                </div>
+                <div className="card-body">
+                  {/* Criterion 1 */}
+                  <CriterionCard domain="Condition" label="Type 2 diabetes mellitus" constraints="\u2265 2\u00d7" />
+
+                  <OperatorBadge op={topOp} onClick={() => setTopOp(topOp === 'AND' ? 'OR' : 'AND')} />
+
+                  {/* Criterion 2 */}
+                  <CriterionCard domain="Drug" label="Metformin" />
+
+                  <OperatorBadge op={topOp} onClick={() => setTopOp(topOp === 'AND' ? 'OR' : 'AND')} />
+
+                  {/* Nested sub-group (depth 1) */}
+                  <div className="card depth-1" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                    <div className="card-header">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ color: '#fa8c16' }}>\u229e</span>
+                        <span className={`tag ${subGroupOp === 'OR' ? 'tag-orange' : 'tag-blue'}`}
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => setSubGroupOp(subGroupOp === 'OR' ? 'AND' : 'OR')}>
+                          {subGroupOp} \u21c4
+                        </span>
+                        <span style={{ color: '#8b949e', fontSize: 11 }}>Sub-group (depth 1)</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn btn-sub">\u229e Sub-group</button>
+                        <button className="btn btn-danger">\u2715</button>
+                      </div>
+                    </div>
+                    <div className="card-body">
+                      <CriterionCard domain="Measurement" label="HbA1c" constraints="val \u2265 7.0" />
+                      <OperatorBadge op={subGroupOp} onClick={() => setSubGroupOp(subGroupOp === 'OR' ? 'AND' : 'OR')} />
+                      <CriterionCard domain="Measurement" label="Fasting glucose" constraints="val \u2265 126 mg/dL" />
+                    </div>
+                  </div>
+
+                  {/* Formula */}
+                  <div className="formula-bar">
+                    Type 2 diabetes {topOp} Metformin {topOp} (HbA1c {subGroupOp} Fasting glucose)
+                  </div>
+                </div>
+              </div>
+
+              {/* Key points */}
+              <div style={{ marginTop: 16, padding: 12, background: '#010409', borderRadius: 6, fontSize: 12, color: '#8b949e', lineHeight: 1.8 }}>
+                <strong style={{ color: '#c9d1d9' }}>Interactions :</strong><br/>
+                \u2022 Cliquer sur <span className="tag tag-blue" style={{ fontSize: 10 }}>AND \u21c4</span> pour basculer en OR (et vice-versa)<br/>
+                \u2022 Bouton <span style={{ color: '#bc8cff' }}>\u229e Sub-group</span> pour ajouter un groupe enfant (max 3 niveaux)<br/>
+                \u2022 Fl\u00e8ches \u2191\u2193 pour r\u00e9ordonner les crit\u00e8res dans un groupe<br/>
+                \u2022 Bordure gauche color\u00e9e par profondeur : <span style={{color:'#1677ff'}}>bleu(0)</span> \u2192 <span style={{color:'#fa8c16'}}>orange(1)</span> \u2192 <span style={{color:'#722ed1'}}>violet(2)</span><br/>
+                \u2022 Formule logique en bas, g\u00e9n\u00e9r\u00e9e r\u00e9cursivement depuis l'arbre
+              </div>
+            </div>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════
+              TAB 2: TEMPORAL RELATIONS (P0-2)
+              ═══════════════════════════════════════════════════════ */}
+          {activeTab === 'p02' && (
+            <div className="section">
+              <div className="section-label">P0-2 \u2014 Temporal Sequence Relations</div>
+
+              <p style={{ fontSize: 13, color: '#8b949e', marginBottom: 16 }}>
+                Quand on d\u00e9plie les contraintes d'un crit\u00e8re et qu'on choisit
+                <strong style={{ color: '#bc8cff' }}> "\u21c4 Relative to another criterion"</strong>,
+                le panneau temporel appara\u00eet :
+              </p>
+
+              {/* Criterion with temporal expanded */}
+              <div className="criterion-card" style={{ borderLeft: '3px solid #e74c3c', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span className="tag-domain" style={{ background: '#e74c3c' }}>Condition</span>
+                    <span className="tag tag-blue">Type 2 diabetes</span>
+                  </div>
+                  <div className="actions" style={{ flexDirection: 'row' }}>
+                    <button className="btn">\u2191</button>
+                    <button className="btn">\u2193</button>
+                    <button className="btn btn-danger">\u2715</button>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 11, color: '#c9d1d9', marginBottom: 4 }}>
+                  \u25be Constraints: <span style={{ color: '#bc8cff' }}>\u21c4 occurs before</span> \u00b7 \u22652\u00d7
+                </div>
+
+                <TemporalEditor relation="before" refLabel="Metformin" refDomain="Drug" />
+
+                <div style={{ marginTop: 8, padding: 6, background: '#010409', borderRadius: 4, fontSize: 11, color: '#8b949e' }}>
+                  <div style={{ marginBottom: 4 }}><span style={{ color: '#3fb950' }}>\u25cf</span> Include descendants: ON</div>
+                  <div># Frequency: \u2265 2 occurrences</div>
+                </div>
+              </div>
+
+              {/* All 9 relations showcase */}
+              <h3>Les 9 relations temporelles disponibles</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {Object.entries(RELATIONS).map(([key, label]) => (
+                  <div key={key} style={{ background: '#010409', borderRadius: 6, padding: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#c9d1d9', marginBottom: 4 }}>{label}</div>
+                    <TemporalDiagram relation={key} />
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 16, padding: 12, background: '#010409', borderRadius: 6, fontSize: 12, color: '#8b949e', lineHeight: 1.8 }}>
+                <strong style={{ color: '#c9d1d9' }}>Fonctionnalit\u00e9s :</strong><br/>
+                \u2022 9 relations temporelles inspir\u00e9es de l'<em>Allen's interval algebra</em><br/>
+                \u2022 Fen\u00eatre temporelle optionnelle (\u2212X jours / +Y jours) pour chaque relation<br/>
+                \u2022 Diagramme temps r\u00e9el qui s'adapte \u00e0 la relation choisie<br/>
+                \u2022 D\u00e9tection automatique des r\u00e9f\u00e9rences circulaires (A\u2192B\u2192A)<br/>
+                \u2022 Dropdown de r\u00e9f\u00e9rence montre le domaine color\u00e9 + nom du concept
+              </div>
+            </div>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════
+              TAB 3: COMBINED REAL-WORLD EXAMPLE
+              ═══════════════════════════════════════════════════════ */}
+          {activeTab === 'combined' && (
+            <div className="section">
+              <div className="section-label">Exemple complet \u2014 \u00c9tude diab\u00e8te de type 2 sous metformine</div>
+
+              <p style={{ fontSize: 13, color: '#8b949e', marginBottom: 16, lineHeight: 1.6 }}>
+                Patients diab\u00e9tiques de type 2 ayant re\u00e7u de la metformine,
+                avec confirmation biologique (HbA1c \u2265 7% <strong style={{color:'#fa8c16'}}>OU</strong> glyc\u00e9mie \u00e0 jeun \u2265 126),
+                o\u00f9 le diagnostic survient <strong style={{color:'#bc8cff'}}>avant</strong> la mise sous traitement (dans les 30 jours).
+              </p>
+
+              {/* Root inclusion */}
+              <div className="card depth-0">
+                <div className="card-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="tag tag-blue" style={{ cursor: 'pointer' }}>AND \u21c4</span>
+                    <span style={{ color: '#3fb950', fontSize: 13, fontWeight: 600 }}>Inclusion Criteria</span>
+                  </div>
+                  <button className="btn btn-sub">\u229e Sub-group</button>
+                </div>
+                <div className="card-body">
+                  {/* Criterion 1: T2DM with temporal */}
+                  <div className="criterion-card" style={{ borderLeft: '3px solid #e74c3c', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <span className="tag-domain" style={{ background: '#e74c3c' }}>Condition</span>
+                        <span className="tag tag-blue">Type 2 diabetes mellitus</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button className="btn">\u2193</button>
+                        <button className="btn btn-danger">\u2715</button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#bc8cff', marginTop: 6 }}>
+                      \u25be Constraints: \u21c4 occurs before \u00b7 \u2265 2\u00d7
+                    </div>
+                    <div className="temporal-panel" style={{ marginTop: 6 }}>
+                      <div className="temporal-row">
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#c9d1d9' }}>This criterion</span>
+                        <span className="temporal-select" style={{ color: '#bc8cff' }}>occurs before</span>
+                        <span className="tag-domain" style={{ background: '#3498db' }}>Drug</span>
+                        <span style={{ fontSize: 12 }}>Metformin</span>
+                      </div>
+                      <div className="temporal-row">
+                        <span className="temporal-label">within window:</span>
+                        <span style={{ fontSize: 11 }}>&minus;</span>
+                        <span className="temporal-input" style={{ display: 'inline-block' }}>0</span>
+                        <span style={{ fontSize: 11, color: '#8b949e' }}>d / +</span>
+                        <span className="temporal-input" style={{ display: 'inline-block' }}>30</span>
+                        <span style={{ fontSize: 11, color: '#8b949e' }}>d</span>
+                      </div>
+                      <TemporalDiagram relation="before" daysBefore={0} daysAfter={30} />
+                    </div>
+                  </div>
+
+                  <OperatorBadge op="AND" />
+
+                  {/* Criterion 2: Metformin */}
+                  <CriterionCard domain="Drug" label="Metformin" />
+
+                  <OperatorBadge op="AND" />
+
+                  {/* Nested OR group */}
+                  <div className="card depth-1" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                    <div className="card-header">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ color: '#fa8c16' }}>\u229e</span>
+                        <span className="tag tag-orange">OR \u21c4</span>
+                        <span style={{ color: '#8b949e', fontSize: 11 }}>Confirmation biologique</span>
+                      </div>
+                      <button className="btn btn-danger">\u2715</button>
+                    </div>
+                    <div className="card-body">
+                      <CriterionCard domain="Measurement" label="HbA1c" constraints="val \u2265 7.0%" />
+                      <OperatorBadge op="OR" />
+                      <CriterionCard domain="Measurement" label="Fasting plasma glucose" constraints="val \u2265 126 mg/dL" />
+                    </div>
+                  </div>
+
+                  {/* Formula */}
+                  <div className="formula-bar">
+                    Type 2 diabetes <span style={{ color: '#58a6ff' }}>AND</span> Metformin <span style={{ color: '#58a6ff' }}>AND</span> (HbA1c <span style={{ color: '#f0883e' }}>OR</span> Fasting glucose)
+                    <span className="tag tag-purple" style={{ marginLeft: 8, fontSize: 10 }}>\u21c4 T2DM before Metformin \u226430d</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Exclusion */}
+              <div className="card" style={{ borderLeft: '3px solid #f85149', marginTop: 12 }}>
+                <div className="card-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="tag tag-blue">AND \u21c4</span>
+                    <span style={{ color: '#f85149', fontSize: 13, fontWeight: 600 }}>Exclusion Criteria</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  <CriterionCard domain="Condition" label="Type 1 diabetes mellitus" />
+                  <OperatorBadge op="AND" />
+                  <CriterionCard domain="Condition" label="Gestational diabetes" />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 16, padding: 12, background: '#010409', borderRadius: 6, fontSize: 12, color: '#8b949e', lineHeight: 1.8 }}>
+                <strong style={{ color: '#c9d1d9' }}>Ce que cet exemple illustre :</strong><br/>
+                \u2022 <strong style={{color:'#1677ff'}}>P0-1</strong> : Le sous-groupe <span style={{color:'#fa8c16'}}>OR</span> imbriqu\u00e9 dans un groupe <span style={{color:'#58a6ff'}}>AND</span> \u2014 impossible avec la liste plate actuelle<br/>
+                \u2022 <strong style={{color:'#722ed1'}}>P0-2</strong> : La relation temporelle "T2DM <em>occurs before</em> Metformin within 30d" sur le premier crit\u00e8re<br/>
+                \u2022 Les deux features fonctionnent ensemble naturellement dans la m\u00eame UI
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

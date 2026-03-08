@@ -62,7 +62,7 @@ export default function Sidebar({
     { key: '/cohorts', icon: <TeamOutlined />, label: t('app.cohorts') },
     { key: '/mapping', icon: <NodeIndexOutlined />, label: t('app.mapping') },
     { key: '/concepts', icon: <BookOutlined />, label: t('app.concepts') },
-    { key: '/ohdsi', icon: <ExperimentOutlined />, label: t('app.ohdsi') },
+    { key: '/ohdsi', icon: <ExperimentOutlined />, label: t('app.ohdsi', 'OHDSI Tools') },
     { key: '/cdm', icon: <DatabaseOutlined />, label: t('cdm.title') },
     { key: '/settings', icon: <SettingOutlined />, label: t('app.settings') },
     { key: '/audit', icon: <AuditOutlined />, label: t('app.audit') },
