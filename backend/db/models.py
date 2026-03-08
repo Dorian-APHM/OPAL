@@ -144,6 +144,50 @@ class SapbertMapping(Base):
     uploaded_at = Column(DateTime, default=_utcnow)
 
 
+class ConceptSet(Base):
+    """Reusable concept sets (groups of concepts)."""
+    __tablename__ = "concept_sets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(500), nullable=False)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    domain = Column(String(100), nullable=True)
+    description = Column(Text, default="")
+    concepts_json = Column(Text, nullable=False)
+    created_by = Column(String(255), default="system")
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class IncidenceAnalysis(Base):
+    """Saved incidence rate analyses."""
+    __tablename__ = "incidence_analyses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    target_cohort_id = Column(Integer, nullable=False)
+    outcome_cohort_id = Column(Integer, nullable=False)
+    parameters_json = Column(Text, default="{}")
+    results_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class EstimationAnalysis(Base):
+    """Saved estimation analyses (Kaplan-Meier, etc.)."""
+    __tablename__ = "estimation_analyses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    analysis_type = Column(String(50), nullable=False, default="kaplan_meier")
+    target_cohort_id = Column(Integer, nullable=False)
+    outcome_cohort_id = Column(Integer, nullable=False)
+    parameters_json = Column(Text, default="{}")
+    results_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class AccessRequest(Base):
     """
     Self-service sign-up requests awaiting admin approval.

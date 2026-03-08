@@ -258,10 +258,12 @@ export default function CohortPage({ selectedCdm }: Props) {
                       inclusion={criteria.inclusion}
                       exclusion={criteria.exclusion}
                       demographics={criteria.demographics || {}}
+                      exitCriteria={criteria.exit_criteria}
                       cdmName={selectedCdm || ''}
                       onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
                       onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
                       onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
+                      onUpdateExitCriteria={exit => setCriteria(prev => ({ ...prev, exit_criteria: exit }))}
                     />
 
                     {/* Detailed Sample */}

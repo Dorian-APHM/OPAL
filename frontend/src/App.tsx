@@ -12,6 +12,9 @@ const CdmManagementPage = lazy(() => import('./pages/CdmManagementPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const ConceptExplorerPage = lazy(() => import('./pages/ConceptExplorerPage'));
 const OhdsiPage = lazy(() => import('./pages/OhdsiPage'));
+const ConceptSetPage = lazy(() => import('./pages/ConceptSetPage'));
+const IncidencePage = lazy(() => import('./pages/IncidencePage'));
+const EstimationPage = lazy(() => import('./pages/EstimationPage'));
 const AuditPage = lazy(() => import('./pages/AuditPage'));
 const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
@@ -77,7 +80,7 @@ function ProtectedRoute({ path, children }: { path: string; children: React.Reac
   return hasPageAccess(path) ? <>{children}</> : <ForbiddenPage />;
 }
 
-const ALL_PAGES = ['/quality', '/cohorts', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
+const ALL_PAGES = ['/quality', '/cohorts', '/concept-sets', '/incidence', '/estimation', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
 
 function DefaultRedirect() {
   const { hasPageAccess } = useAuth();
@@ -190,6 +193,18 @@ export default function App() {
               <Route
                 path="/cohorts"
                 element={<ProtectedRoute path="/cohorts"><PageSuspense><CohortPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/concept-sets"
+                element={<ProtectedRoute path="/concept-sets"><PageSuspense><ConceptSetPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/incidence"
+                element={<ProtectedRoute path="/incidence"><PageSuspense><IncidencePage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
+              />
+              <Route
+                path="/estimation"
+                element={<ProtectedRoute path="/estimation"><PageSuspense><EstimationPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
               />
               <Route
                 path="/mapping"
