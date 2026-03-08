@@ -228,14 +228,29 @@ export interface OmopConcept {
   standard_concept: string | null;
 }
 
+/** Temporal relation between two criteria (Allen's interval algebra subset) */
+export type TemporalRelation =
+  | 'before'          // A ends before B starts
+  | 'after'           // A starts after B ends
+  | 'starts_before'   // A starts before B starts
+  | 'starts_after'    // A starts after B starts
+  | 'ends_before'     // A ends before B ends
+  | 'ends_after'      // A ends after B ends
+  | 'overlaps'        // A and B overlap in time
+  | 'contains'        // A fully contains B
+  | 'during';         // A occurs during B
+
 /** Temporal constraint for a criterion */
 export interface TemporalConstraint {
-  type: 'any_time' | 'absolute_window' | 'within_days' | 'during_visit';
+  type: 'any_time' | 'absolute_window' | 'within_days' | 'during_visit' | 'relative_to_criterion';
   date_from?: string;
   date_to?: string;
   days_before?: number;
   days_after?: number;
   relative_to?: 'index';
+  reference_criterion_id?: string;
+  /** Temporal relation when type='relative_to_criterion' (default: 'before') */
+  relation?: TemporalRelation;
 }
 
 /** Occurrence (frequency) constraint */
@@ -267,11 +282,18 @@ export interface CohortCriterion {
   operatorWithNext?: 'AND' | 'OR'; // operator linking to the NEXT criterion
 }
 
-/** Logical group of criteria (AND/OR) */
+/** A node in the criteria tree: either a leaf criterion or a nested group */
+export type CriteriaNode =
+  | { type: 'criterion'; criterion: CohortCriterion }
+  | { type: 'group'; group: CriteriaGroup };
+
+/** Logical group of criteria (AND/OR) — supports nested sub-groups */
 export interface CriteriaGroup {
   operator: 'AND' | 'OR';
   criteria: CohortCriterion[];
   groups?: CriteriaGroup[];
+  /** Ordered children mixing criteria and sub-groups (preferred over separate arrays) */
+  children?: CriteriaNode[];
   sameVisit?: boolean;
 }
 
@@ -289,6 +311,9 @@ export interface CohortCriteria {
   inclusion: CriteriaGroup;
   exclusion: CriteriaGroup;
   demographics?: DemographicConstraints;
+  exit_criteria?: CohortExitCriteria;
+  /** ID of the criterion designated as the initial/index event (cohort entry) */
+  initial_event_criterion_id?: string;
 }
 
 /** Cohort summary from list endpoint */
@@ -340,6 +365,7 @@ export interface PatientJourneyEvent {
   concept_id: number | null;
   concept_name: string;
   source_value: string;
+  source_concept_name?: string;
   value_as_number?: number;
   unit_source_value?: string;
   quantity?: number;
@@ -618,6 +644,109 @@ export interface MappingDecisionEntry {
   confidence_score: number | null;
   user: string;
   reason: string;
+  created_at: string | null;
+}
+
+// ──── Concept Sets ────
+
+export interface ConceptSetItem {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  vocabulary_id: string;
+  include_descendants: boolean;
+}
+
+export interface ConceptSetSummary {
+  id: number;
+  name: string;
+  cdm_name: string;
+  domain: string | null;
+  description: string;
+  concept_count: number;
+  created_by: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ConceptSetDetail extends ConceptSetSummary {
+  concepts: ConceptSetItem[];
+}
+
+// ──── Exit Criteria ────
+
+export interface CohortExitCriteria {
+  type: 'end_of_observation' | 'fixed_duration' | 'event_based';
+  duration_days?: number;
+  exit_event?: CriteriaGroup;
+}
+
+// ──── Incidence Rate ────
+
+export interface IncidenceStrataResult {
+  strata_values: Record<string, string>;
+  target_count: number;
+  outcome_count: number;
+  person_years: number;
+  incidence_rate: number;
+  incidence_proportion: number;
+  ci_lower: number;
+  ci_upper: number;
+}
+
+export interface IncidenceResult {
+  target_count: number;
+  outcome_count: number;
+  person_years: number;
+  incidence_rate: number;
+  incidence_proportion: number;
+  ci_lower: number;
+  ci_upper: number;
+  target_name: string;
+  outcome_name: string;
+  strata: IncidenceStrataResult[];
+  sql?: string;
+}
+
+export interface IncidenceAnalysisSummary {
+  id: number;
+  cdm_name: string;
+  name: string;
+  target_cohort_id: number;
+  outcome_cohort_id: number;
+  created_at: string | null;
+}
+
+// ──── Kaplan-Meier ────
+
+export interface KMPoint {
+  time: number;
+  survival: number;
+  ci_lower: number;
+  ci_upper: number;
+  at_risk: number;
+  events: number;
+  censored: number;
+}
+
+export interface KaplanMeierResult {
+  target_name: string;
+  outcome_name: string;
+  overall: KMPoint[];
+  strata: Record<string, KMPoint[]>;
+  log_rank: { chi_square: number; p_value: number; df: number } | null;
+  median_survival: number | null;
+  time_unit: string;
+  summary: { n: number; events: number; censored: number };
+}
+
+export interface EstimationAnalysisSummary {
+  id: number;
+  cdm_name: string;
+  name: string;
+  analysis_type: string;
+  target_cohort_id: number;
+  outcome_cohort_id: number;
   created_at: string | null;
 }
 

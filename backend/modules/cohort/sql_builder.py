@@ -43,6 +43,28 @@ _DOMAIN_TABLE_MAP = {
     for name, cfg in DOMAIN_CONFIG.items()
 }
 
+# End-date columns for domains that have them (temporal relations)
+_DOMAIN_END_DATE = {
+    "Condition": "condition_end_date",
+    "Drug": "drug_exposure_end_date",
+    "Visit": "visit_end_date",
+    "Device": "device_exposure_end_date",
+}
+
+# SQL conditions for Allen's temporal relations
+# Uses event_date (start) and event_end_date (end, may be NULL) from CTEs
+_TEMPORAL_RELATION_SQL = {
+    'before':        "a.event_date < ref.event_date",
+    'after':         "a.event_date > ref.event_date",
+    'starts_before': "a.event_date < ref.event_date",
+    'starts_after':  "a.event_date > ref.event_date",
+    'ends_before':   "COALESCE(a.event_end_date, a.event_date) < COALESCE(ref.event_end_date, ref.event_date)",
+    'ends_after':    "COALESCE(a.event_end_date, a.event_date) > COALESCE(ref.event_end_date, ref.event_date)",
+    'overlaps':      "a.event_date < COALESCE(ref.event_end_date, ref.event_date) AND COALESCE(a.event_end_date, a.event_date) > ref.event_date",
+    'contains':      "a.event_date <= ref.event_date AND COALESCE(a.event_end_date, a.event_date) >= COALESCE(ref.event_end_date, ref.event_date)",
+    'during':        "a.event_date >= ref.event_date AND COALESCE(a.event_end_date, a.event_date) <= COALESCE(ref.event_end_date, ref.event_date)",
+}
+
 
 def build_cohort_sql(
     criteria: dict, omop_schema: str = "omop_cdm", include_visit_id: bool = False,
@@ -61,6 +83,12 @@ def build_cohort_sql(
     ctes: list[str] = []
     cte_names: list[str] = []
     cte_counter = [0]
+    criterion_cte_map: dict[str, str] = {}  # criterion UUID → CTE name
+
+    # Initial event support: store the initial event criterion ID for "within_days/index" references
+    initial_event_id = criteria.get("initial_event_criterion_id")
+    if initial_event_id:
+        criterion_cte_map["__initial_event_id__"] = initial_event_id
 
     def next_cte_name(prefix: str = "cte") -> str:
         cte_counter[0] += 1
@@ -76,19 +104,21 @@ def build_cohort_sql(
     inclusion = criteria.get("inclusion")
     inc_cte = None
     inc_attrition: list[dict] = []
-    if inclusion and inclusion.get("criteria"):
+    if inclusion and (inclusion.get("criteria") or inclusion.get("groups")):
         inc_cte, inc_parts = _build_group(
             inclusion, omop_schema, ctes, cte_names, next_cte_name, "inc",
             inc_attrition, keep_visit_id=visit_in_output,
+            criterion_cte_map=criterion_cte_map,
         )
 
     # --- Build exclusion criteria ---
     exclusion = criteria.get("exclusion")
     exc_cte = None
     exc_attrition: list[dict] = []
-    if exclusion and exclusion.get("criteria"):
+    if exclusion and (exclusion.get("criteria") or exclusion.get("groups")):
         exc_cte, exc_parts = _build_group(
-            exclusion, omop_schema, ctes, cte_names, next_cte_name, "exc", exc_attrition
+            exclusion, omop_schema, ctes, cte_names, next_cte_name, "exc", exc_attrition,
+            criterion_cte_map=criterion_cte_map,
         )
 
     # --- Demographics filter ---
@@ -450,76 +480,114 @@ def _build_group(
     prefix: str,
     attrition: list[dict],
     keep_visit_id: bool = False,
+    criterion_cte_map: dict | None = None,
 ) -> tuple[str, list[str]]:
     """
-    Build CTEs for a logical group of criteria.
+    Build CTEs for a logical group of criteria with nested sub-groups.
+
+    Handles both flat criteria[] and nested groups[] simultaneously.
+    Supports per-criterion operators via 'operatorWithNext' field.
+    Returns (result_cte_name, list_of_individual_cte_names).
+    """
+    criteria = group.get("criteria", [])
+    sub_groups = group.get("groups", [])
+    operator = group.get("operator", "AND").upper()
+    same_visit = group.get("sameVisit", False)
+
+    criteria_cte = None
+    criteria_parts = []
+
+    # ── Process flat criteria ──
+    if criteria:
+        criteria_cte, criteria_parts = _build_criteria_flat(
+            criteria, omop_schema, ctes, cte_names, next_cte_name,
+            prefix, operator, same_visit, keep_visit_id, criterion_cte_map,
+        )
+
+    # ── Process nested sub-groups recursively ──
+    sub_ctes = []
+    for i, sg in enumerate(sub_groups):
+        sub_cte, _ = _build_group(
+            sg, omop_schema, ctes, cte_names, next_cte_name,
+            f"{prefix}_g{i}", [], criterion_cte_map=criterion_cte_map,
+        )
+        if sub_cte:
+            sub_ctes.append(sub_cte)
+
+    # ── Combine criteria result with sub-group results ──
+    all_parts = []
+    if criteria_cte:
+        all_parts.append(criteria_cte)
+    all_parts.extend(sub_ctes)
+
+    if not all_parts:
+        return None, []
+    if len(all_parts) == 1:
+        return all_parts[0], criteria_parts + sub_ctes
+
+    # Multiple parts: combine with the group operator
+    set_op = "INTERSECT" if operator == "AND" else "UNION"
+    combined_name = next_cte_name(f"{prefix}_grp")
+    parts_sql = f"\n  {set_op}\n".join(
+        f"  SELECT person_id FROM {n}" for n in all_parts
+    )
+    combined = f"{combined_name} AS (\n{parts_sql}\n)"
+    ctes.append(combined)
+    cte_names.append(combined_name)
+    return combined_name, criteria_parts + sub_ctes
+
+
+def _build_criteria_flat(
+    criteria: list[dict],
+    omop_schema: str,
+    ctes: list[str],
+    cte_names: list[str],
+    next_cte_name,
+    prefix: str,
+    operator: str,
+    same_visit: bool,
+    keep_visit_id: bool,
+    criterion_cte_map: dict | None,
+) -> tuple[str | None, list[str]]:
+    """
+    Build CTEs for a flat list of criteria (no sub-groups).
 
     Supports per-criterion operators via 'operatorWithNext' field.
     Criteria linked by OR are grouped into sub-groups (UNION),
     then all groups are combined with AND (INTERSECT).
-
-    Falls back to the group-level 'operator' if criteria don't have
-    'operatorWithNext' (backward compatible).
-
-    Returns (result_cte_name, list_of_individual_cte_names).
     """
-    criteria = group.get("criteria", [])
-
-    if not criteria:
-        # Check for legacy nested sub-groups
-        sub_groups = group.get("groups", [])
-        if not sub_groups:
-            return None, []
-        # Build sub-groups recursively
-        part_names = []
-        for i, sg in enumerate(sub_groups):
-            sub_cte, _ = _build_group(sg, omop_schema, ctes, cte_names, next_cte_name, f"{prefix}_g{i}", [])
-            if sub_cte:
-                part_names.append(sub_cte)
-        if not part_names:
-            return None, []
-        if len(part_names) == 1:
-            return part_names[0], part_names
-        operator = group.get("operator", "AND").upper()
-        set_op = "INTERSECT" if operator == "AND" else "UNION"
-        combined_name = next_cte_name(f"{prefix}_combined")
-        parts_sql = f"\n  {set_op}\n".join(f"  SELECT person_id FROM {n}" for n in part_names)
-        combined = f"{combined_name} AS (\n{parts_sql}\n)"
-        ctes.append(combined)
-        cte_names.append(combined_name)
-        return combined_name, part_names
-
-    # Same-visit mode: AND criteria must share visit_occurrence_id
-    same_visit = group.get("sameVisit", False)
-
-    # Check if criteria use per-criterion operators
     has_per_criterion_ops = any(c.get("operatorWithNext") for c in criteria)
 
     if has_per_criterion_ops:
         # Group consecutive OR-linked criteria together
-        # Example: [A -OR- B -AND- C -OR- D] → groups: [[A,B], [C,D]]
-        # Each inner group uses UNION, outer groups use INTERSECT
         or_groups: list[list[dict]] = [[]]
         for i, criterion in enumerate(criteria):
             or_groups[-1].append(criterion)
             if i < len(criteria) - 1:
                 op = criterion.get("operatorWithNext", "AND").upper()
                 if op == "AND":
-                    or_groups.append([])  # start new group
+                    or_groups.append([])
 
         group_ctes = []
         select_cols = "person_id, visit_occurrence_id" if same_visit else "person_id"
         for gi, or_group in enumerate(or_groups):
             if len(or_group) == 1:
                 cte_name = next_cte_name(prefix)
-                cte = _build_criterion_cte(or_group[0], omop_schema, cte_name, ctes, cte_names, next_cte_name, include_visit_id=same_visit)
+                cte = _build_criterion_cte(
+                    or_group[0], omop_schema, cte_name, ctes, cte_names,
+                    next_cte_name, include_visit_id=same_visit,
+                    criterion_cte_map=criterion_cte_map,
+                )
                 group_ctes.append(cte)
             else:
-                # Multiple criteria in OR group → UNION them
                 sub_ctes = []
                 for c in or_group:
                     cte_name = next_cte_name(prefix)
-                    cte = _build_criterion_cte(c, omop_schema, cte_name, ctes, cte_names, next_cte_name, include_visit_id=same_visit)
+                    cte = _build_criterion_cte(
+                        c, omop_schema, cte_name, ctes, cte_names,
+                        next_cte_name, include_visit_id=same_visit,
+                        criterion_cte_map=criterion_cte_map,
+                    )
                     sub_ctes.append(cte)
                 union_name = next_cte_name(f"{prefix}_or")
                 union_sql = f"\n  UNION\n".join(f"  SELECT {select_cols} FROM {n}" for n in sub_ctes)
@@ -532,7 +600,6 @@ def _build_group(
             return group_ctes[0], group_ctes
 
         if same_visit and len(group_ctes) >= 2:
-            # JOIN on person_id + visit_occurrence_id for same-visit
             combined_name = next_cte_name(f"{prefix}_samevisit")
             first = group_ctes[0]
             sv_cols = "a.person_id, a.visit_occurrence_id" if keep_visit_id else "a.person_id"
@@ -545,7 +612,6 @@ def _build_group(
             cte_names.append(combined_name)
             return combined_name, group_ctes
         else:
-            # INTERSECT all groups (AND)
             combined_name = next_cte_name(f"{prefix}_combined")
             parts_sql = f"\n  INTERSECT\n".join(f"  SELECT person_id FROM {n}" for n in group_ctes)
             combined = f"{combined_name} AS (\n{parts_sql}\n)"
@@ -553,12 +619,14 @@ def _build_group(
             cte_names.append(combined_name)
             return combined_name, group_ctes
     else:
-        # Legacy mode: all criteria use the same group operator
-        operator = group.get("operator", "AND").upper()
         part_names = []
         for criterion in criteria:
             cte_name = next_cte_name(prefix)
-            sql = _build_criterion_cte(criterion, omop_schema, cte_name, ctes, cte_names, next_cte_name, include_visit_id=same_visit)
+            sql = _build_criterion_cte(
+                criterion, omop_schema, cte_name, ctes, cte_names,
+                next_cte_name, include_visit_id=same_visit,
+                criterion_cte_map=criterion_cte_map,
+            )
             part_names.append(sql)
 
         if len(part_names) == 0:
@@ -567,7 +635,6 @@ def _build_group(
             return part_names[0], part_names
 
         if same_visit and operator == "AND" and len(part_names) >= 2:
-            # JOIN on person_id + visit_occurrence_id for same-visit
             combined_name = next_cte_name(f"{prefix}_samevisit")
             first = part_names[0]
             sv_cols = "a.person_id, a.visit_occurrence_id" if keep_visit_id else "a.person_id"
@@ -597,6 +664,7 @@ def _build_criterion_cte(
     cte_names: list[str],
     next_cte_name,
     include_visit_id: bool = False,
+    criterion_cte_map: dict | None = None,
 ) -> str:
     """
     Build a single criterion CTE that yields person_id values.
@@ -704,6 +772,14 @@ def _build_criterion_cte(
     # Visit column for same-visit joins
     visit_select = ", t.visit_occurrence_id" if include_visit_id else ""
 
+    # Include event_date (and event_end_date when available) for temporal relations
+    end_date_col = _DOMAIN_END_DATE.get(domain)
+    event_date_select = f", MIN(t.{date_col}) AS event_date"
+    if end_date_col:
+        event_date_select += f", MAX(t.{end_date_col}) AS event_end_date"
+    else:
+        event_date_select += f", MIN(t.{date_col}) AS event_end_date"
+
     # Handle occurrence (frequency) constraints
     occ_type = occurrence.get("type")
     occ_count = occurrence.get("count", 1)
@@ -734,7 +810,7 @@ def _build_criterion_cte(
 
             cte_sql = (
                 f"{cte_name} AS (\n"
-                f"  SELECT DISTINCT a.person_id\n"
+                f"  SELECT DISTINCT a.person_id, a.event_date\n"
                 f"  FROM {inner_name} a\n"
                 f"  WHERE (\n"
                 f"    SELECT COUNT(*) FROM {inner_name} b\n"
@@ -746,7 +822,7 @@ def _build_criterion_cte(
         else:
             cte_sql = (
                 f"{cte_name} AS (\n"
-                f"  SELECT t.{pid_col} AS person_id{visit_select}\n"
+                f"  SELECT t.{pid_col} AS person_id{visit_select}{event_date_select}\n"
                 f"  FROM {full_table} t\n"
                 f"  WHERE {where_clause}\n"
                 f"  GROUP BY t.{pid_col}{visit_select}\n"
@@ -756,50 +832,144 @@ def _build_criterion_cte(
     else:
         cte_sql = (
             f"{cte_name} AS (\n"
-            f"  SELECT DISTINCT t.{pid_col} AS person_id{visit_select}\n"
+            f"  SELECT t.{pid_col} AS person_id{visit_select}{event_date_select}\n"
             f"  FROM {full_table} t\n"
             f"  WHERE {where_clause}\n"
+            f"  GROUP BY t.{pid_col}{visit_select}\n"
             f")"
         )
 
     ctes.append(cte_sql)
     cte_names.append(cte_name)
 
+    # Register criterion ID → CTE name for temporal reference lookups
+    crit_id = criterion.get("id")
+    if crit_id and criterion_cte_map is not None:
+        criterion_cte_map[crit_id] = cte_name
+
     # Handle temporal relative constraints (within_days relative to index)
     if temporal_type == "within_days" and temporal.get("relative_to") == "index":
-        # This requires the index event to be defined (first inclusion criterion)
-        # For now, we wrap with an additional temporal join CTE
         days_before = temporal.get("days_before")
         days_after = temporal.get("days_after")
         if days_before or days_after:
             temp_name = next_cte_name("temporal")
-            # The index event is the first event for each person in the criterion's domain
-            temp_conditions = []
-            if days_before:
-                temp_conditions.append(
-                    f"t.{date_col} >= (idx.index_date - INTERVAL '{int(days_before)} days')"
-                )
-            if days_after:
-                temp_conditions.append(
-                    f"t.{date_col} <= (idx.index_date + INTERVAL '{int(days_after)} days')"
-                )
-            temp_where = " AND ".join(temp_conditions)
 
+            # Look up the initial event CTE if defined
+            initial_event_id = criterion_cte_map.get("__initial_event_id__") if criterion_cte_map else None
+            initial_cte = criterion_cte_map.get(initial_event_id) if initial_event_id else None
+
+            temp_conditions = []
+            if initial_cte:
+                # Reference the designated initial event CTE
+                if days_before:
+                    temp_conditions.append(
+                        f"a.event_date >= (idx.event_date - INTERVAL '{int(days_before)} days')"
+                    )
+                if days_after:
+                    temp_conditions.append(
+                        f"a.event_date <= (idx.event_date + INTERVAL '{int(days_after)} days')"
+                    )
+                temp_where = " AND ".join(temp_conditions)
+                temp_sql = (
+                    f"{temp_name} AS (\n"
+                    f"  SELECT DISTINCT a.person_id\n"
+                    f"  FROM {cte_name} a\n"
+                    f"  JOIN {initial_cte} idx ON a.person_id = idx.person_id\n"
+                    f"  WHERE {temp_where}\n"
+                    f")"
+                )
+            else:
+                # Fallback: self-join using the criterion's own domain as index
+                if days_before:
+                    temp_conditions.append(
+                        f"t.{date_col} >= (idx.index_date - INTERVAL '{int(days_before)} days')"
+                    )
+                if days_after:
+                    temp_conditions.append(
+                        f"t.{date_col} <= (idx.index_date + INTERVAL '{int(days_after)} days')"
+                    )
+                temp_where = " AND ".join(temp_conditions)
+                temp_sql = (
+                    f"{temp_name} AS (\n"
+                    f"  SELECT DISTINCT t.{pid_col} AS person_id\n"
+                    f"  FROM {full_table} t\n"
+                    f"  JOIN (\n"
+                    f"    SELECT person_id, MIN({date_col}) AS index_date\n"
+                    f"    FROM {full_table}\n"
+                    f"    WHERE {where_clause}\n"
+                    f"    GROUP BY person_id\n"
+                    f"  ) idx ON t.{pid_col} = idx.person_id\n"
+                    f"  WHERE {where_clause} AND {temp_where}\n"
+                    f")"
+                )
+            ctes.append(temp_sql)
+            cte_names.append(temp_name)
+            return temp_name
+
+    # Handle temporal relative to another criterion (Allen's interval algebra)
+    if temporal_type == "relative_to_criterion":
+        ref_id = temporal.get("reference_criterion_id")
+        relation = temporal.get("relation", "before")
+        days_before = temporal.get("days_before")
+        days_after = temporal.get("days_after")
+
+        if ref_id:
+            # Look up the reference criterion's CTE via the ID map
+            ref_cte = None
+            if criterion_cte_map:
+                ref_cte = criterion_cte_map.get(ref_id)
+
+            if not ref_cte:
+                # Fallback: scan cte_names for a match
+                for cn in cte_names:
+                    if ref_id in cn:
+                        ref_cte = cn
+                        break
+
+            if not ref_cte:
+                logger.warning(
+                    "Reference criterion CTE not found for id=%s, skipping temporal constraint",
+                    ref_id,
+                )
+                return cte_name
+
+            # Build temporal join conditions
+            conditions = []
+
+            # Allen's relation condition
+            rel_sql = _TEMPORAL_RELATION_SQL.get(relation)
+            if rel_sql:
+                # Replace 'a.' with the current criterion CTE alias
+                conditions.append(rel_sql)
+
+            # Optional time window
+            if days_before is not None:
+                conditions.append(
+                    f"a.event_date >= (ref.event_date - INTERVAL '{int(days_before)} days')"
+                )
+            if days_after is not None:
+                conditions.append(
+                    f"a.event_date <= (ref.event_date + INTERVAL '{int(days_after)} days')"
+                )
+
+            temp_where = " AND ".join(conditions) if conditions else "TRUE"
+
+            temp_name = next_cte_name("rel_temporal")
             temp_sql = (
                 f"{temp_name} AS (\n"
-                f"  SELECT DISTINCT t.{pid_col} AS person_id\n"
-                f"  FROM {full_table} t\n"
-                f"  JOIN (\n"
-                f"    SELECT person_id, MIN({date_col}) AS index_date\n"
-                f"    FROM {full_table}\n"
-                f"    WHERE {where_clause}\n"
-                f"    GROUP BY person_id\n"
-                f"  ) idx ON t.{pid_col} = idx.person_id\n"
-                f"  WHERE {where_clause} AND {temp_where}\n"
+                f"  SELECT DISTINCT a.person_id\n"
+                f"  FROM {cte_name} a\n"
+                f"  JOIN {ref_cte} ref ON a.person_id = ref.person_id\n"
+                f"  WHERE {temp_where}\n"
                 f")"
             )
             ctes.append(temp_sql)
             cte_names.append(temp_name)
+
+            # Update the criterion_cte_map to point to the temporal CTE
+            if crit_id and criterion_cte_map is not None:
+                criterion_cte_map[crit_id] = temp_name
+
             return temp_name
 
     return cte_name
@@ -861,6 +1031,113 @@ def _build_demographics_cte(
     ctes.append(cte_sql)
     cte_names.append(cte_name)
     return cte_name
+
+
+def build_cohort_dated_sql(
+    criteria: dict, omop_schema: str = "omop_cdm",
+) -> str:
+    """
+    Build SQL returning (person_id, cohort_start_date, cohort_end_date).
+
+    Uses exit_criteria if present in the criteria JSON, otherwise defaults
+    to end_of_observation.
+    """
+    _validate_identifier(omop_schema)
+    base_sql = build_cohort_sql(criteria, omop_schema)
+
+    # Determine date column from the initial event criterion (or first inclusion criterion)
+    inclusion = criteria.get("inclusion", {})
+    inc_criteria = inclusion.get("criteria", [])
+    initial_event_id = criteria.get("initial_event_criterion_id")
+    date_col = None
+    domain_table = None
+
+    # Try to find the designated initial event criterion first
+    target_criteria = inc_criteria
+    if initial_event_id:
+        initial = [c for c in inc_criteria if c.get("id") == initial_event_id]
+        if initial:
+            target_criteria = initial + [c for c in inc_criteria if c.get("id") != initial_event_id]
+
+    for c in target_criteria:
+        domain = c.get("domain", "")
+        if domain in _DOMAIN_TABLE_MAP:
+            dmeta = _DOMAIN_TABLE_MAP[domain]
+            date_col = dmeta["date_col"]
+            domain_table = dmeta["table"]
+            break
+
+    if not date_col:
+        return (
+            f"SELECT p.person_id,\n"
+            f"       op.observation_period_start_date AS cohort_start_date,\n"
+            f"       op.observation_period_end_date AS cohort_end_date\n"
+            f"FROM ({base_sql}) p\n"
+            f"JOIN {omop_schema}.observation_period op ON p.person_id = op.person_id"
+        )
+
+    exit_criteria = criteria.get("exit_criteria")
+    exit_type = exit_criteria.get("type", "end_of_observation") if exit_criteria else "end_of_observation"
+
+    if exit_type == "fixed_duration" and exit_criteria:
+        duration_days = int(exit_criteria.get("duration_days", 365))
+        end_expr = (
+            f"LEAST(op.observation_period_end_date, "
+            f"MIN(t.{date_col}) + INTERVAL '{duration_days} days')"
+        )
+    elif exit_type == "event_based" and exit_criteria and exit_criteria.get("exit_event"):
+        exit_event = exit_criteria["exit_event"]
+        exit_event_criteria = {"inclusion": exit_event}
+        exit_sql = build_cohort_sql(exit_event_criteria, omop_schema)
+        exit_domain = exit_event.get("criteria", [{}])[0].get("domain", "")
+        exit_date_col = None
+        exit_table = None
+        if exit_domain in _DOMAIN_TABLE_MAP:
+            exit_dmeta = _DOMAIN_TABLE_MAP[exit_domain]
+            exit_date_col = exit_dmeta["date_col"]
+            exit_table = exit_dmeta["table"]
+
+        if exit_date_col and exit_table:
+            return (
+                f"WITH cohort_base AS ({base_sql}),\n"
+                f"cohort_start AS (\n"
+                f"  SELECT cb.person_id, MIN(t.{date_col}) AS cohort_start_date\n"
+                f"  FROM cohort_base cb\n"
+                f"  JOIN {omop_schema}.{domain_table} t ON cb.person_id = t.person_id\n"
+                f"  GROUP BY cb.person_id\n"
+                f"),\n"
+                f"exit_events AS (\n"
+                f"  SELECT ep.person_id, MIN(et.{exit_date_col}) AS exit_date\n"
+                f"  FROM ({exit_sql}) ep\n"
+                f"  JOIN {omop_schema}.{exit_table} et ON ep.person_id = et.person_id\n"
+                f"  GROUP BY ep.person_id\n"
+                f")\n"
+                f"SELECT cs.person_id,\n"
+                f"       cs.cohort_start_date,\n"
+                f"       COALESCE(\n"
+                f"         CASE WHEN ee.exit_date > cs.cohort_start_date THEN ee.exit_date END,\n"
+                f"         op.observation_period_end_date\n"
+                f"       ) AS cohort_end_date\n"
+                f"FROM cohort_start cs\n"
+                f"JOIN {omop_schema}.observation_period op\n"
+                f"  ON cs.person_id = op.person_id\n"
+                f"  AND cs.cohort_start_date BETWEEN op.observation_period_start_date AND op.observation_period_end_date\n"
+                f"LEFT JOIN exit_events ee ON cs.person_id = ee.person_id"
+            )
+        end_expr = "op.observation_period_end_date"
+    else:
+        end_expr = "op.observation_period_end_date"
+
+    return (
+        f"SELECT cb.person_id,\n"
+        f"       MIN(t.{date_col}) AS cohort_start_date,\n"
+        f"       {end_expr} AS cohort_end_date\n"
+        f"FROM ({base_sql}) cb\n"
+        f"JOIN {omop_schema}.{domain_table} t ON cb.person_id = t.person_id\n"
+        f"JOIN {omop_schema}.observation_period op\n"
+        f"  ON cb.person_id = op.person_id\n"
+        f"GROUP BY cb.person_id, op.observation_period_end_date"
+    )
 
 
 def _criterion_label(criterion: dict) -> str:
