@@ -7,6 +7,7 @@ import {
   SaveOutlined, FolderOpenOutlined, DeleteOutlined,
   PlusOutlined, PlayCircleOutlined, UserOutlined,
   TableOutlined, SwapOutlined, CodeOutlined, DownloadOutlined,
+  AppstoreOutlined, BarChartOutlined, LineChartOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -16,6 +17,9 @@ import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
 import PatientJourney from '../components/cohort/PatientJourney';
+import ConceptSetPage from './ConceptSetPage';
+import IncidencePage from './IncidencePage';
+import EstimationPage from './EstimationPage';
 import { cohortApi } from '../api/client';
 import type {
   CohortCriterion,
@@ -362,6 +366,36 @@ export default function CohortPage({ selectedCdm }: Props) {
                 children: (
                   <SqlEditorPanel cdmName={selectedCdm || ''} />
                 ),
+              },
+              {
+                key: 'concept-sets',
+                label: (
+                  <Space size={4}>
+                    <AppstoreOutlined />
+                    {t('app.concept_sets', 'Concept Sets')}
+                  </Space>
+                ),
+                children: <ConceptSetPage selectedCdm={selectedCdm} />,
+              },
+              {
+                key: 'incidence',
+                label: (
+                  <Space size={4}>
+                    <BarChartOutlined />
+                    {t('app.incidence', 'Incidence')}
+                  </Space>
+                ),
+                children: <IncidencePage selectedCdm={selectedCdm} />,
+              },
+              {
+                key: 'estimation',
+                label: (
+                  <Space size={4}>
+                    <LineChartOutlined />
+                    {t('app.estimation', 'Estimation')}
+                  </Space>
+                ),
+                children: <EstimationPage selectedCdm={selectedCdm} />,
               },
             ]}
           />
