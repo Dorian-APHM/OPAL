@@ -1,17 +1,18 @@
 import { useState } from 'react';
 import {
   Card, Tag, Button, Select, InputNumber, Space, Typography,
-  Tooltip, Switch, Collapse, Empty, Checkbox, Spin,
+  Tooltip, Switch, Collapse, Empty, Checkbox, Spin, Radio,
 } from 'antd';
 import {
   DeleteOutlined, SwapOutlined,
-  CheckCircleOutlined, CloseCircleOutlined,
+  CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { conceptApi } from '../../api/client';
 import type {
   CohortCriterion, CriteriaGroup, DemographicConstraints,
   TemporalConstraint, OccurrenceConstraint, ValueConstraint,
+  CohortExitCriteria,
 } from '../../types';
 
 const { Text } = Typography;
@@ -32,15 +33,17 @@ interface Props {
   inclusion: CriteriaGroup;
   exclusion: CriteriaGroup;
   demographics: DemographicConstraints;
+  exitCriteria?: CohortExitCriteria;
   cdmName: string;
   onUpdateInclusion: (group: CriteriaGroup) => void;
   onUpdateExclusion: (group: CriteriaGroup) => void;
   onUpdateDemographics: (demo: DemographicConstraints) => void;
+  onUpdateExitCriteria?: (exit: CohortExitCriteria) => void;
 }
 
 export default function QueryCanvas({
-  inclusion, exclusion, demographics, cdmName,
-  onUpdateInclusion, onUpdateExclusion, onUpdateDemographics,
+  inclusion, exclusion, demographics, exitCriteria, cdmName,
+  onUpdateInclusion, onUpdateExclusion, onUpdateDemographics, onUpdateExitCriteria,
 }: Props) {
   const { t } = useTranslation();
 
@@ -128,6 +131,7 @@ export default function QueryCanvas({
         onToggleOperator={(idx) => toggleOperatorBetween('inclusion', idx)}
         sameVisit={inclusion.sameVisit}
         onToggleSameVisit={() => onUpdateInclusion({ ...inclusion, sameVisit: !inclusion.sameVisit })}
+        allCriteria={[...inclusion.criteria, ...exclusion.criteria]}
       />
 
       {/* Logic summary */}
@@ -147,7 +151,48 @@ export default function QueryCanvas({
         onUpdate={(id, updates) => updateCriterion('exclusion', id, updates)}
         onMove={(id) => moveCriterion('exclusion', id)}
         onToggleOperator={(idx) => toggleOperatorBetween('exclusion', idx)}
+        allCriteria={[...inclusion.criteria, ...exclusion.criteria]}
       />
+
+      {/* Exit Criteria */}
+      {onUpdateExitCriteria && inclusion.criteria.length > 0 && (
+        <Card
+          size="small"
+          title={<Space><ClockCircleOutlined /><span style={{ color: '#faad14' }}>{t('cohort.exit_criteria', 'Exit Criteria')}</span></Space>}
+          style={{ borderLeft: '3px solid #faad14' }}
+        >
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Radio.Group
+              value={exitCriteria?.type || 'end_of_observation'}
+              onChange={e => onUpdateExitCriteria({ ...exitCriteria, type: e.target.value })}
+            >
+              <Space direction="vertical" size={4}>
+                <Radio value="end_of_observation">
+                  <Text style={{ fontSize: 12 }}>{t('cohort.exit_end_obs', 'End of observation period')}</Text>
+                </Radio>
+                <Radio value="fixed_duration">
+                  <Space size={4}>
+                    <Text style={{ fontSize: 12 }}>{t('cohort.exit_fixed', 'Fixed duration:')}</Text>
+                    {(exitCriteria?.type === 'fixed_duration') && (
+                      <InputNumber
+                        size="small"
+                        min={1}
+                        value={exitCriteria?.duration_days ?? 365}
+                        onChange={v => onUpdateExitCriteria({ ...exitCriteria!, duration_days: v ?? 365 })}
+                        style={{ width: 80 }}
+                        addonAfter={t('cohort.days', 'days')}
+                      />
+                    )}
+                  </Space>
+                </Radio>
+                <Radio value="event_based">
+                  <Text style={{ fontSize: 12 }}>{t('cohort.exit_event', 'Event-based (outcome occurrence)')}</Text>
+                </Radio>
+              </Space>
+            </Radio.Group>
+          </Space>
+        </Card>
+      )}
 
       {isEmpty && (
         <Empty
@@ -164,7 +209,7 @@ export default function QueryCanvas({
 function CriteriaListCard({
   title, color, icon, criteria, groupKey, cdmName,
   onRemove, onUpdate, onMove, onToggleOperator,
-  sameVisit, onToggleSameVisit,
+  sameVisit, onToggleSameVisit, allCriteria,
 }: {
   title: string;
   color: string;
@@ -178,6 +223,7 @@ function CriteriaListCard({
   onToggleOperator: (idx: number) => void;
   sameVisit?: boolean;
   onToggleSameVisit?: () => void;
+  allCriteria?: CohortCriterion[];
 }) {
   const { t } = useTranslation();
   if (criteria.length === 0) return null;
@@ -215,6 +261,7 @@ function CriteriaListCard({
               onRemove={() => onRemove(criterion.id)}
               onUpdate={(updates) => onUpdate(criterion.id, updates)}
               onMove={() => onMove(criterion.id)}
+              allCriteria={allCriteria}
             />
           </div>
         ))}
@@ -226,7 +273,7 @@ function CriteriaListCard({
 // ──── Single Criterion Card ────
 
 function CriterionCard({
-  criterion, groupKey, cdmName, onRemove, onUpdate, onMove,
+  criterion, groupKey, cdmName, onRemove, onUpdate, onMove, allCriteria,
 }: {
   criterion: CohortCriterion;
   groupKey: string;
@@ -234,6 +281,7 @@ function CriterionCard({
   onRemove: () => void;
   onUpdate: (updates: Partial<CohortCriterion>) => void;
   onMove: () => void;
+  allCriteria?: CohortCriterion[];
 }) {
   const { t } = useTranslation();
   const domainColor = DOMAIN_COLORS[criterion.domain] || '#666';
@@ -339,11 +387,12 @@ function CriterionCard({
                     size="small"
                     value={criterion.temporal.type}
                     onChange={v => onUpdate({ temporal: { ...criterion.temporal, type: v as TemporalConstraint['type'] } })}
-                    style={{ width: 140 }}
+                    style={{ width: 160 }}
                   >
                     <Option value="any_time">{t('cohort.any_time', 'Any time')}</Option>
                     <Option value="absolute_window">{t('cohort.absolute_window', 'Date window')}</Option>
                     <Option value="within_days">{t('cohort.within_days', 'Within N days')}</Option>
+                    <Option value="relative_to_criterion">{t('cohort.relative_to', 'Relative to criterion')}</Option>
                   </Select>
                   {criterion.temporal.type === 'within_days' && (
                     <>
@@ -368,6 +417,33 @@ function CriterionCard({
                       <input type="date" value={criterion.temporal.date_to || ''}
                         onChange={e => onUpdate({ temporal: { ...criterion.temporal, date_to: e.target.value || undefined } })}
                         style={{ fontSize: 11 }}
+                      />
+                    </>
+                  )}
+                  {criterion.temporal.type === 'relative_to_criterion' && allCriteria && (
+                    <>
+                      <Select
+                        size="small"
+                        placeholder={t('cohort.select_criterion', 'Select criterion...')}
+                        value={criterion.temporal.reference_criterion_id}
+                        onChange={v => onUpdate({ temporal: { ...criterion.temporal, reference_criterion_id: v } })}
+                        style={{ width: 180 }}
+                      >
+                        {allCriteria.filter(c => c.id !== criterion.id).map(c => (
+                          <Option key={c.id} value={c.id}>
+                            {c.concepts.length > 0 ? c.concepts[0].concept_name : c.domain}
+                          </Option>
+                        ))}
+                      </Select>
+                      <InputNumber size="small" min={0} placeholder={t('cohort.days_before', 'Days before')}
+                        value={criterion.temporal.days_before}
+                        onChange={v => onUpdate({ temporal: { ...criterion.temporal, days_before: v ?? undefined } })}
+                        style={{ width: 80 }}
+                      />
+                      <InputNumber size="small" min={0} placeholder={t('cohort.days_after', 'Days after')}
+                        value={criterion.temporal.days_after}
+                        onChange={v => onUpdate({ temporal: { ...criterion.temporal, days_after: v ?? undefined } })}
+                        style={{ width: 80 }}
                       />
                     </>
                   )}

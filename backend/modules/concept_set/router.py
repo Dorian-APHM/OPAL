@@ -1,0 +1,222 @@
+"""
+Concept Sets — Reusable groups of concepts.
+CRUD + resolution (expand descendants) + counts.
+"""
+import json
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from db.app_db import get_db
+from db.models import ConceptSet, CdmConfig, AnalysisSettings
+from db.omop_connector import get_omop_connection
+from utils.crypto import decrypt_password
+from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/concept-sets", tags=["concept-sets"])
+
+
+def _get_cdm_conn(db: Session, cdm_name: str):
+    cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
+    if not cdm:
+        raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
+    password = decrypt_password(cdm.db_password_encrypted)
+    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+    settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
+    schema = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    return conn, schema
+
+
+class ConceptSetCreate(BaseModel):
+    name: str
+    cdm_name: str
+    domain: str | None = None
+    description: str = ""
+    concepts: list[dict]
+
+
+class ConceptSetUpdate(BaseModel):
+    name: str | None = None
+    domain: str | None = None
+    description: str | None = None
+    concepts: list[dict] | None = None
+
+
+@router.get("/")
+def list_concept_sets(
+    request: Request,
+    cdm_name: str | None = None,
+    domain: str | None = None,
+    db=Depends(get_db),
+):
+    q = db.query(ConceptSet)
+    if cdm_name:
+        q = q.filter(ConceptSet.cdm_name == cdm_name)
+    if domain:
+        q = q.filter(ConceptSet.domain == domain)
+    sets = q.order_by(ConceptSet.updated_at.desc()).all()
+    return {
+        "concept_sets": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "cdm_name": s.cdm_name,
+                "domain": s.domain,
+                "description": s.description,
+                "concept_count": len(json.loads(s.concepts_json)) if s.concepts_json else 0,
+                "created_by": s.created_by,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            }
+            for s in sets
+        ]
+    }
+
+
+@router.post("/")
+def create_concept_set(body: ConceptSetCreate, request: Request, db=Depends(get_db)):
+    user_info = getattr(request.state, "user", {})
+    cs = ConceptSet(
+        name=body.name,
+        cdm_name=body.cdm_name,
+        domain=body.domain,
+        description=body.description,
+        concepts_json=json.dumps(body.concepts),
+        created_by=user_info.get("preferred_username", "system"),
+    )
+    db.add(cs)
+    db.commit()
+    db.refresh(cs)
+    return {"id": cs.id, "name": cs.name}
+
+
+@router.get("/{concept_set_id}")
+def get_concept_set(concept_set_id: int, db=Depends(get_db)):
+    cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
+    if not cs:
+        return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+    return {
+        "id": cs.id,
+        "name": cs.name,
+        "cdm_name": cs.cdm_name,
+        "domain": cs.domain,
+        "description": cs.description,
+        "concepts": json.loads(cs.concepts_json) if cs.concepts_json else [],
+        "created_by": cs.created_by,
+        "created_at": cs.created_at.isoformat() if cs.created_at else None,
+        "updated_at": cs.updated_at.isoformat() if cs.updated_at else None,
+    }
+
+
+@router.put("/{concept_set_id}")
+def update_concept_set(concept_set_id: int, body: ConceptSetUpdate, db=Depends(get_db)):
+    cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
+    if not cs:
+        return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+    if body.name is not None:
+        cs.name = body.name
+    if body.domain is not None:
+        cs.domain = body.domain
+    if body.description is not None:
+        cs.description = body.description
+    if body.concepts is not None:
+        cs.concepts_json = json.dumps(body.concepts)
+    db.commit()
+    return {"status": "ok", "id": cs.id}
+
+
+@router.delete("/{concept_set_id}")
+def delete_concept_set(concept_set_id: int, db=Depends(get_db)):
+    cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
+    if not cs:
+        return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+    db.delete(cs)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/{concept_set_id}/resolve")
+def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Depends(get_db)):
+    """Resolve a concept set: return all concept_ids including descendants."""
+    cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
+    if not cs:
+        return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+
+    concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
+    if not concepts:
+        return {"concept_ids": [], "total": 0}
+
+    target_cdm = cdm_name or cs.cdm_name
+    conn, omop_schema = _get_cdm_conn(db, target_cdm)
+    try:
+        all_ids = set()
+        expand_ids = []
+
+        for c in concepts:
+            cid = int(c["concept_id"])
+            all_ids.add(cid)
+            if c.get("include_descendants", True):
+                expand_ids.append(cid)
+
+        if expand_ids:
+            cur = conn.cursor()
+            placeholders = ",".join(str(int(i)) for i in expand_ids)
+            cur.execute(
+                f"SELECT DISTINCT descendant_concept_id FROM {omop_schema}.concept_ancestor "
+                f"WHERE ancestor_concept_id IN ({placeholders})"
+            )
+            for row in cur.fetchall():
+                all_ids.add(row[0])
+            cur.close()
+
+        return {"concept_ids": sorted(all_ids), "total": len(all_ids)}
+    finally:
+        conn.close()
+
+
+@router.post("/{concept_set_id}/counts")
+def concept_set_counts(concept_set_id: int, body: dict, db=Depends(get_db)):
+    """Get record and person counts for each concept in the set."""
+    cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
+    if not cs:
+        return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+
+    target_cdm = body.get("cdm_name", cs.cdm_name)
+    concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
+    if not concepts:
+        return {"counts": {}}
+
+    concept_ids = [int(c["concept_id"]) for c in concepts]
+    conn, omop_schema = _get_cdm_conn(db, target_cdm)
+    try:
+        counts = {}
+        cur = conn.cursor()
+        for cfg in DOMAIN_CONFIG.values():
+            table = cfg["table"]
+            concept_col = cfg["concept_id"]
+            pid_col = cfg["person_id"]
+            placeholders = ",".join(str(i) for i in concept_ids)
+            try:
+                cur.execute(
+                    f"SELECT {concept_col}, COUNT(*) AS n_records, COUNT(DISTINCT {pid_col}) AS n_persons "
+                    f"FROM {omop_schema}.{table} "
+                    f"WHERE {concept_col} IN ({placeholders}) "
+                    f"GROUP BY {concept_col}"
+                )
+                for row in cur.fetchall():
+                    cid = row[0]
+                    if cid not in counts:
+                        counts[cid] = {"n_records": 0, "n_persons": 0}
+                    counts[cid]["n_records"] += row[1]
+                    counts[cid]["n_persons"] += row[2]
+            except Exception:
+                conn.rollback()
+                continue
+        cur.close()
+        return {"counts": counts}
+    finally:
+        conn.close()

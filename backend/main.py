@@ -88,6 +88,9 @@ from modules.cohort.router import router as cohort_router
 from modules.mapping.router import router as mapping_router
 from modules.concept.router import router as concept_router
 from modules.ohdsi.router import router as ohdsi_router
+from modules.concept_set.router import router as concept_set_router
+from modules.incidence.router import router as incidence_router
+from modules.estimation.router import router as estimation_router
 
 app.include_router(cdm_router)
 app.include_router(quality_router)
@@ -95,6 +98,9 @@ app.include_router(cohort_router)
 app.include_router(mapping_router)
 app.include_router(concept_router)
 app.include_router(ohdsi_router)
+app.include_router(concept_set_router)
+app.include_router(incidence_router)
+app.include_router(estimation_router)
 
 
 # i18n endpoint
