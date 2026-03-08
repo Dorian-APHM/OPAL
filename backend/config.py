@@ -51,6 +51,7 @@ DOMAIN_CONFIG = {
         "date_col": "condition_start_date",
         "concept_id": "condition_concept_id",
         "source_value": "condition_source_value",
+        "source_concept_id": "condition_source_concept_id",
     },
     "Drug": {
         "table": "drug_exposure",
@@ -59,6 +60,7 @@ DOMAIN_CONFIG = {
         "concept_id": "drug_concept_id",
         "source_value": "drug_source_value",
         "source_name": "drug_source_name",
+        "source_concept_id": "drug_source_concept_id",
     },
     "Measurement": {
         "table": "measurement",
@@ -67,6 +69,7 @@ DOMAIN_CONFIG = {
         "concept_id": "measurement_concept_id",
         "source_value": "measurement_source_value",
         "source_name": "measurement_source_name",
+        "source_concept_id": "measurement_source_concept_id",
     },
     "Observation": {
         "table": "observation",
@@ -74,6 +77,7 @@ DOMAIN_CONFIG = {
         "date_col": "observation_date",
         "concept_id": "observation_concept_id",
         "source_value": "observation_source_value",
+        "source_concept_id": "observation_source_concept_id",
     },
     "Procedure": {
         "table": "procedure_occurrence",
@@ -81,6 +85,7 @@ DOMAIN_CONFIG = {
         "date_col": "procedure_date",
         "concept_id": "procedure_concept_id",
         "source_value": "procedure_source_value",
+        "source_concept_id": "procedure_source_concept_id",
     },
     "Visit": {
         "table": "visit_occurrence",
@@ -88,6 +93,7 @@ DOMAIN_CONFIG = {
         "date_col": "visit_start_date",
         "concept_id": "visit_concept_id",
         "source_value": "visit_source_value",
+        "source_concept_id": "visit_source_concept_id",
     },
     "Device": {
         "table": "device_exposure",
@@ -95,6 +101,7 @@ DOMAIN_CONFIG = {
         "date_col": "device_exposure_start_date",
         "concept_id": "device_concept_id",
         "source_value": "device_source_value",
+        "source_concept_id": "device_source_concept_id",
     },
     "Death": {
         "table": "death",
@@ -102,6 +109,7 @@ DOMAIN_CONFIG = {
         "date_col": "death_date",
         "concept_id": "cause_concept_id",
         "source_value": "cause_source_value",
+        "source_concept_id": "cause_source_concept_id",
     },
 }
 

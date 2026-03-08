@@ -252,12 +252,22 @@ function EventRow({ evt, formatDate }: { evt: PatientJourneyEvent; formatDate: (
     return parts.join(' · ');
   }, [evt, formatDate]);
 
+  // Determine if unmapped (concept_id is 0 or concept_name is empty/generic)
+  const isUnmapped = !evt.concept_id || evt.concept_id === 0 || !evt.concept_name || evt.concept_name === 'No matching concept';
+
+  // Display label: prefer concept_name when mapped, fall back to source_concept_name, then source_value
+  const displayLabel = isUnmapped
+    ? (evt.source_concept_name || evt.source_value || `Concept ${evt.concept_id}`)
+    : (evt.concept_name || evt.source_concept_name || evt.source_value || `Concept ${evt.concept_id}`);
+
   return (
     <Tooltip
       title={
         <div>
           <div><b>{evt.domain}</b> — concept_id: {evt.concept_id}</div>
-          {evt.source_value && <div>Source: {evt.source_value}</div>}
+          {evt.concept_name && <div>Standard: {evt.concept_name}</div>}
+          {evt.source_concept_name && <div>Source concept: {evt.source_concept_name}</div>}
+          {evt.source_value && <div>Source value: {evt.source_value}</div>}
           {detail && <div>{detail}</div>}
         </div>
       }
@@ -272,8 +282,13 @@ function EventRow({ evt, formatDate }: { evt: PatientJourneyEvent; formatDate: (
       }}>
         <span style={{ color, flexShrink: 0 }}>{icon}</span>
         <Text ellipsis style={{ flex: 1, fontSize: 13 }}>
-          {evt.concept_name || evt.source_value || `Concept ${evt.concept_id}`}
+          {displayLabel}
         </Text>
+        {isUnmapped && (
+          <Tag color="orange" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+            unmapped
+          </Tag>
+        )}
         {detail && (
           <Text type="secondary" style={{ fontSize: 11, flexShrink: 0 }}>
             {detail}

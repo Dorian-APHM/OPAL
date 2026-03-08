@@ -25,6 +25,12 @@ import type {
   AuditStats,
   AdminUser,
   AccessRequest,
+  ConceptSetSummary,
+  ConceptSetDetail,
+  IncidenceResult,
+  IncidenceAnalysisSummary,
+  KaplanMeierResult,
+  EstimationAnalysisSummary,
 } from '../types';
 
 const api = axios.create({
@@ -290,6 +296,12 @@ export const mappingApi = {
     api.post(`/mapping/history/${decisionId}/rollback`),
   exportHistoryUrl: (cdmName: string, domain?: string) =>
     `/api/mapping/history/${cdmName}/export${domain ? `?domain=${domain}` : ''}`,
+  conceptLookup: (cdmName: string, conceptId: number) =>
+    api.get<{
+      concept_id: number; concept_name: string; concept_code: string;
+      vocabulary_id: string; domain_id: string; standard_concept: string | null;
+      concept_class_id: string;
+    }>(`/mapping/concept-lookup/${cdmName}/${conceptId}`),
 };
 
 // Concept Explorer endpoints
@@ -404,6 +416,55 @@ export const publicApi = {
     username: string; email: string;
     first_name: string; last_name: string; requested_role: string;
   }) => api.post('/access-requests', data),
+};
+
+// Concept Sets endpoints
+export const conceptSetApi = {
+  list: (cdmName?: string, domain?: string) =>
+    api.get<{ concept_sets: ConceptSetSummary[] }>('/concept-sets/', { params: { cdm_name: cdmName, domain } }),
+  get: (id: number) => api.get<ConceptSetDetail>(`/concept-sets/${id}`),
+  create: (data: { name: string; cdm_name: string; domain?: string; description?: string; concepts: any[] }) =>
+    api.post<{ id: number; name: string }>('/concept-sets/', data),
+  update: (id: number, data: { name?: string; domain?: string; description?: string; concepts?: any[] }) =>
+    api.put(`/concept-sets/${id}`, data),
+  delete: (id: number) => api.delete(`/concept-sets/${id}`),
+  resolve: (id: number, cdmName?: string) =>
+    api.get<{ concept_ids: number[]; total: number }>(`/concept-sets/${id}/resolve`, { params: { cdm_name: cdmName } }),
+  counts: (id: number, cdmName: string) =>
+    api.post<{ counts: Record<number, { n_records: number; n_persons: number }> }>(`/concept-sets/${id}/counts`, { cdm_name: cdmName }),
+};
+
+// Incidence Rate endpoints
+export const incidenceApi = {
+  compute: (data: {
+    cdm_name: string; target_cohort_id: number; outcome_cohort_id: number;
+    time_at_risk_start?: number; time_at_risk_end?: string | number;
+    strata?: string[]; age_groups?: any[]; clean_window?: number;
+  }) => api.post<IncidenceResult>('/incidence/compute', data),
+  save: (data: {
+    cdm_name: string; name: string; target_cohort_id: number; outcome_cohort_id: number;
+    parameters?: any; results?: any;
+  }) => api.post<{ id: number; name: string }>('/incidence/save', data),
+  list: (cdmName?: string) =>
+    api.get<{ analyses: IncidenceAnalysisSummary[] }>('/incidence/', { params: { cdm_name: cdmName } }),
+  get: (id: number) => api.get('/incidence/' + id),
+};
+
+// Estimation endpoints (Kaplan-Meier)
+export const estimationApi = {
+  kaplanMeier: (data: {
+    cdm_name: string; target_cohort_id: number; outcome_cohort_id: number;
+    time_at_risk_end?: number | null; time_unit?: string;
+    strata?: string[]; confidence_level?: number;
+  }) => api.post<KaplanMeierResult>('/estimation/kaplan-meier', data),
+  save: (data: {
+    cdm_name: string; name: string; analysis_type?: string;
+    target_cohort_id: number; outcome_cohort_id: number;
+    parameters?: any; results?: any;
+  }) => api.post<{ id: number; name: string }>('/estimation/save', data),
+  list: (cdmName?: string) =>
+    api.get<{ analyses: EstimationAnalysisSummary[] }>('/estimation/', { params: { cdm_name: cdmName } }),
+  get: (id: number) => api.get('/estimation/' + id),
 };
 
 export default api;
