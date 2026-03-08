@@ -263,11 +263,13 @@ export default function CohortPage({ selectedCdm }: Props) {
                       exclusion={criteria.exclusion}
                       demographics={criteria.demographics || {}}
                       exitCriteria={criteria.exit_criteria}
+                      initialEventId={criteria.initial_event_criterion_id}
                       cdmName={selectedCdm || ''}
                       onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
                       onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
                       onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
                       onUpdateExitCriteria={exit => setCriteria(prev => ({ ...prev, exit_criteria: exit }))}
+                      onUpdateInitialEvent={id => setCriteria(prev => ({ ...prev, initial_event_criterion_id: id }))}
                     />
 
                     {/* Detailed Sample */}
@@ -601,7 +603,7 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
 
 // ──── Helpers to convert between frontend and backend criteria ────
 
-function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
+function mapGroupToBackend(group: import('../types').CriteriaGroup): import('../types').CriteriaGroup {
   const mapCriterion = (c: CohortCriterion) => ({
     ...c,
     concepts: c.concepts.map(con => ({
@@ -615,21 +617,24 @@ function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
     })),
   });
   return {
-    inclusion: {
-      operator: criteria.inclusion.operator,
-      criteria: criteria.inclusion.criteria.map(mapCriterion),
-      sameVisit: criteria.inclusion.sameVisit,
-    },
-    exclusion: {
-      operator: criteria.exclusion.operator,
-      criteria: criteria.exclusion.criteria.map(mapCriterion),
-      sameVisit: criteria.exclusion.sameVisit,
-    },
-    demographics: criteria.demographics,
+    operator: group.operator,
+    criteria: (group.criteria || []).map(mapCriterion),
+    groups: group.groups?.map(mapGroupToBackend),
+    sameVisit: group.sameVisit,
   };
 }
 
-function fromBackendCriteria(backendCriteria: any): CohortCriteria {
+function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
+  return {
+    inclusion: mapGroupToBackend(criteria.inclusion),
+    exclusion: mapGroupToBackend(criteria.exclusion),
+    demographics: criteria.demographics,
+    exit_criteria: criteria.exit_criteria,
+    initial_event_criterion_id: criteria.initial_event_criterion_id,
+  };
+}
+
+function mapGroupFromBackend(group: any): import('../types').CriteriaGroup {
   const mapCriteria = (criteria: any[]) =>
     (criteria || []).map((c: any) => ({
       id: c.id || Math.random().toString(36).slice(2) + Date.now().toString(36),
@@ -648,14 +653,19 @@ function fromBackendCriteria(backendCriteria: any): CohortCriteria {
     }));
 
   return {
-    inclusion: {
-      operator: backendCriteria.inclusion?.operator || 'AND',
-      criteria: mapCriteria(backendCriteria.inclusion?.criteria),
-    },
-    exclusion: {
-      operator: backendCriteria.exclusion?.operator || 'OR',
-      criteria: mapCriteria(backendCriteria.exclusion?.criteria),
-    },
+    operator: group?.operator || 'AND',
+    criteria: mapCriteria(group?.criteria),
+    groups: group?.groups?.map(mapGroupFromBackend),
+    sameVisit: group?.sameVisit,
+  };
+}
+
+function fromBackendCriteria(backendCriteria: any): CohortCriteria {
+  return {
+    inclusion: mapGroupFromBackend(backendCriteria.inclusion),
+    exclusion: mapGroupFromBackend(backendCriteria.exclusion || { operator: 'OR', criteria: [] }),
     demographics: backendCriteria.demographics || {},
+    exit_criteria: backendCriteria.exit_criteria,
+    initial_event_criterion_id: backendCriteria.initial_event_criterion_id,
   };
 }

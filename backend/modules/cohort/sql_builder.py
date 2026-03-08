@@ -85,6 +85,11 @@ def build_cohort_sql(
     cte_counter = [0]
     criterion_cte_map: dict[str, str] = {}  # criterion UUID → CTE name
 
+    # Initial event support: store the initial event criterion ID for "within_days/index" references
+    initial_event_id = criteria.get("initial_event_criterion_id")
+    if initial_event_id:
+        criterion_cte_map["__initial_event_id__"] = initial_event_id
+
     def next_cte_name(prefix: str = "cte") -> str:
         cte_counter[0] += 1
         return f"{prefix}_{cte_counter[0]}"
@@ -844,37 +849,59 @@ def _build_criterion_cte(
 
     # Handle temporal relative constraints (within_days relative to index)
     if temporal_type == "within_days" and temporal.get("relative_to") == "index":
-        # This requires the index event to be defined (first inclusion criterion)
-        # For now, we wrap with an additional temporal join CTE
         days_before = temporal.get("days_before")
         days_after = temporal.get("days_after")
         if days_before or days_after:
             temp_name = next_cte_name("temporal")
-            # The index event is the first event for each person in the criterion's domain
-            temp_conditions = []
-            if days_before:
-                temp_conditions.append(
-                    f"t.{date_col} >= (idx.index_date - INTERVAL '{int(days_before)} days')"
-                )
-            if days_after:
-                temp_conditions.append(
-                    f"t.{date_col} <= (idx.index_date + INTERVAL '{int(days_after)} days')"
-                )
-            temp_where = " AND ".join(temp_conditions)
 
-            temp_sql = (
-                f"{temp_name} AS (\n"
-                f"  SELECT DISTINCT t.{pid_col} AS person_id\n"
-                f"  FROM {full_table} t\n"
-                f"  JOIN (\n"
-                f"    SELECT person_id, MIN({date_col}) AS index_date\n"
-                f"    FROM {full_table}\n"
-                f"    WHERE {where_clause}\n"
-                f"    GROUP BY person_id\n"
-                f"  ) idx ON t.{pid_col} = idx.person_id\n"
-                f"  WHERE {where_clause} AND {temp_where}\n"
-                f")"
-            )
+            # Look up the initial event CTE if defined
+            initial_event_id = criterion_cte_map.get("__initial_event_id__") if criterion_cte_map else None
+            initial_cte = criterion_cte_map.get(initial_event_id) if initial_event_id else None
+
+            temp_conditions = []
+            if initial_cte:
+                # Reference the designated initial event CTE
+                if days_before:
+                    temp_conditions.append(
+                        f"a.event_date >= (idx.event_date - INTERVAL '{int(days_before)} days')"
+                    )
+                if days_after:
+                    temp_conditions.append(
+                        f"a.event_date <= (idx.event_date + INTERVAL '{int(days_after)} days')"
+                    )
+                temp_where = " AND ".join(temp_conditions)
+                temp_sql = (
+                    f"{temp_name} AS (\n"
+                    f"  SELECT DISTINCT a.person_id\n"
+                    f"  FROM {cte_name} a\n"
+                    f"  JOIN {initial_cte} idx ON a.person_id = idx.person_id\n"
+                    f"  WHERE {temp_where}\n"
+                    f")"
+                )
+            else:
+                # Fallback: self-join using the criterion's own domain as index
+                if days_before:
+                    temp_conditions.append(
+                        f"t.{date_col} >= (idx.index_date - INTERVAL '{int(days_before)} days')"
+                    )
+                if days_after:
+                    temp_conditions.append(
+                        f"t.{date_col} <= (idx.index_date + INTERVAL '{int(days_after)} days')"
+                    )
+                temp_where = " AND ".join(temp_conditions)
+                temp_sql = (
+                    f"{temp_name} AS (\n"
+                    f"  SELECT DISTINCT t.{pid_col} AS person_id\n"
+                    f"  FROM {full_table} t\n"
+                    f"  JOIN (\n"
+                    f"    SELECT person_id, MIN({date_col}) AS index_date\n"
+                    f"    FROM {full_table}\n"
+                    f"    WHERE {where_clause}\n"
+                    f"    GROUP BY person_id\n"
+                    f"  ) idx ON t.{pid_col} = idx.person_id\n"
+                    f"  WHERE {where_clause} AND {temp_where}\n"
+                    f")"
+                )
             ctes.append(temp_sql)
             cte_names.append(temp_name)
             return temp_name
@@ -1018,12 +1045,21 @@ def build_cohort_dated_sql(
     _validate_identifier(omop_schema)
     base_sql = build_cohort_sql(criteria, omop_schema)
 
-    # Determine date column from first inclusion criterion
+    # Determine date column from the initial event criterion (or first inclusion criterion)
     inclusion = criteria.get("inclusion", {})
     inc_criteria = inclusion.get("criteria", [])
+    initial_event_id = criteria.get("initial_event_criterion_id")
     date_col = None
     domain_table = None
-    for c in inc_criteria:
+
+    # Try to find the designated initial event criterion first
+    target_criteria = inc_criteria
+    if initial_event_id:
+        initial = [c for c in inc_criteria if c.get("id") == initial_event_id]
+        if initial:
+            target_criteria = initial + [c for c in inc_criteria if c.get("id") != initial_event_id]
+
+    for c in target_criteria:
         domain = c.get("domain", "")
         if domain in _DOMAIN_TABLE_MAP:
             dmeta = _DOMAIN_TABLE_MAP[domain]
