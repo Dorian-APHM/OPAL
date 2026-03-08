@@ -23,6 +23,7 @@ import { cdmApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
 import opalLogo from '../../assets/opal-logo.svg';
+import { colors, spacing, transitions } from '../../theme/tokens';
 
 const { Sider } = Layout;
 
@@ -98,75 +99,162 @@ export default function Sidebar({
       trigger={null}
       width={240}
       collapsedWidth={64}
+      className="opal-sidebar"
       style={{
-        background: '#001529',
         minHeight: '100vh',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
       }}
     >
-      {/* Logo */}
-      <div style={{ padding: collapsed ? '16px 8px 12px' : '20px 16px 16px', textAlign: 'center' }}>
+      {/* Logo with glow effect */}
+      <div
+        className="opal-sidebar-logo"
+        style={{
+          padding: collapsed ? `${spacing.lg}px ${spacing.sm}px ${spacing.md}px` : `${spacing.xl}px ${spacing.lg}px ${spacing.lg}px`,
+          textAlign: 'center',
+        }}
+      >
         <img
           src={opalLogo}
           alt="OPAL"
-          style={{ width: collapsed ? 48 : 180, height: 'auto', marginBottom: 8, transition: 'width 0.2s' }}
+          style={{
+            width: collapsed ? 48 : 180,
+            height: 'auto',
+            marginBottom: spacing.sm,
+            transition: `width ${transitions.normal}`,
+            filter: 'drop-shadow(0 0 12px rgba(43, 196, 89, 0.2))',
+          }}
         />
       </div>
 
       {/* User info + collapse toggle */}
       {!collapsed && username ? (
-        <div style={{ padding: '4px 16px 8px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+        <div style={{
+          padding: `${spacing.xs}px ${spacing.lg}px ${spacing.sm}px`,
+          borderBottom: `1px solid ${colors.sidebarBorder}`,
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'rgba(255,255,255,0.85)', minWidth: 0, flex: 1 }}>
-              <UserOutlined style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{username}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: colors.sidebarTextBright, minWidth: 0, flex: 1 }}>
+              <div style={{
+                width: 28,
+                height: 28,
+                borderRadius: '50%',
+                background: `linear-gradient(135deg, ${colors.primary}, ${colors.accent})`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#fff',
+              }}>
+                {username.charAt(0).toUpperCase()}
+              </div>
+              <span style={{
+                fontSize: 13,
+                fontWeight: 500,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                letterSpacing: '0.01em',
+              }}>
+                {username}
+              </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
               <Tooltip title={t('auth.logout', 'Logout')}>
                 <LogoutOutlined
-                  style={{ color: 'rgba(255,255,255,0.45)', fontSize: 14, cursor: 'pointer' }}
+                  style={{
+                    color: colors.sidebarText,
+                    fontSize: 14,
+                    cursor: 'pointer',
+                    transition: `color ${transitions.fast}`,
+                  }}
                   onClick={logout}
                 />
               </Tooltip>
               <div
-                style={{ cursor: 'pointer', color: 'rgba(255,255,255,0.65)', fontSize: 16, marginLeft: 4 }}
+                style={{
+                  cursor: 'pointer',
+                  color: colors.sidebarText,
+                  fontSize: 16,
+                  marginLeft: 4,
+                  transition: `color ${transitions.fast}`,
+                }}
                 onClick={() => onCollapse(true)}
               >
                 <MenuFoldOutlined />
               </div>
             </div>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, marginTop: 4 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 6 }}>
             {roles.map((r) => (
-              <Tag key={r} color={roleColor(r)} style={{ fontSize: 10, margin: 0, lineHeight: '18px' }}>{r}</Tag>
+              <Tag
+                key={r}
+                color={roleColor(r)}
+                style={{
+                  fontSize: 10,
+                  margin: 0,
+                  lineHeight: '18px',
+                  borderRadius: 4,
+                  fontWeight: 500,
+                }}
+              >
+                {r}
+              </Tag>
             ))}
           </div>
         </div>
       ) : (
         <div
           style={{
-            padding: '4px 0 8px',
+            padding: `${spacing.xs}px 0 ${spacing.sm}px`,
             textAlign: 'center',
-            borderBottom: '1px solid rgba(255,255,255,0.1)',
+            borderBottom: `1px solid ${colors.sidebarBorder}`,
           }}
         >
           {collapsed && username && (
             <Tooltip title={`${username} (${roles.join(', ')})`} placement="right">
-              <UserOutlined style={{ color: 'rgba(255,255,255,0.65)', fontSize: 16, display: 'block', marginBottom: 6 }} />
+              <div style={{
+                width: 28,
+                height: 28,
+                borderRadius: '50%',
+                background: `linear-gradient(135deg, ${colors.primary}, ${colors.accent})`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 6px',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#fff',
+                cursor: 'pointer',
+              }}>
+                {username.charAt(0).toUpperCase()}
+              </div>
             </Tooltip>
           )}
           {collapsed && username && (
             <Tooltip title={t('auth.logout', 'Logout')} placement="right">
               <LogoutOutlined
-                style={{ color: 'rgba(255,255,255,0.45)', fontSize: 14, cursor: 'pointer', display: 'block', marginBottom: 6 }}
+                style={{
+                  color: colors.sidebarText,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                  display: 'block',
+                  marginBottom: 6,
+                }}
                 onClick={logout}
               />
             </Tooltip>
           )}
           <div
-            style={{ cursor: 'pointer', color: 'rgba(255,255,255,0.65)', fontSize: 16 }}
+            style={{
+              cursor: 'pointer',
+              color: colors.sidebarText,
+              fontSize: 16,
+              transition: `color ${transitions.fast}`,
+            }}
             onClick={() => onCollapse(!collapsed)}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
@@ -174,9 +262,19 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* CDM selector (hidden when collapsed) */}
+      {/* CDM selector */}
       {!collapsed && (
-        <div style={{ padding: '0 16px 8px' }}>
+        <div style={{ padding: `${spacing.sm}px ${spacing.lg}px` }}>
+          <div style={{
+            fontSize: 10,
+            fontWeight: 600,
+            textTransform: 'uppercase' as const,
+            letterSpacing: '0.08em',
+            color: colors.sidebarText,
+            marginBottom: 4,
+          }}>
+            Database
+          </div>
           <Select
             placeholder={t('cdm.select_cdm')}
             value={selectedCdm || undefined}
@@ -195,17 +293,27 @@ export default function Sidebar({
         selectedKeys={[location.pathname]}
         onClick={({ key }) => navigate(key)}
         items={menuItems}
-        style={{ flex: 1 }}
+        style={{ flex: 1, background: 'transparent', borderRight: 'none' }}
         inlineCollapsed={collapsed}
       />
 
       {/* Footer controls */}
-      <div style={{ padding: collapsed ? '8px 4px' : '8px 16px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+      <div style={{
+        padding: collapsed ? `${spacing.sm}px ${spacing.xs}px` : `${spacing.sm}px ${spacing.lg}px`,
+        borderTop: `1px solid ${colors.sidebarBorder}`,
+      }}>
         {collapsed ? (
           <>
             <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="right">
               <div
-                style={{ cursor: 'pointer', textAlign: 'center', color: 'rgba(255,255,255,0.65)', marginBottom: 8, fontSize: 16 }}
+                style={{
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  color: colors.sidebarText,
+                  marginBottom: 8,
+                  fontSize: 16,
+                  transition: `color ${transitions.fast}`,
+                }}
                 onClick={toggleLang}
               >
                 <GlobalOutlined />
@@ -213,7 +321,13 @@ export default function Sidebar({
             </Tooltip>
             <Tooltip title={darkMode ? 'Dark' : 'Light'} placement="right">
               <div
-                style={{ textAlign: 'center', color: 'rgba(255,255,255,0.65)', fontSize: 16, cursor: 'pointer' }}
+                style={{
+                  textAlign: 'center',
+                  color: colors.sidebarText,
+                  fontSize: 16,
+                  cursor: 'pointer',
+                  transition: `color ${transitions.fast}`,
+                }}
                 onClick={onDarkModeToggle}
               >
                 <BulbOutlined />
@@ -228,8 +342,10 @@ export default function Sidebar({
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                color: 'rgba(255,255,255,0.65)',
+                color: colors.sidebarText,
                 marginBottom: 8,
+                fontSize: 13,
+                transition: `color ${transitions.fast}`,
               }}
               onClick={toggleLang}
             >
@@ -241,7 +357,8 @@ export default function Sidebar({
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                color: 'rgba(255,255,255,0.65)',
+                color: colors.sidebarText,
+                fontSize: 13,
               }}
             >
               <BulbOutlined />
