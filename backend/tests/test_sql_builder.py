@@ -758,3 +758,144 @@ def test_combined_nested_and_temporal():
     assert "UNION" in sql
     # Frequency
     assert "HAVING COUNT(*) >= 2" in sql
+
+
+# ──── Feature 1: Initial Event / Index Date ────
+
+
+def test_initial_event_within_days_uses_index_cte():
+    """within_days/index should reference the initial event CTE when set."""
+    criteria = {
+        "initial_event_criterion_id": "idx-cond",
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "idx-cond",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "drug-crit",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {
+                        "type": "within_days",
+                        "relative_to": "index",
+                        "days_before": 30,
+                        "days_after": 365,
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        },
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "condition_occurrence" in sql
+    assert "drug_exposure" in sql
+    # Should reference the initial event CTE (inc_1) rather than self-joining
+    assert "idx.event_date" in sql
+    assert "INTERVAL '30 days'" in sql
+    assert "INTERVAL '365 days'" in sql
+
+
+def test_initial_event_without_id_falls_back_to_self_join():
+    """without initial_event_criterion_id, within_days/index self-joins."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {
+                        "type": "within_days",
+                        "relative_to": "index",
+                        "days_before": 90,
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        },
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "drug_exposure" in sql
+    # Self-join: uses index_date (old behavior)
+    assert "index_date" in sql
+    assert "INTERVAL '90 days'" in sql
+
+
+# ──── Feature 5: Exit Criteria (build_cohort_dated_sql) ────
+
+
+def test_exit_criteria_fixed_duration():
+    """Fixed duration exit criteria in cohort dated SQL."""
+    from modules.cohort.sql_builder import build_cohort_dated_sql
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+            ],
+        },
+        "exit_criteria": {
+            "type": "fixed_duration",
+            "duration_days": 180,
+        },
+    }
+    sql = build_cohort_dated_sql(criteria, SCHEMA)
+    assert "cohort_start_date" in sql
+    assert "cohort_end_date" in sql
+    assert "180 days" in sql
+
+
+def test_exit_criteria_end_of_observation():
+    """End of observation exit criteria in cohort dated SQL."""
+    from modules.cohort.sql_builder import build_cohort_dated_sql
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+            ],
+        },
+        "exit_criteria": {
+            "type": "end_of_observation",
+        },
+    }
+    sql = build_cohort_dated_sql(criteria, SCHEMA)
+    assert "observation_period_end_date" in sql
+    assert "cohort_end_date" in sql
+
+
+def test_initial_event_affects_cohort_dated():
+    """Initial event should determine the date column for cohort_start_date."""
+    from modules.cohort.sql_builder import build_cohort_dated_sql
+    criteria = {
+        "initial_event_criterion_id": "drug-idx",
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "cond-1",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "drug-idx",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        },
+    }
+    sql = build_cohort_dated_sql(criteria, SCHEMA)
+    # The initial event is Drug, so the date column should be drug_exposure_start_date
+    assert "drug_exposure_start_date" in sql
+    assert "cohort_start_date" in sql

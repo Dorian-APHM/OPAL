@@ -17,6 +17,7 @@ import {
 import {
   DeleteOutlined, SwapOutlined, PlusOutlined,
   GroupOutlined, ArrowDownOutlined, ArrowUpOutlined,
+  StarOutlined, StarFilled,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { conceptApi } from '../../api/client';
@@ -98,6 +99,10 @@ interface GroupEditorProps {
   depth: number;
   groupKey: 'inclusion' | 'exclusion';
   cdmName: string;
+  /** ID of the criterion designated as the initial/index event */
+  initialEventId?: string;
+  /** Callback to set/unset a criterion as the initial event */
+  onSetInitialEvent?: (criterionId: string | undefined) => void;
   /** Every criterion across all groups — used for temporal references */
   allCriteria: CohortCriterion[];
   onChange: (updated: CriteriaGroup) => void;
@@ -106,6 +111,7 @@ interface GroupEditorProps {
 
 export default function CriteriaGroupEditor({
   group, depth, groupKey, cdmName, allCriteria, onChange, onRemoveGroup,
+  initialEventId, onSetInitialEvent,
 }: GroupEditorProps) {
   const { t } = useTranslation();
   const normalised = normaliseGroup(group);
@@ -251,6 +257,10 @@ export default function CriteriaGroupEditor({
                 canMoveDown={idx < children.length - 1}
                 onMoveUp={() => moveChild(idx, -1)}
                 onMoveDown={() => moveChild(idx, 1)}
+                isInitialEvent={initialEventId === node.criterion.id}
+                onToggleInitialEvent={onSetInitialEvent ? () => {
+                  onSetInitialEvent(initialEventId === node.criterion.id ? undefined : node.criterion.id);
+                } : undefined}
               />
             ) : (
               <CriteriaGroupEditor
@@ -261,6 +271,8 @@ export default function CriteriaGroupEditor({
                 allCriteria={allCriteria}
                 onChange={(updated) => updateSubGroup(idx, updated)}
                 onRemoveGroup={() => removeChild(idx)}
+                initialEventId={initialEventId}
+                onSetInitialEvent={onSetInitialEvent}
               />
             )}
           </div>
@@ -295,6 +307,7 @@ export default function CriteriaGroupEditor({
 function CriterionCard({
   criterion, groupKey, cdmName, allCriteria,
   onRemove, onUpdate, canMoveUp, canMoveDown, onMoveUp, onMoveDown,
+  isInitialEvent, onToggleInitialEvent,
 }: {
   criterion: CohortCriterion;
   groupKey: string;
@@ -306,6 +319,8 @@ function CriterionCard({
   canMoveDown: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  isInitialEvent?: boolean;
+  onToggleInitialEvent?: () => void;
 }) {
   const { t } = useTranslation();
   const domainColor = DOMAIN_COLORS[criterion.domain] || '#666';
@@ -352,6 +367,11 @@ function CriterionCard({
           {/* Domain & concepts */}
           <Space size={4} style={{ marginBottom: 4 }} wrap>
             <Tag color={domainColor}>{criterion.domain}</Tag>
+            {isInitialEvent && (
+              <Tag color="gold" style={{ fontSize: 10 }}>
+                <StarFilled style={{ fontSize: 9 }} /> Index
+              </Tag>
+            )}
             {criterion.concepts.length > 1 ? (
               <Tag>{criterion.concepts.length} concepts</Tag>
             ) : criterion.concepts.length === 1 ? (
@@ -480,6 +500,16 @@ function CriterionCard({
 
         {/* Actions */}
         <Space direction="vertical" size={2}>
+          {onToggleInitialEvent && groupKey === 'inclusion' && (
+            <Tooltip title={isInitialEvent ? t('cohort.unset_index', 'Unset as index event') : t('cohort.set_index', 'Set as index event (cohort entry)')}>
+              <Button
+                size="small"
+                icon={isInitialEvent ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined />}
+                onClick={onToggleInitialEvent}
+                style={isInitialEvent ? { borderColor: '#faad14' } : undefined}
+              />
+            </Tooltip>
+          )}
           {canMoveUp && (
             <Tooltip title={t('cohort.move_up', 'Move up')}>
               <Button size="small" icon={<ArrowUpOutlined />} onClick={onMoveUp} />

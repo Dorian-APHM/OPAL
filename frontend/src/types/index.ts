@@ -312,6 +312,8 @@ export interface CohortCriteria {
   exclusion: CriteriaGroup;
   demographics?: DemographicConstraints;
   exit_criteria?: CohortExitCriteria;
+  /** ID of the criterion designated as the initial/index event (cohort entry) */
+  initial_event_criterion_id?: string;
 }
 
 /** Cohort summary from list endpoint */
