@@ -17,6 +17,9 @@ import {
   LogoutOutlined,
   AuditOutlined,
   TeamOutlined as UsersOutlined,
+  AppstoreOutlined,
+  BarChartOutlined,
+  LineChartOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../../api/client';
@@ -59,9 +62,12 @@ export default function Sidebar({
   const allMenuItems = [
     { key: '/quality', icon: <DashboardOutlined />, label: t('app.quality') },
     { key: '/cohorts', icon: <TeamOutlined />, label: t('app.cohorts') },
+    { key: '/concept-sets', icon: <AppstoreOutlined />, label: t('app.concept_sets', 'Concept Sets') },
+    { key: '/incidence', icon: <BarChartOutlined />, label: t('app.incidence', 'Incidence') },
+    { key: '/estimation', icon: <LineChartOutlined />, label: t('app.estimation', 'Estimation') },
     { key: '/mapping', icon: <NodeIndexOutlined />, label: t('app.mapping') },
     { key: '/concepts', icon: <BookOutlined />, label: t('app.concepts') },
-    { key: '/ohdsi', icon: <ExperimentOutlined />, label: t('app.ohdsi') },
+    { key: '/ohdsi', icon: <ExperimentOutlined />, label: t('app.ohdsi', 'OHDSI Tools') },
     { key: '/cdm', icon: <DatabaseOutlined />, label: t('cdm.title') },
     { key: '/settings', icon: <SettingOutlined />, label: t('app.settings') },
     { key: '/audit', icon: <AuditOutlined />, label: t('app.audit') },
