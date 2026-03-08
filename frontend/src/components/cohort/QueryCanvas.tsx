@@ -11,13 +11,15 @@
  */
 import {
   Card, Select, InputNumber, Space, Typography,
-  Empty, Radio,
+  Empty, Radio, Tag,
 } from 'antd';
 import {
   CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined,
+  StarOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import CriteriaGroupEditor, { denormaliseGroup, normaliseGroup } from './CriteriaGroupEditor';
+import CriteriaPanel from './CriteriaPanel';
 import type {
   CohortCriterion, CriteriaGroup, DemographicConstraints,
   CohortExitCriteria,
@@ -31,11 +33,13 @@ interface Props {
   exclusion: CriteriaGroup;
   demographics: DemographicConstraints;
   exitCriteria?: CohortExitCriteria;
+  initialEventId?: string;
   cdmName: string;
   onUpdateInclusion: (group: CriteriaGroup) => void;
   onUpdateExclusion: (group: CriteriaGroup) => void;
   onUpdateDemographics: (demo: DemographicConstraints) => void;
   onUpdateExitCriteria?: (exit: CohortExitCriteria) => void;
+  onUpdateInitialEvent?: (criterionId: string | undefined) => void;
 }
 
 /** Collect all criteria from a group tree (for temporal references). */
@@ -59,8 +63,9 @@ function collectAllCriteria(group: CriteriaGroup): CohortCriterion[] {
 }
 
 export default function QueryCanvas({
-  inclusion, exclusion, demographics, exitCriteria, cdmName,
+  inclusion, exclusion, demographics, exitCriteria, initialEventId, cdmName,
   onUpdateInclusion, onUpdateExclusion, onUpdateDemographics, onUpdateExitCriteria,
+  onUpdateInitialEvent,
 }: Props) {
   const { t } = useTranslation();
 
@@ -143,6 +148,8 @@ export default function QueryCanvas({
             cdmName={cdmName}
             allCriteria={allCriteria}
             onChange={handleInclusionChange}
+            initialEventId={initialEventId}
+            onSetInitialEvent={onUpdateInitialEvent}
           />
         </div>
       )}
@@ -205,6 +212,48 @@ export default function QueryCanvas({
                 </Radio>
               </Space>
             </Radio.Group>
+
+            {/* Event-based: inline criteria selector */}
+            {exitCriteria?.type === 'event_based' && (
+              <div style={{ marginTop: 4 }}>
+                <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>
+                  {t('cohort.exit_event_desc', 'Define the event that ends cohort membership:')}
+                </Text>
+                {exitCriteria.exit_event && exitCriteria.exit_event.criteria && exitCriteria.exit_event.criteria.length > 0 ? (
+                  <div>
+                    <Space size={4} wrap>
+                      {exitCriteria.exit_event.criteria.map((c, i) => (
+                        <Tag
+                          key={i}
+                          color="orange"
+                          closable
+                          onClose={() => {
+                            const newCriteria = exitCriteria.exit_event!.criteria.filter((_, j) => j !== i);
+                            onUpdateExitCriteria({
+                              ...exitCriteria,
+                              exit_event: { ...exitCriteria.exit_event!, criteria: newCriteria },
+                            });
+                          }}
+                        >
+                          {c.domain}: {c.concepts?.length > 0 ? c.concepts[0].concept_name || `${c.concepts.length} concepts` : c.source_codes?.[0] || c.domain}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </div>
+                ) : (
+                  <CriteriaPanel
+                    cdmName={cdmName}
+                    onAddCriterion={(criterion) => {
+                      const exitEvent = exitCriteria.exit_event || { operator: 'OR' as const, criteria: [] };
+                      onUpdateExitCriteria({
+                        ...exitCriteria,
+                        exit_event: { ...exitEvent, criteria: [...exitEvent.criteria, criterion] },
+                      });
+                    }}
+                  />
+                )}
+              </div>
+            )}
           </Space>
         </Card>
       )}
