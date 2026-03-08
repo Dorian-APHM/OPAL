@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Card, Input, Select, Tag, List, Typography, Spin, Empty, Space } from 'antd';
-import { SearchOutlined, PlusOutlined, CodeOutlined } from '@ant-design/icons';
+import { Card, Input, Select, Tag, List, Typography, Spin, Empty, Space, Collapse } from 'antd';
+import { SearchOutlined, PlusOutlined, CodeOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
-import { cohortApi, conceptApi } from '../../api/client';
-import type { OmopConcept, CohortCriterion } from '../../types';
+import { cohortApi, conceptApi, conceptSetApi } from '../../api/client';
+import type { OmopConcept, CohortCriterion, ConceptSetSummary, ConceptSetDetail } from '../../types';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -115,8 +115,91 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   };
 
 
+  // ── Concept Sets integration ──
+  const [conceptSets, setConceptSets] = useState<ConceptSetSummary[]>([]);
+  const [conceptSetsLoading, setConceptSetsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!cdmName) return;
+    setConceptSetsLoading(true);
+    conceptSetApi.list(cdmName)
+      .then(r => setConceptSets(r.data.concept_sets || []))
+      .catch(() => setConceptSets([]))
+      .finally(() => setConceptSetsLoading(false));
+  }, [cdmName]);
+
+  const addConceptSetAsCriterion = async (cs: ConceptSetSummary) => {
+    try {
+      const resp = await conceptSetApi.get(cs.id);
+      const detail: ConceptSetDetail = resp.data;
+      if (!detail.concepts || detail.concepts.length === 0) return;
+      const concepts: OmopConcept[] = detail.concepts.map(c => ({
+        concept_id: c.concept_id,
+        concept_name: c.concept_name,
+        concept_code: c.concept_code,
+        domain_id: cs.domain || detail.concepts[0]?.vocabulary_id || '',
+        vocabulary_id: c.vocabulary_id,
+        concept_class_id: '',
+        standard_concept: null,
+      }));
+      const criterion: CohortCriterion = {
+        id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+        domain: cs.domain || concepts[0]?.domain_id || 'Condition',
+        concepts,
+        include_descendants: detail.concepts.some(c => c.include_descendants),
+        source_codes: [],
+        temporal: { type: 'any_time' },
+        occurrence: { type: 'any', count: 1 },
+      };
+      onAddCriterion(criterion);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Concept Sets */}
+      {conceptSets.length > 0 && (
+        <Card
+          size="small"
+          title={<><AppstoreOutlined /> {t('cohort.concept_sets', 'Concept Sets')}</>}
+          bodyStyle={{ padding: 0 }}
+        >
+          {conceptSetsLoading ? (
+            <div style={{ textAlign: 'center', padding: 12 }}><Spin size="small" /></div>
+          ) : (
+            <List
+              size="small"
+              dataSource={conceptSets}
+              style={{ maxHeight: 180, overflow: 'auto' }}
+              renderItem={cs => (
+                <List.Item
+                  style={{ cursor: 'pointer', padding: '6px 12px' }}
+                  onClick={() => addConceptSetAsCriterion(cs)}
+                >
+                  <div style={{ width: '100%' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Space size={4}>
+                        <PlusOutlined style={{ color: '#52c41a', fontSize: 10 }} />
+                        <Typography.Text strong style={{ fontSize: 12 }}>{cs.name}</Typography.Text>
+                      </Space>
+                      <Space size={4}>
+                        {cs.domain && <Tag style={{ fontSize: 10 }}>{cs.domain}</Tag>}
+                        <Tag color="blue" style={{ fontSize: 10 }}>{cs.concept_count} concepts</Tag>
+                      </Space>
+                    </div>
+                    {cs.description && (
+                      <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{cs.description}</div>
+                    )}
+                  </div>
+                </List.Item>
+              )}
+            />
+          )}
+        </Card>
+      )}
+
       {/* Source code input */}
       <Card size="small" title={<><CodeOutlined /> {t('cohort.source_code_search', 'Source Code')}</>} bodyStyle={{ padding: 8 }}>
         <Space size={4} style={{ width: '100%' }} direction="vertical">
