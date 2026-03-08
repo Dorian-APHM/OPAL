@@ -228,6 +228,18 @@ export interface OmopConcept {
   standard_concept: string | null;
 }
 
+/** Temporal relation between two criteria (Allen's interval algebra subset) */
+export type TemporalRelation =
+  | 'before'          // A ends before B starts
+  | 'after'           // A starts after B ends
+  | 'starts_before'   // A starts before B starts
+  | 'starts_after'    // A starts after B starts
+  | 'ends_before'     // A ends before B ends
+  | 'ends_after'      // A ends after B ends
+  | 'overlaps'        // A and B overlap in time
+  | 'contains'        // A fully contains B
+  | 'during';         // A occurs during B
+
 /** Temporal constraint for a criterion */
 export interface TemporalConstraint {
   type: 'any_time' | 'absolute_window' | 'within_days' | 'during_visit' | 'relative_to_criterion';
@@ -237,6 +249,8 @@ export interface TemporalConstraint {
   days_after?: number;
   relative_to?: 'index';
   reference_criterion_id?: string;
+  /** Temporal relation when type='relative_to_criterion' (default: 'before') */
+  relation?: TemporalRelation;
 }
 
 /** Occurrence (frequency) constraint */
@@ -268,11 +282,18 @@ export interface CohortCriterion {
   operatorWithNext?: 'AND' | 'OR'; // operator linking to the NEXT criterion
 }
 
-/** Logical group of criteria (AND/OR) */
+/** A node in the criteria tree: either a leaf criterion or a nested group */
+export type CriteriaNode =
+  | { type: 'criterion'; criterion: CohortCriterion }
+  | { type: 'group'; group: CriteriaGroup };
+
+/** Logical group of criteria (AND/OR) — supports nested sub-groups */
 export interface CriteriaGroup {
   operator: 'AND' | 'OR';
   criteria: CohortCriterion[];
   groups?: CriteriaGroup[];
+  /** Ordered children mixing criteria and sub-groups (preferred over separate arrays) */
+  children?: CriteriaNode[];
   sameVisit?: boolean;
 }
 
