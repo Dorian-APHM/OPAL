@@ -1,8 +1,9 @@
-import { useState, lazy, Suspense, Component, type ReactNode, type ErrorInfo } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { Layout, ConfigProvider, theme as antTheme, Result, Spin, Button } from 'antd';
+import { useState, lazy, Suspense, Component, useEffect, useRef, type ReactNode, type ErrorInfo } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Layout, ConfigProvider, theme as antTheme, Result, Spin, Button, Skeleton } from 'antd';
 import Sidebar from './components/layout/Sidebar';
 import { useAuth } from './auth/KeycloakContext';
+import { colors, typography, radii } from './theme/tokens';
 
 // Lazy-loaded pages for code splitting
 const QualityPage = lazy(() => import('./pages/QualityPage'));
@@ -54,10 +55,44 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
 }
 
+function PageSkeleton() {
+  return (
+    <div style={{ padding: 24 }}>
+      <Skeleton active title={{ width: '30%' }} paragraph={{ rows: 0 }} style={{ marginBottom: 24 }} />
+      <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <Skeleton active paragraph={{ rows: 4 }} />
+        </div>
+        <div style={{ flex: 2 }}>
+          <Skeleton active paragraph={{ rows: 6 }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PageTransition({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const location = useLocation();
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.className = 'opal-page-enter';
+    requestAnimationFrame(() => {
+      el.className = 'opal-page-active';
+    });
+  }, [location.pathname]);
+
+  return <div ref={ref} className="opal-page-active">{children}</div>;
+}
+
 function PageSuspense({ children }: { children: ReactNode }) {
   return (
-    <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spin size="large" /></div>}>
-      <ErrorBoundary>{children}</ErrorBoundary>
+    <Suspense fallback={<PageSkeleton />}>
+      <ErrorBoundary>
+        <PageTransition>{children}</PageTransition>
+      </ErrorBoundary>
     </Suspense>
   );
 }
@@ -126,33 +161,38 @@ export default function App() {
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: '#1f77b4',
-          colorSuccess: '#2bc459',
-          colorLink: '#1f77b4',
-          borderRadius: 6,
+          colorPrimary: colors.primary,
+          colorSuccess: colors.accent,
+          colorLink: colors.primary,
+          borderRadius: radii.md,
+          fontFamily: typography.fontFamily,
+          fontFamilyCode: typography.fontFamilyMono,
         },
         components: {
           Switch: {
-            colorPrimary: '#2bc459',
-            colorPrimaryHover: '#24a34a',
+            colorPrimary: colors.accent,
+            colorPrimaryHover: colors.accentHover,
           },
           Tabs: {
-            inkBarColor: '#2bc459',
-            itemActiveColor: '#2bc459',
-            itemHoverColor: '#24a34a',
-            itemSelectedColor: '#2bc459',
+            inkBarColor: colors.accent,
+            itemActiveColor: colors.accent,
+            itemHoverColor: colors.accentHover,
+            itemSelectedColor: colors.accent,
           },
           Progress: {
-            defaultColor: '#2bc459',
+            defaultColor: colors.accent,
           },
           Checkbox: {
-            colorPrimary: '#2bc459',
-            colorPrimaryHover: '#24a34a',
+            colorPrimary: colors.accent,
+            colorPrimaryHover: colors.accentHover,
           },
           Tag: {
-            colorSuccess: '#2bc459',
-            colorSuccessBg: '#f0faf3',
+            colorSuccess: colors.accent,
+            colorSuccessBg: colors.accentLight,
             colorSuccessBorder: '#b7ebc5',
+          },
+          Card: {
+            borderRadiusLG: radii.lg,
           },
         },
         algorithm: darkMode ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
@@ -172,7 +212,7 @@ export default function App() {
             style={{
               padding: 16,
               margin: 0,
-              background: darkMode ? '#141414' : '#f5f5f5',
+              background: darkMode ? colors.bgDark : colors.bgLight,
               overflow: 'auto',
             }}
           >
