@@ -364,3 +364,397 @@ def test_complex_cohort_full():
     assert "gender_concept_id" in sql
     assert "HAVING COUNT(*) >= 2" in sql
     assert "person_id" in sql
+
+
+# ──── P0-1: Nested Groups ────
+
+
+def test_nested_subgroup_or_inside_and():
+    """AND group with an OR sub-group: T2DM AND Metformin AND (HbA1c OR Glucose)."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                {"domain": "Drug", "concepts": [1503297], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+            ],
+            "groups": [
+                {
+                    "operator": "OR",
+                    "criteria": [
+                        {"domain": "Measurement", "concepts": [3004410], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                        {"domain": "Measurement", "concepts": [3000963], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                    ],
+                }
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "condition_occurrence" in sql
+    assert "drug_exposure" in sql
+    assert "measurement" in sql
+    # The outer AND should produce INTERSECT between criteria and the sub-group
+    assert "INTERSECT" in sql
+    # The inner OR sub-group should produce UNION
+    assert "UNION" in sql
+
+
+def test_nested_subgroup_and_inside_or():
+    """OR group with an AND sub-group."""
+    criteria = {
+        "inclusion": {
+            "operator": "OR",
+            "criteria": [
+                {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+            ],
+            "groups": [
+                {
+                    "operator": "AND",
+                    "criteria": [
+                        {"domain": "Drug", "concepts": [1503297], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                        {"domain": "Measurement", "concepts": [3004410], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                    ],
+                }
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "condition_occurrence" in sql
+    assert "drug_exposure" in sql
+    assert "measurement" in sql
+    # Outer OR should produce UNION
+    assert "UNION" in sql
+    # Inner AND should produce INTERSECT
+    assert "INTERSECT" in sql
+
+
+def test_nested_groups_only_no_criteria():
+    """Group with only sub-groups, no direct criteria."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [],
+            "groups": [
+                {
+                    "operator": "OR",
+                    "criteria": [
+                        {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                        {"domain": "Condition", "concepts": [443238], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                    ],
+                },
+                {
+                    "operator": "OR",
+                    "criteria": [
+                        {"domain": "Drug", "concepts": [1503297], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                        {"domain": "Drug", "concepts": [1510202], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                    ],
+                },
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "UNION" in sql
+    assert "INTERSECT" in sql
+
+
+def test_deeply_nested_groups():
+    """3 levels deep: AND → OR → AND."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+            ],
+            "groups": [
+                {
+                    "operator": "OR",
+                    "criteria": [
+                        {"domain": "Drug", "concepts": [1503297], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                    ],
+                    "groups": [
+                        {
+                            "operator": "AND",
+                            "criteria": [
+                                {"domain": "Measurement", "concepts": [3004410], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                                {"domain": "Measurement", "concepts": [3000963], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "condition_occurrence" in sql
+    assert "drug_exposure" in sql
+    assert "measurement" in sql
+    assert "person_id" in sql
+
+
+# ──── P0-2: Temporal Relations ────
+
+
+def test_temporal_before_relation():
+    """Criterion A (Condition) occurs before criterion B (Drug)."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "crit-drug-1",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "crit-cond-1",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "crit-drug-1",
+                        "relation": "before",
+                        "days_after": 30,
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "rel_temporal" in sql
+    assert "a.event_date < ref.event_date" in sql
+    assert "INTERVAL '30 days'" in sql
+
+
+def test_temporal_after_relation():
+    """Criterion A occurs after criterion B."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "ref-cond",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "crit-drug",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "ref-cond",
+                        "relation": "after",
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "a.event_date > ref.event_date" in sql
+
+
+def test_temporal_overlaps_relation():
+    """Criterion A overlaps with criterion B."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "ref-visit",
+                    "domain": "Visit",
+                    "concepts": [9201],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "crit-cond",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "ref-visit",
+                        "relation": "overlaps",
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "event_end_date" in sql
+    assert "a.event_date <" in sql
+
+
+def test_temporal_contains_relation():
+    """Criterion A contains criterion B (A fully wraps B in time)."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "ref-drug",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "crit-cond",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "ref-drug",
+                        "relation": "contains",
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "a.event_date <= ref.event_date" in sql
+    assert "event_end_date" in sql
+
+
+def test_temporal_with_window():
+    """Temporal relation with both days_before and days_after window."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "ref-cond",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "any", "count": 1},
+                },
+                {
+                    "id": "crit-drug",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "ref-cond",
+                        "relation": "after",
+                        "days_before": 7,
+                        "days_after": 90,
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        }
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "a.event_date > ref.event_date" in sql
+    assert "INTERVAL '7 days'" in sql
+    assert "INTERVAL '90 days'" in sql
+
+
+def test_temporal_missing_reference_skips_gracefully():
+    """If reference criterion ID doesn't match, return base CTE without error."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "crit-a",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "nonexistent-id",
+                        "relation": "before",
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+        }
+    }
+    # Should not raise, just skip the temporal constraint
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "condition_occurrence" in sql
+    assert "person_id" in sql
+
+
+# ──── Combined: Nested Groups + Temporal ────
+
+
+def test_combined_nested_and_temporal():
+    """Full example: T2DM before Metformin AND (HbA1c OR Glucose), excluding T1DM."""
+    criteria = {
+        "inclusion": {
+            "operator": "AND",
+            "criteria": [
+                {
+                    "id": "crit-t2dm",
+                    "domain": "Condition",
+                    "concepts": [201826],
+                    "temporal": {"type": "any_time"},
+                    "occurrence": {"type": "at_least", "count": 2},
+                },
+                {
+                    "id": "crit-met",
+                    "domain": "Drug",
+                    "concepts": [1503297],
+                    "temporal": {
+                        "type": "relative_to_criterion",
+                        "reference_criterion_id": "crit-t2dm",
+                        "relation": "after",
+                        "days_after": 30,
+                    },
+                    "occurrence": {"type": "any", "count": 1},
+                },
+            ],
+            "groups": [
+                {
+                    "operator": "OR",
+                    "criteria": [
+                        {
+                            "domain": "Measurement",
+                            "concepts": [3004410],
+                            "temporal": {"type": "any_time"},
+                            "occurrence": {"type": "any", "count": 1},
+                            "value": {"operator": ">=", "value": 7.0},
+                        },
+                        {
+                            "domain": "Measurement",
+                            "concepts": [3000963],
+                            "temporal": {"type": "any_time"},
+                            "occurrence": {"type": "any", "count": 1},
+                            "value": {"operator": ">=", "value": 126.0},
+                        },
+                    ],
+                }
+            ],
+        },
+        "exclusion": {
+            "operator": "OR",
+            "criteria": [
+                {"domain": "Condition", "concepts": [4033004], "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+            ],
+        },
+    }
+    sql = build_cohort_sql(criteria, SCHEMA)
+    # All tables present
+    assert "condition_occurrence" in sql
+    assert "drug_exposure" in sql
+    assert "measurement" in sql
+    # Temporal relation
+    assert "a.event_date > ref.event_date" in sql
+    # Value constraints
+    assert "value_as_number >= 7.0" in sql
+    assert "value_as_number >= 126.0" in sql
+    # Exclusion
+    assert "EXCEPT" in sql
+    # Nested group produces UNION
+    assert "UNION" in sql
+    # Frequency
+    assert "HAVING COUNT(*) >= 2" in sql
