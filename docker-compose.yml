@@ -10,12 +10,15 @@ services:
       - KEYCLOAK_URL=http://opal-keycloak:8080
       - KEYCLOAK_REALM=opal
       - KEYCLOAK_CLIENT_ID=opal-frontend
+      - KEYCLOAK_LDAP_ENABLED=true
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - CORS_ORIGINS=http://127.0.0.1:3000,http://127.0.0.1:5173,http://localhost:3000,http://localhost:5173
       - OHDSI_IMAGE_PREFIX=ohdsi-docker
       - OHDSI_HOST_OUTPUT_DIR=/path/to/apps/OPAL/opal/ohdsi_output
       - OHDSI_HOST_SCRIPTS_DIR=/data/ohdsi_quality_tool/ohdsi-docker/scripts
       - OHDSI_HOST_JDBC_DIR=/data/jdbc_drivers
+    group_add:
+      - "136"  # docker socket GID on host, for OHDSI container management
     depends_on:
       opal-db:
         condition: service_healthy
