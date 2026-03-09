@@ -257,9 +257,9 @@ export const mappingApi = {
     ),
   evolution: (cdmName: string, domain: string) =>
     api.get<{ evolution: MappingEvolutionPoint[] }>(`/mapping/dashboard/${cdmName}/evolution`, { params: { domain } }),
-  unmapped: (cdmName: string, domain: string, page?: number, pageSize?: number, search?: string) =>
+  unmapped: (cdmName: string, domain: string, page?: number, pageSize?: number, search?: string, includeMapped?: boolean) =>
     api.get<{ domain: string; total: number; page: number; page_size: number; total_pages: number; items: UnmappedItem[] }>(
-      `/mapping/unmapped/${cdmName}/${domain}`, { params: { page: page || 1, page_size: pageSize || 50, search: search || '' } }
+      `/mapping/unmapped/${cdmName}/${domain}`, { params: { page: page || 1, page_size: pageSize || 50, search: search || '', include_mapped: includeMapped || false } }
     ),
   exportUnmappedUrl: (cdmName: string, domain: string) =>
     `/api/mapping/unmapped/${cdmName}/${domain}/export`,
@@ -413,8 +413,8 @@ export const adminApi = {
 // Public endpoint (no auth needed)
 export const publicApi = {
   submitAccessRequest: (data: {
-    username: string; email: string;
-    first_name: string; last_name: string; requested_role: string;
+    username: string; requested_role: string;
+    email?: string; first_name?: string; last_name?: string;
   }) => api.post('/access-requests', data),
 };
 

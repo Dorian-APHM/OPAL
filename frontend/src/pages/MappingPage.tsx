@@ -597,7 +597,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     setConceptInfo(null);
     setConceptIdInput(null);
     setConceptError('');
-    mappingApi.unmapped(cdmName, domain, 1, 20, search)
+    mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
       .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
       .catch(() => { setSearchResults([]); setSearchTotal(0); })
       .finally(() => setSearchLoading(false));
@@ -644,7 +644,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       setReason('');
       // Refresh search results to remove mapped item
       if (search.trim()) {
-        mappingApi.unmapped(cdmName, domain, 1, 20, search)
+        mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
           .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
           .catch(() => {});
       }

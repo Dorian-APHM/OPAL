@@ -101,31 +101,8 @@ export default function UserManagementPage() {
 
   const handleApproveRequest = async (id: number) => {
     try {
-      const resp = await adminApi.approveRequest(id);
-      const data = resp.data as any;
-      message.success(
-        t('admin.request_approved', 'Request approved. Temporary password: {{password}}', {
-          password: data.temporary_password,
-        })
-      );
-      Modal.info({
-        title: t('admin.account_created', 'Account Created'),
-        content: (
-          <Descriptions column={1} size="small">
-            <Descriptions.Item label={t('admin.username', 'Username')}>
-              <Text copyable strong>{data.username}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label={t('admin.temp_password', 'Temporary Password')}>
-              <Text copyable strong code>{data.temporary_password}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="Info">
-              <Text type="secondary">
-                {t('admin.password_change_required', 'The user will be asked to change their password on first login.')}
-              </Text>
-            </Descriptions.Item>
-          </Descriptions>
-        ),
-      });
+      await adminApi.approveRequest(id);
+      message.success("Demande approuvee. L'utilisateur peut se connecter avec ses identifiants APHM.");
       fetchRequests();
       fetchUsers();
     } catch (e: any) {
@@ -280,9 +257,7 @@ export default function UserManagementPage() {
         <Space>
           <Popconfirm
             title={t('admin.confirm_approve', 'Approve this access request?')}
-            description={t('admin.approve_description',
-              'A Keycloak account will be created with username as temporary password.'
-            )}
+            description="Le role sera assigne et l'utilisateur pourra se connecter avec ses identifiants APHM."
             onConfirm={() => handleApproveRequest(record.id)}
             okText={t('admin.approve', 'Approve')}
           >

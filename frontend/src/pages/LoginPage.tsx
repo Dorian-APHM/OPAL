@@ -3,7 +3,7 @@ import {
   Card, Tabs, Button, Form, Input, Select, Result, Typography, Space, message,
 } from 'antd';
 import {
-  LoginOutlined, UserAddOutlined, MailOutlined, UserOutlined, IdcardOutlined,
+  LoginOutlined, UserAddOutlined, IdcardOutlined,
 } from '@ant-design/icons';
 import { publicApi } from '../api/client';
 
@@ -31,9 +31,6 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
     try {
       await publicApi.submitAccessRequest({
         username: values.username,
-        email: values.email,
-        first_name: values.first_name,
-        last_name: values.last_name,
         requested_role: values.requested_role,
       });
       setSubmitted(true);
@@ -104,45 +101,14 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                 >
                   <Form.Item
                     name="username"
-                    label="Identifiant"
+                    label="Matricule APHM"
                     rules={[
-                      { required: true, message: 'Identifiant requis' },
+                      { required: true, message: 'Matricule requis' },
                       { pattern: /^[a-zA-Z0-9._-]+$/, message: 'Lettres, chiffres, . - _ uniquement' },
                     ]}
                   >
-                    <Input prefix={<IdcardOutlined />} placeholder="ex: jdupont" />
+                    <Input prefix={<IdcardOutlined />} placeholder="ex: a159230" />
                   </Form.Item>
-
-                  <Form.Item
-                    name="email"
-                    label="Email"
-                    rules={[
-                      { required: true, message: 'Email requis' },
-                      { type: 'email', message: 'Email invalide' },
-                    ]}
-                  >
-                    <Input prefix={<MailOutlined />} placeholder="jean.dupont@hopital.fr" />
-                  </Form.Item>
-
-                  <Space style={{ display: 'flex' }} size={12}>
-                    <Form.Item
-                      name="first_name"
-                      label="Prenom"
-                      rules={[{ required: true, message: 'Requis' }]}
-                      style={{ flex: 1 }}
-                    >
-                      <Input prefix={<UserOutlined />} placeholder="Jean" />
-                    </Form.Item>
-
-                    <Form.Item
-                      name="last_name"
-                      label="Nom"
-                      rules={[{ required: true, message: 'Requis' }]}
-                      style={{ flex: 1 }}
-                    >
-                      <Input placeholder="Dupont" />
-                    </Form.Item>
-                  </Space>
 
                   <Form.Item
                     name="requested_role"
@@ -176,8 +142,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                   </Form.Item>
 
                   <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, textAlign: 'center' }}>
-                    Votre mot de passe initial sera votre identifiant.
-                    Il vous sera demande de le changer a la premiere connexion.
+                    Utilisez votre matricule APHM. Vous vous connecterez avec vos identifiants APHM une fois approuve.
                   </Paragraph>
                 </Form>
               ),

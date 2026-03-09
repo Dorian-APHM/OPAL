@@ -250,11 +250,13 @@ def list_unmapped(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     search: str = Query(default=""),
+    include_mapped: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     """
     Paginated list of unmapped source values for a domain,
     queried directly from the CDM.
+    If include_mapped=True, also returns already-mapped codes (for manual mapping).
     """
     if domain not in DOMAIN_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown domain: {domain}")
@@ -277,7 +279,9 @@ def list_unmapped(
             else:
                 select_cols.append("'' AS source_name")
 
-            wheres = [f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)"]
+            wheres: list[str] = []
+            if not include_mapped:
+                wheres.append(f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)")
             params: dict = {}
 
             if search:
