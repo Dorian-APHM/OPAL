@@ -404,6 +404,8 @@ export const adminApi = {
     api.put(`/admin/users/${userId}/toggle`, { enabled }),
   accessRequests: (statusFilter = 'pending') =>
     api.get<{ requests: AccessRequest[] }>('/admin/access-requests', { params: { status_filter: statusFilter } }),
+  addUser: (username: string, role: string) =>
+    api.post('/admin/users/add', { username, role }),
   approveRequest: (id: number) =>
     api.post(`/admin/access-requests/${id}/approve`),
   rejectRequest: (id: number) =>
