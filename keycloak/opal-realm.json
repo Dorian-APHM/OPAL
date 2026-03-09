@@ -76,5 +76,6 @@
       ],
       "realmRoles": ["admin"]
     }
-  ]
+  ],
+  "components": {}
 }

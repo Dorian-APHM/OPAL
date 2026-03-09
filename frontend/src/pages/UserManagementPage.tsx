@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Card, Table, Tag, Button, Space, Typography, message, Tabs, Badge,
-  Select, Modal, Descriptions, Switch, Empty, Popconfirm, Result,
+  Select, Modal, Descriptions, Switch, Empty, Popconfirm, Result, Input, Form,
 } from 'antd';
 import {
   UserOutlined, ReloadOutlined, CheckCircleOutlined,
-  StopOutlined, PlusOutlined, CloseCircleOutlined,
+  StopOutlined, PlusOutlined, CloseCircleOutlined, UserAddOutlined,
 } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { adminApi } from '../api/client';
@@ -33,6 +33,25 @@ export default function UserManagementPage() {
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('users');
+  const [addUserOpen, setAddUserOpen] = useState(false);
+  const [addUserLoading, setAddUserLoading] = useState(false);
+  const [addUserForm] = Form.useForm();
+
+  const handleAddUser = async (values: { username: string; role: string }) => {
+    setAddUserLoading(true);
+    try {
+      await adminApi.addUser(values.username, values.role);
+      message.success(`Utilisateur ${values.username} ajoute avec le role ${values.role}`);
+      setAddUserOpen(false);
+      addUserForm.resetFields();
+      fetchUsers();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || 'Echec';
+      message.error(detail);
+    } finally {
+      setAddUserLoading(false);
+    }
+  };
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -351,12 +370,17 @@ export default function UserManagementPage() {
             },
           ]}
           tabBarExtraContent={
-            <Button icon={<ReloadOutlined />} size="small" onClick={() => {
-              fetchUsers();
-              fetchRequests();
-            }}>
-              {t('audit.refresh', 'Refresh')}
-            </Button>
+            <Space>
+              <Button icon={<UserAddOutlined />} size="small" type="primary" onClick={() => setAddUserOpen(true)}>
+                Ajouter un utilisateur
+              </Button>
+              <Button icon={<ReloadOutlined />} size="small" onClick={() => {
+                fetchUsers();
+                fetchRequests();
+              }}>
+                {t('audit.refresh', 'Refresh')}
+              </Button>
+            </Space>
           }
         />
       </Card>
@@ -413,6 +437,46 @@ export default function UserManagementPage() {
             </Descriptions.Item>
           </Descriptions>
         )}
+      </Modal>
+
+      {/* Add user modal */}
+      <Modal
+        title={<Space><UserAddOutlined /> Ajouter un utilisateur</Space>}
+        open={addUserOpen}
+        onCancel={() => { setAddUserOpen(false); addUserForm.resetFields(); }}
+        footer={null}
+        width={400}
+      >
+        <Form form={addUserForm} layout="vertical" onFinish={handleAddUser} requiredMark={false}>
+          <Form.Item
+            name="username"
+            label="Matricule APHM"
+            rules={[
+              { required: true, message: 'Matricule requis' },
+              { pattern: /^[a-zA-Z0-9._-]+$/, message: 'Lettres, chiffres, . - _ uniquement' },
+            ]}
+          >
+            <Input placeholder="ex: a159230" prefix={<UserOutlined />} />
+          </Form.Item>
+          <Form.Item
+            name="role"
+            label="Role"
+            rules={[{ required: true, message: 'Choisissez un role' }]}
+          >
+            <Select placeholder="Choisir un role">
+              {OPAL_ROLES.map(r => (
+                <Select.Option key={r} value={r}>
+                  <Tag color={ROLE_COLORS[r]}>{r}</Tag>
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button type="primary" htmlType="submit" loading={addUserLoading} block icon={<UserAddOutlined />}>
+              Ajouter
+            </Button>
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );
