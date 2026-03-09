@@ -4,6 +4,7 @@ FastAPI application entry point.
 """
 import json
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Depends
@@ -304,38 +305,36 @@ def list_users(request: Request):
     base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
     headers = {"Authorization": f"Bearer {token}"}
 
+    # Collect users by OPAL role (avoids listing all LDAP users)
+    opal_roles = ["admin", "omop-dim", "chercheur", "medecin"]
+    user_map = {}
+
     try:
-        resp = http_requests.get(f"{base}/users?max=200", headers=headers, timeout=10)
-        resp.raise_for_status()
-        users = resp.json()
+        for role_name in opal_roles:
+            resp = http_requests.get(
+                f"{base}/roles/{role_name}/users?max=200", headers=headers, timeout=10
+            )
+            if not resp.ok:
+                continue
+            for u in resp.json():
+                uid = u["id"]
+                if uid not in user_map:
+                    user_map[uid] = {
+                        "id": uid,
+                        "username": u.get("username", ""),
+                        "email": u.get("email", ""),
+                        "first_name": u.get("firstName", ""),
+                        "last_name": u.get("lastName", ""),
+                        "enabled": u.get("enabled", False),
+                        "created_at": u.get("createdTimestamp"),
+                        "roles": [],
+                    }
+                user_map[uid]["roles"].append(role_name)
     except Exception as e:
         logger.warning("Failed to fetch Keycloak users: %s", e)
         return {"users": [], "error": str(e)}
 
-    # Fetch role mappings for each user
-    result = []
-    for u in users:
-        user_id = u["id"]
-        try:
-            roles_resp = http_requests.get(
-                f"{base}/users/{user_id}/role-mappings/realm", headers=headers, timeout=5
-            )
-            user_roles = [r["name"] for r in roles_resp.json()] if roles_resp.ok else []
-        except Exception:
-            user_roles = []
-
-        result.append({
-            "id": user_id,
-            "username": u.get("username", ""),
-            "email": u.get("email", ""),
-            "first_name": u.get("firstName", ""),
-            "last_name": u.get("lastName", ""),
-            "enabled": u.get("enabled", False),
-            "created_at": u.get("createdTimestamp"),
-            "roles": user_roles,
-        })
-
-    return {"users": result}
+    return {"users": list(user_map.values())}
 
 
 @app.post("/api/admin/users/{user_id}/roles")
@@ -460,7 +459,7 @@ def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
     """Submit a new access request (public, no auth required)."""
     from db.models import AccessRequest
 
-    required = ["username", "email", "first_name", "last_name", "requested_role"]
+    required = ["username", "requested_role"]
     for field in required:
         if not body.get(field, "").strip():
             return JSONResponse(status_code=400, content={"detail": f"{field} is required"})
@@ -470,16 +469,17 @@ def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
         return JSONResponse(status_code=400, content={"detail": f"Invalid role: {role}"})
 
     existing = db.query(AccessRequest).filter(
-        AccessRequest.username == body["username"]
+        AccessRequest.username == body["username"],
+        AccessRequest.status == "pending",
     ).first()
     if existing:
-        return JSONResponse(status_code=409, content={"detail": "A request for this username already exists"})
+        return JSONResponse(status_code=409, content={"detail": "Une demande est deja en cours pour ce matricule"})
 
     req = AccessRequest(
         username=body["username"].strip(),
-        email=body["email"].strip(),
-        first_name=body["first_name"].strip(),
-        last_name=body["last_name"].strip(),
+        email=body.get("email", "").strip(),
+        first_name=body.get("first_name", "").strip(),
+        last_name=body.get("last_name", "").strip(),
         requested_role=role,
     )
     db.add(req)
@@ -536,30 +536,43 @@ def approve_access_request(request_id: int, request: Request, db=Depends(get_db)
     base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # Create user with temporary password = username
-    user_payload = {
-        "username": ar.username,
-        "email": ar.email,
-        "firstName": ar.first_name,
-        "lastName": ar.last_name,
-        "enabled": True,
-        "credentials": [{
-            "type": "password",
-            "value": ar.username,
-            "temporary": True,
-        }],
-    }
-    try:
-        resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
-        if resp.status_code == 409:
-            return JSONResponse(status_code=409, content={"detail": "User already exists in Keycloak"})
-        resp.raise_for_status()
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"Failed to create Keycloak user: {e}"})
+    # Find or create Keycloak user
+    use_ldap = os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
+    kc_user_id = None
 
-    # Get the created user ID from Location header
-    location = resp.headers.get("Location", "")
-    kc_user_id = location.rsplit("/", 1)[-1] if location else None
+    # First, check if user already exists (LDAP or local)
+    try:
+        search_resp = http_requests.get(
+            f"{base}/users?username={ar.username}&exact=true", headers=headers, timeout=10
+        )
+        existing = [u for u in search_resp.json() if u.get("username", "").lower() == ar.username.lower()] if search_resp.ok else []
+        if existing:
+            kc_user_id = existing[0]["id"]
+    except Exception:
+        pass
+
+    # If user doesn't exist, create locally
+    if not kc_user_id:
+        user_payload = {
+            "username": ar.username,
+            "email": ar.email,
+            "firstName": ar.first_name,
+            "lastName": ar.last_name,
+            "enabled": True,
+        }
+        if not use_ldap:
+            user_payload["credentials"] = [{
+                "type": "password",
+                "value": ar.username,
+                "temporary": True,
+            }]
+        try:
+            resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
+            resp.raise_for_status()
+            location = resp.headers.get("Location", "")
+            kc_user_id = location.rsplit("/", 1)[-1] if location else None
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"detail": f"Failed to create Keycloak user: {e}"})
 
     # Assign the requested role
     if kc_user_id and ar.requested_role:
@@ -583,12 +596,16 @@ def approve_access_request(request_id: int, request: Request, db=Depends(get_db)
     ar.reviewed_at = datetime.now(timezone.utc)
     db.commit()
 
-    return {
+    result = {
         "status": "ok",
         "username": ar.username,
         "keycloak_user_id": kc_user_id,
-        "temporary_password": ar.username,
     }
+    if not use_ldap:
+        result["temporary_password"] = ar.username
+    else:
+        result["auth_method"] = "ldap"
+    return result
 
 
 @app.post("/api/admin/access-requests/{request_id}/reject")

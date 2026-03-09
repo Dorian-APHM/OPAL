@@ -141,9 +141,9 @@ def _build_km_sql(
             elif s == "age_group":
                 col_exprs.append(
                     "CASE "
-                    "WHEN EXTRACT(YEAR FROM te.cohort_start) - p.year_of_birth < 18 THEN '0-17' "
-                    "WHEN EXTRACT(YEAR FROM te.cohort_start) - p.year_of_birth < 40 THEN '18-39' "
-                    "WHEN EXTRACT(YEAR FROM te.cohort_start) - p.year_of_birth < 65 THEN '40-64' "
+                    "WHEN EXTRACT(YEAR FROM te.cohort_start::date) - p.year_of_birth < 18 THEN '0-17' "
+                    "WHEN EXTRACT(YEAR FROM te.cohort_start::date) - p.year_of_birth < 40 THEN '18-39' "
+                    "WHEN EXTRACT(YEAR FROM te.cohort_start::date) - p.year_of_birth < 65 THEN '40-64' "
                     "ELSE '65+' END AS age_group"
                 )
         if col_exprs:
@@ -164,16 +164,16 @@ survival_data AS (
         oe.outcome_date,
         CASE
             WHEN oe.outcome_date IS NOT NULL
-                 AND oe.outcome_date >= te.cohort_start
-                 AND oe.outcome_date <= {tar_limit}
+                 AND oe.outcome_date::date >= te.cohort_start::date
+                 AND oe.outcome_date::date <= ({tar_limit})::date
             THEN 1 ELSE 0
         END AS had_event,
         CASE
             WHEN oe.outcome_date IS NOT NULL
-                 AND oe.outcome_date >= te.cohort_start
-                 AND oe.outcome_date <= {tar_limit}
-            THEN EXTRACT(EPOCH FROM (oe.outcome_date - te.cohort_start)) / 86400.0
-            ELSE EXTRACT(EPOCH FROM ({tar_limit} - te.cohort_start)) / 86400.0
+                 AND oe.outcome_date::date >= te.cohort_start::date
+                 AND oe.outcome_date::date <= ({tar_limit})::date
+            THEN (oe.outcome_date::date - te.cohort_start::date)::float
+            ELSE (({tar_limit})::date - te.cohort_start::date)::float
         END AS time_days
         {strata_select}
     FROM target_entry te
@@ -183,7 +183,7 @@ survival_data AS (
     JOIN {omop_schema}.person p ON te.person_id = p.person_id
     LEFT JOIN {omop_schema}.concept gc ON p.gender_concept_id = gc.concept_id
     LEFT JOIN outcome_entry oe ON te.person_id = oe.person_id
-    WHERE te.cohort_start < {tar_limit}
+    WHERE te.cohort_start::date < ({tar_limit})::date
 )
 SELECT person_id, time_days, had_event
     {"".join(f", {s}_name" if s == "gender" else f", {s}" for s in (strata or []))}

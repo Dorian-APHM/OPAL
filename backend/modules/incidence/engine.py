@@ -77,8 +77,8 @@ analysis AS (
             WHEN o.outcome_date IS NOT NULL
                  AND o.outcome_date >= {tar_start_expr}
                  AND o.outcome_date <= {tar_end_expr}
-            THEN EXTRACT(EPOCH FROM (o.outcome_date - ({tar_start_expr}))) / 86400.0
-            ELSE EXTRACT(EPOCH FROM ({tar_end_expr} - ({tar_start_expr}))) / 86400.0
+            THEN (o.outcome_date::date - ({tar_start_expr})::date)::float
+            ELSE (({tar_end_expr})::date - ({tar_start_expr})::date)::float
         END AS time_days,
         EXTRACT(YEAR FROM ({tar_start_expr})) - p.year_of_birth AS age,
         p.gender_concept_id,
@@ -148,7 +148,7 @@ def compute_incidence(rows: list[dict], strata: list[str], age_groups: list[dict
 def _aggregate(rows: list[dict]) -> dict:
     n = len(rows)
     outcomes = sum(1 for r in rows if r["had_outcome"])
-    total_days = sum(r["time_days"] for r in rows)
+    total_days = float(sum(r["time_days"] for r in rows))
     person_years = total_days / 365.25
 
     rate = outcomes / person_years if person_years > 0 else 0

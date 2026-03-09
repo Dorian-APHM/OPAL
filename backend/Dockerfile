@@ -20,8 +20,8 @@ ENV https_proxy=""
 
 # Create non-root user and required directories
 RUN addgroup --system opal && adduser --system --ingroup opal opal \
-    && mkdir -p /app/data /app/logs \
-    && chown -R opal:opal /app/data /app/logs
+    && mkdir -p /app/data /app/logs /app/ohdsi_output \
+    && chown -R opal:opal /app/data /app/logs /app/ohdsi_output
 
 USER opal
 

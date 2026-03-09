@@ -195,10 +195,10 @@ class AccessRequest(Base):
     __tablename__ = "access_requests"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String(255), nullable=False, unique=True, index=True)
-    email = Column(String(500), nullable=False)
-    first_name = Column(String(255), nullable=False)
-    last_name = Column(String(255), nullable=False)
+    username = Column(String(255), nullable=False, index=True)
+    email = Column(String(500), nullable=True, default="")
+    first_name = Column(String(255), nullable=True, default="")
+    last_name = Column(String(255), nullable=True, default="")
     requested_role = Column(String(100), nullable=False)  # admin, omop-dim, chercheur, medecin
     status = Column(String(50), nullable=False, default="pending")  # pending, approved, rejected
     reviewed_by = Column(String(255), nullable=True)
