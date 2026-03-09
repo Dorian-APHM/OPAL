@@ -608,6 +608,72 @@ def approve_access_request(request_id: int, request: Request, db=Depends(get_db)
     return result
 
 
+@app.post("/api/admin/users/add")
+async def add_user_direct(request: Request):
+    """Admin adds a user directly by matricule + role (no access request needed)."""
+    import requests as http_requests
+
+    body = await request.json()
+    username = body.get("username", "").strip()
+    role = body.get("role", "").strip()
+
+    if not username:
+        return JSONResponse(status_code=400, content={"detail": "Matricule requis"})
+    if role not in ("admin", "omop-dim", "chercheur", "medecin"):
+        return JSONResponse(status_code=400, content={"detail": f"Role invalide: {role}"})
+
+    token = _get_keycloak_admin_token()
+    if not token:
+        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    use_ldap = os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
+    kc_user_id = None
+
+    # Find existing user (LDAP or local)
+    try:
+        search_resp = http_requests.get(
+            f"{base}/users?username={username}&exact=true", headers=headers, timeout=10
+        )
+        existing = [u for u in search_resp.json() if u.get("username", "").lower() == username.lower()] if search_resp.ok else []
+        if existing:
+            kc_user_id = existing[0]["id"]
+    except Exception:
+        pass
+
+    # Create if not found
+    if not kc_user_id:
+        user_payload = {"username": username, "enabled": True}
+        if not use_ldap:
+            user_payload["credentials"] = [{"type": "password", "value": username, "temporary": True}]
+        try:
+            resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
+            resp.raise_for_status()
+            location = resp.headers.get("Location", "")
+            kc_user_id = location.rsplit("/", 1)[-1] if location else None
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"detail": f"Impossible de creer l'utilisateur: {e}"})
+
+    if not kc_user_id:
+        return JSONResponse(status_code=500, content={"detail": "Impossible de trouver ou creer l'utilisateur"})
+
+    # Assign role
+    try:
+        role_resp = http_requests.get(f"{base}/roles/{role}", headers=headers, timeout=5)
+        if role_resp.ok:
+            role_obj = role_resp.json()
+            assign_resp = http_requests.post(
+                f"{base}/users/{kc_user_id}/role-mappings/realm",
+                headers=headers, json=[role_obj], timeout=5,
+            )
+            assign_resp.raise_for_status()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Utilisateur cree mais echec assignation role: {e}"})
+
+    return {"status": "ok", "username": username, "role": role, "keycloak_user_id": kc_user_id}
+
+
 @app.post("/api/admin/access-requests/{request_id}/reject")
 def reject_access_request(request_id: int, request: Request, db=Depends(get_db)):
     """Reject an access request."""
