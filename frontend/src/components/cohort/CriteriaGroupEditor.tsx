@@ -288,7 +288,7 @@ export default function CriteriaGroupEditor({
       {/* Logic formula summary at root level */}
       {isRoot && children.length > 1 && (
         <div style={{ marginTop: 8, padding: '6px 10px', background: '#001529', borderRadius: 6 }}>
-          <Text style={{ fontSize: 13, fontFamily: 'monospace', color: '#2bc459', fontWeight: 500 }}>
+          <Text style={{ fontSize: 13, fontFamily: 'monospace', color: '#10B981', fontWeight: 500 }}>
             {buildFormula(normalised)}
             {normalised.sameVisit && (
               <Tag color="purple" style={{ marginLeft: 8, fontSize: 10 }}>same visit</Tag>

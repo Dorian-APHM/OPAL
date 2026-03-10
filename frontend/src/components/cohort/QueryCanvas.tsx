@@ -134,10 +134,10 @@ export default function QueryCanvas({
           INCLUSION — now rendered via CriteriaGroupEditor (P0-1)
           ════════════════════════════════════════════════════════════ */}
       {hasInclusion && (
-        <div style={{ borderLeft: '3px solid #2bc459', borderRadius: 4 }}>
+        <div style={{ borderLeft: '3px solid #10B981', borderRadius: 4 }}>
           <div style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CheckCircleOutlined style={{ color: '#2bc459' }} />
-            <Text strong style={{ color: '#2bc459', fontSize: 13 }}>
+            <CheckCircleOutlined style={{ color: '#10B981' }} />
+            <Text strong style={{ color: '#10B981', fontSize: 13 }}>
               {t('cohort.inclusion', 'Inclusion Criteria')}
             </Text>
           </div>

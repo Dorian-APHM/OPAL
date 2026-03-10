@@ -71,7 +71,7 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
 
   const attritionChartData = attrition.map(s => ({
     ...s,
-    fill: s.label.startsWith('-') ? '#ff4d4f' : '#2bc459',
+    fill: s.label.startsWith('-') ? '#ff4d4f' : '#10B981',
   }));
 
   return (
@@ -88,7 +88,7 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
             }
             value={patientCount ?? '—'}
             loading={countLoading}
-            valueStyle={{ fontSize: 32, color: patientCount != null ? '#1f77b4' : '#ccc' }}
+            valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
           />
         </div>
         <Space style={{ width: '100%', justifyContent: 'center' }}>

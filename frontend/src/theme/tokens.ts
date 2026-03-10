@@ -1,51 +1,65 @@
 /**
- * OPAL Design Tokens
+ * OPAL Design Tokens — Emerald Neumorphic Night
  * Centralized design system constants.
  */
 
 // ── Colors ──────────────────────────────────────────────────
 export const colors = {
-  // Brand
-  primary: '#1f77b4',
-  primaryLight: '#3a8fc7',
-  primaryDark: '#155a8a',
+  // Core surfaces
+  deepBase: '#0B0F1A',
+  surface: '#121826',
+  surfaceLight: '#1c2539',
+  surfaceDark: '#080b13',
+  surfaceHover: '#182035',
 
-  // Accent (green)
-  accent: '#2bc459',
-  accentHover: '#24a34a',
-  accentLight: '#e8f8ee',
-  accentMuted: 'rgba(43, 196, 89, 0.15)',
-  accentSubtle: 'rgba(43, 196, 89, 0.08)',
-  accentGlow: 'rgba(43, 196, 89, 0.4)',
+  // Brand / Accent (Emerald)
+  primary: '#10B981',
+  primaryLight: '#34D399',
+  primaryDark: '#059669',
+  accent: '#10B981',
+  accentHover: '#34D399',
+  accentLight: 'rgba(16, 185, 129, 0.15)',
+  accentMuted: 'rgba(16, 185, 129, 0.10)',
+  accentSubtle: 'rgba(16, 185, 129, 0.06)',
+  accentGlow: 'rgba(16, 185, 129, 0.4)',
+
+  // Teal secondary
+  teal: '#14b8a6',
+  tealLight: '#2dd4bf',
 
   // Sidebar
-  sidebarStart: '#001529',
-  sidebarEnd: '#001f3d',
-  sidebarBorder: 'rgba(255, 255, 255, 0.08)',
-  sidebarText: 'rgba(255, 255, 255, 0.65)',
+  sidebarStart: '#0B0F1A',
+  sidebarEnd: '#0e1324',
+  sidebarBorder: 'rgba(255, 255, 255, 0.06)',
+  sidebarText: 'rgba(255, 255, 255, 0.5)',
   sidebarTextBright: 'rgba(255, 255, 255, 0.88)',
 
-  // Surfaces
-  bgLight: '#f0f2f5',
-  bgDark: '#141414',
-  cardBg: '#ffffff',
-  cardBgDark: '#1f1f1f',
+  // Surfaces (legacy compat)
+  bgLight: '#0B0F1A',
+  bgDark: '#0B0F1A',
+  cardBg: '#121826',
+  cardBgDark: '#121826',
+
+  // Text
+  textPrimary: '#F8FAFC',
+  textSecondary: '#94A3B8',
+  textDisabled: '#475569',
+  textDim: '#64748B',
+
+  // Borders
+  border: 'rgba(255, 255, 255, 0.03)',
+  borderSubtle: 'rgba(255, 255, 255, 0.06)',
+  borderGlow: 'rgba(16, 185, 129, 0.15)',
+  divider: 'rgba(255, 255, 255, 0.06)',
 
   // Functional
-  success: '#2bc459',
-  warning: '#faad14',
-  error: '#ff4d4f',
-  info: '#1f77b4',
-
-  // Neutrals
-  textPrimary: 'rgba(0, 0, 0, 0.88)',
-  textSecondary: 'rgba(0, 0, 0, 0.45)',
-  textDisabled: 'rgba(0, 0, 0, 0.25)',
-  border: 'rgba(0, 0, 0, 0.06)',
-  divider: 'rgba(0, 0, 0, 0.06)',
+  success: '#10B981',
+  warning: '#F59E0B',
+  error: '#EF4444',
+  info: '#3B82F6',
 
   // Charts
-  chart: ['#1f77b4', '#2bc459', '#ff7f0e', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'],
+  chart: ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#6366F1', '#84CC16', '#06B6D4'],
 } as const;
 
 // ── Typography ──────────────────────────────────────────────
@@ -87,24 +101,27 @@ export const spacing = {
   huge: 48,
 } as const;
 
-// ── Shadows ─────────────────────────────────────────────────
+// ── Shadows (Neumorphic) ───────────────────────────────────
 export const shadows = {
-  sm: '0 1px 2px rgba(0, 0, 0, 0.04)',
-  md: '0 2px 8px rgba(0, 0, 0, 0.06)',
-  lg: '0 4px 16px rgba(0, 0, 0, 0.08)',
-  xl: '0 8px 32px rgba(0, 0, 0, 0.12)',
-  card: '0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)',
-  cardHover: '0 4px 12px rgba(0, 0, 0, 0.08)',
-  sidebar: '2px 0 8px rgba(0, 0, 0, 0.15)',
-  glow: `0 0 20px rgba(43, 196, 89, 0.15)`,
+  sm: '2px 2px 4px #080b13, -2px -2px 4px #1c2539',
+  md: '5px 5px 10px #080b13, -3px -3px 8px #1c2539',
+  lg: '10px 10px 20px #080b13, -5px -5px 15px #1c2539',
+  xl: '15px 15px 30px #080b13, -8px -8px 20px #1c2539',
+  card: '10px 10px 20px #080b13, -5px -5px 15px #1c2539',
+  cardHover: '12px 12px 24px #080b13, -6px -6px 18px #1c2539, 0 0 30px rgba(16, 185, 129, 0.15)',
+  sidebar: '2px 0 12px rgba(0, 0, 0, 0.3)',
+  glow: '0 0 20px rgba(16, 185, 129, 0.15)',
+  glowStrong: '0 0 30px rgba(16, 185, 129, 0.3)',
+  inset: 'inset 3px 3px 6px #080b13, inset -2px -2px 4px #1c2539',
 } as const;
 
 // ── Radii ───────────────────────────────────────────────────
 export const radii = {
-  sm: 4,
-  md: 6,
-  lg: 8,
-  xl: 12,
+  sm: 6,
+  md: 8,
+  lg: 12,
+  xl: 16,
+  xxl: 24,
   round: 9999,
 } as const;
 

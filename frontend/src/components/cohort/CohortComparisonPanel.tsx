@@ -317,7 +317,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                 columns={[
                   {
                     title: 'Domain', dataIndex: 'domain', key: 'd',
-                    render: (d: string) => <Tag color={DOMAIN_COLORS[d] || '#999'}>{d}</Tag>,
+                    render: (d: string) => <Tag color={DOMAIN_COLORS[d] || '#64748B'}>{d}</Tag>,
                   },
                   { title: result.cohort_a_name, dataIndex: 'pct_a', key: 'a', width: 120, align: 'right' as const },
                   { title: result.cohort_b_name, dataIndex: 'pct_b', key: 'b', width: 120, align: 'right' as const },
@@ -338,7 +338,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                     key: dp.domain,
                     label: (
                       <Space>
-                        <Tag color={DOMAIN_COLORS[dp.domain] || '#999'}>{dp.domain}</Tag>
+                        <Tag color={DOMAIN_COLORS[dp.domain] || '#64748B'}>{dp.domain}</Tag>
                         <Text type="secondary" style={{ fontSize: 11 }}>
                           {dp.concepts.length} concepts
                         </Text>

@@ -6,6 +6,7 @@ import {
   LoginOutlined, UserAddOutlined, IdcardOutlined,
 } from '@ant-design/icons';
 import { publicApi } from '../api/client';
+import { colors } from '../theme/tokens';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -45,15 +46,59 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
   return (
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh', background: 'linear-gradient(135deg, #1f77b4 0%, #0d4f7a 100%)',
+      minHeight: '100vh',
+      background: colors.deepBase,
     }}>
+      {/* Background glow */}
+      <div style={{
+        position: 'fixed',
+        top: '30%',
+        left: '50%',
+        width: 600,
+        height: 400,
+        transform: 'translate(-50%, -50%)',
+        background: 'radial-gradient(ellipse, rgba(16,185,129,0.12) 0%, transparent 70%)',
+        pointerEvents: 'none',
+      }} />
+
       <Card
-        style={{ width: 460, borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}
-        bodyStyle={{ padding: '32px 32px 24px' }}
+        style={{
+          width: 460,
+          borderRadius: 24,
+          background: colors.surface,
+          border: `1px solid ${colors.border}`,
+          boxShadow: '10px 10px 20px #080b13, -5px -5px 15px #1c2539',
+        }}
+        styles={{ body: { padding: '32px 32px 24px' } }}
       >
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Title level={3} style={{ margin: 0, color: '#1f77b4' }}>OPAL</Title>
-          <Text type="secondary">OMOP Platform for Analytics & Lineage</Text>
+          {/* Emerald ring logo */}
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 12,
+          }}>
+            <div style={{
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              border: `2.5px solid ${colors.accent}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <div style={{
+                width: 14,
+                height: 14,
+                borderRadius: '50%',
+                background: colors.accent,
+                boxShadow: `0 0 16px ${colors.accentGlow}`,
+              }} />
+            </div>
+          </div>
+          <Title level={3} style={{ margin: 0 }}>OPAL</Title>
+          <Text style={{ color: colors.textSecondary }}>OMOP Platform for Analytics & Lineage</Text>
         </div>
 
         <Tabs
@@ -66,7 +111,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
               label: <span><LoginOutlined /> Sign In</span>,
               children: (
                 <div style={{ textAlign: 'center', padding: '24px 0' }}>
-                  <Paragraph type="secondary" style={{ marginBottom: 24 }}>
+                  <Paragraph style={{ marginBottom: 24, color: colors.textSecondary }}>
                     Connectez-vous avec votre compte OPAL
                   </Paragraph>
                   <Button
@@ -120,7 +165,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                         <Select.Option key={r.value} value={r.value}>
                           <Space>
                             <strong>{r.label}</strong>
-                            <Text type="secondary" style={{ fontSize: 12 }}>— {r.description}</Text>
+                            <Text style={{ fontSize: 12, color: colors.textSecondary }}>— {r.description}</Text>
                           </Space>
                         </Select.Option>
                       ))}
@@ -141,7 +186,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                     </Button>
                   </Form.Item>
 
-                  <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, textAlign: 'center' }}>
+                  <Paragraph style={{ fontSize: 12, marginTop: 12, textAlign: 'center', color: colors.textDim }}>
                     Utilisez votre matricule APHM. Vous vous connecterez avec vos identifiants APHM une fois approuve.
                   </Paragraph>
                 </Form>
