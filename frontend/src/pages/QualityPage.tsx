@@ -259,7 +259,7 @@ export default function QualityPage({ selectedCdm }: Props) {
                 style={{ width: '100%' }}
                 options={domains.map((d) => ({
                   value: d,
-                  label: <span>{t(`domains.${d}`, d)} {analyzedDomains.has(d) && <CheckCircleOutlined style={{ color: '#2bc459', marginLeft: 4 }} />}</span>,
+                  label: <span>{t(`domains.${d}`, d)} {analyzedDomains.has(d) && <CheckCircleOutlined style={{ color: '#10B981', marginLeft: 4 }} />}</span>,
                 }))}
                 allowClear
               />
@@ -306,7 +306,7 @@ export default function QualityPage({ selectedCdm }: Props) {
                     >
                       {t(`domains.${d}`, d)}
                       {analyzedDomains.has(d) && !batchStatus.find(s => s.domain === d) && (
-                        <CheckCircleOutlined style={{ color: '#2bc459', marginLeft: 4 }} />
+                        <CheckCircleOutlined style={{ color: '#10B981', marginLeft: 4 }} />
                       )}
                       {batchStatus.find(s => s.domain === d) && (
                         <Tag
@@ -394,7 +394,7 @@ export default function QualityPage({ selectedCdm }: Props) {
 
           {!loading && !results && !compareMode && (
             <Card>
-              <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>
+              <div style={{ textAlign: 'center', padding: 60, color: '#64748B' }}>
                 <DashboardIcon />
                 <div style={{ marginTop: 16 }}>
                   <Text type="secondary">{t('quality.run_first')}</Text>
@@ -410,7 +410,7 @@ export default function QualityPage({ selectedCdm }: Props) {
 
 function DashboardIcon() {
   return (
-    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="1.5">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="1.5">
       <rect x="3" y="3" width="7" height="7" rx="1" />
       <rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" />

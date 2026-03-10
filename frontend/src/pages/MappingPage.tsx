@@ -112,7 +112,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}><Card><Statistic title={t('mapping.overall_rate', 'Overall Mapping Rate')} value={pctOverall.toFixed(1)} suffix="%" /></Card></Col>
         <Col span={6}><Card><Statistic title={t('mapping.total_terms', 'Total Terms')} value={totalTerms.toLocaleString()} /></Card></Col>
-        <Col span={6}><Card><Statistic title={t('mapping.mapped', 'Mapped')} value={mappedTerms.toLocaleString()} valueStyle={{ color: '#2bc459' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title={t('mapping.mapped', 'Mapped')} value={mappedTerms.toLocaleString()} valueStyle={{ color: '#10B981' }} /></Card></Col>
         <Col span={6}><Card><Statistic title={t('mapping.decisions_made', 'Decisions Made')} value={Object.values(decisions).reduce((a, b) => a + b, 0)} /></Card></Col>
       </Row>
 
@@ -125,8 +125,8 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} />
             <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} />
             <Legend />
-            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill="#1f77b4" />
-            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill="#2bc459" />
+            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill="#3B82F6" />
+            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill="#10B981" />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -162,8 +162,8 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
               <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} />
               <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} />
               <Legend />
-              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke="#1f77b4" strokeWidth={2} />
-              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke="#2bc459" strokeWidth={2} />
+              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke="#3B82F6" strokeWidth={2} />
+              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke="#10B981" strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
@@ -507,7 +507,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
                           </Space>
                           <Space size={2}>
                             <Tooltip title={t('mapping.approve', 'Approve')}>
-                              <Button size="small" type="link" style={{ color: '#2bc459' }}
+                              <Button size="small" type="link" style={{ color: '#10B981' }}
                                 onClick={() => promptDecision(r.source_value, r.source_name, 'approved', s)}>
                                 <CheckOutlined />
                               </Button>

@@ -126,9 +126,6 @@ export default function App() {
   const [selectedCdm, setSelectedCdm] = useState<string | null>(
     localStorage.getItem('opal-selected-cdm')
   );
-  const [darkMode, setDarkMode] = useState(
-    localStorage.getItem('opal-dark-mode') === 'true'
-  );
   const [collapsed, setCollapsed] = useState(false);
 
   const handleCdmChange = (cdm: string) => {
@@ -136,15 +133,9 @@ export default function App() {
     localStorage.setItem('opal-selected-cdm', cdm);
   };
 
-  const handleDarkModeToggle = () => {
-    const next = !darkMode;
-    setDarkMode(next);
-    localStorage.setItem('opal-dark-mode', String(next));
-  };
-
   if (!initialized) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: colors.deepBase }}>
         <Spin size="large" tip="Connecting to authentication server..." />
       </div>
     );
@@ -152,23 +143,53 @@ export default function App() {
 
   if (!authenticated) {
     return (
-      <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><Spin size="large" /></div>}>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/landing" element={<LandingPage />} />
-          <Route path="*" element={<LoginPage onSignIn={login} />} />
-        </Routes>
-      </Suspense>
+      <ConfigProvider
+        theme={{
+          algorithm: antTheme.darkAlgorithm,
+          token: {
+            colorPrimary: colors.primary,
+            colorBgContainer: colors.surface,
+            colorBgLayout: colors.deepBase,
+            colorText: colors.textPrimary,
+            colorTextSecondary: colors.textSecondary,
+            borderRadius: radii.md,
+            fontFamily: typography.fontFamily,
+            fontFamilyCode: typography.fontFamilyMono,
+          },
+        }}
+      >
+        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: colors.deepBase }}><Spin size="large" /></div>}>
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/landing" element={<LandingPage />} />
+            <Route path="*" element={<LoginPage onSignIn={login} />} />
+          </Routes>
+        </Suspense>
+      </ConfigProvider>
     );
   }
 
   return (
     <ConfigProvider
       theme={{
+        algorithm: antTheme.darkAlgorithm,
         token: {
           colorPrimary: colors.primary,
-          colorSuccess: colors.accent,
+          colorSuccess: colors.success,
+          colorWarning: colors.warning,
+          colorError: colors.error,
+          colorInfo: colors.info,
           colorLink: colors.primary,
+          colorBgContainer: colors.surface,
+          colorBgElevated: colors.surface,
+          colorBgLayout: colors.deepBase,
+          colorBgSpotlight: colors.surfaceLight,
+          colorText: colors.textPrimary,
+          colorTextSecondary: colors.textSecondary,
+          colorTextTertiary: colors.textDim,
+          colorTextQuaternary: colors.textDisabled,
+          colorBorder: 'rgba(255, 255, 255, 0.06)',
+          colorBorderSecondary: 'rgba(255, 255, 255, 0.03)',
           borderRadius: radii.md,
           fontFamily: typography.fontFamily,
           fontFamilyCode: typography.fontFamilyMono,
@@ -194,30 +215,27 @@ export default function App() {
           Tag: {
             colorSuccess: colors.accent,
             colorSuccessBg: colors.accentLight,
-            colorSuccessBorder: '#b7ebc5',
+            colorSuccessBorder: 'rgba(16, 185, 129, 0.3)',
           },
           Card: {
-            borderRadiusLG: radii.lg,
+            borderRadiusLG: radii.xl,
           },
         },
-        algorithm: darkMode ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
       }}
     >
-      <Layout style={{ minHeight: '100vh' }}>
+      <Layout style={{ minHeight: '100vh', background: colors.deepBase }}>
         <Sidebar
           selectedCdm={selectedCdm}
           onCdmChange={handleCdmChange}
-          darkMode={darkMode}
-          onDarkModeToggle={handleDarkModeToggle}
           collapsed={collapsed}
           onCollapse={setCollapsed}
         />
-        <Layout>
+        <Layout style={{ background: colors.deepBase }}>
           <Content
             style={{
               padding: 16,
               margin: 0,
-              background: darkMode ? colors.bgDark : colors.bgLight,
+              background: colors.deepBase,
               overflow: 'auto',
             }}
           >

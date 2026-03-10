@@ -487,14 +487,14 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
             <div style={{ marginBottom: 12 }}>
               {result.domain_prevalence.map(dp => (
                 <div key={dp.domain} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <Tag color={DOMAIN_COLORS[dp.domain] || '#999'} style={{ width: 100, textAlign: 'center' }}>
+                  <Tag color={DOMAIN_COLORS[dp.domain] || '#64748B'} style={{ width: 100, textAlign: 'center' }}>
                     {DOMAIN_ICONS[dp.domain]} {dp.domain}
                   </Tag>
                   <Progress
                     percent={dp.pct_with_data}
                     size="small"
                     style={{ flex: 1, margin: 0 }}
-                    strokeColor={DOMAIN_COLORS[dp.domain] || '#999'}
+                    strokeColor={DOMAIN_COLORS[dp.domain] || '#64748B'}
                     format={pct => `${dp.patients_with_data.toLocaleString()} (${pct}%)`}
                   />
                 </div>
@@ -510,7 +510,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                   key: dp.domain,
                   label: (
                     <Space>
-                      <Tag color={DOMAIN_COLORS[dp.domain] || '#999'}>{dp.domain}</Tag>
+                      <Tag color={DOMAIN_COLORS[dp.domain] || '#64748B'}>{dp.domain}</Tag>
                       <Text type="secondary" style={{ fontSize: 11 }}>
                         Top {dp.top_concepts.length} concepts
                       </Text>

@@ -17,8 +17,8 @@ import { qualityApi, authDownload } from '../../api/client';
 const { Title, Text } = Typography;
 
 const COLORS = {
-  primary: '#1f77b4',
-  green: '#2bc459',
+  primary: '#3B82F6',
+  green: '#10B981',
   orange: '#ff7f0e',
   purple: '#9467bd',
   areaFill: 'rgba(31, 119, 180, 0.1)',
@@ -30,7 +30,7 @@ const COLORS = {
   } as Record<string, string>,
 };
 
-const RACE_COLORS = ['#1f77b4', '#ff7f0e', '#2bc459', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f'];
+const RACE_COLORS = ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#6366F1'];
 
 function getGenderColor(name: string): string {
   const upper = name.toUpperCase();
