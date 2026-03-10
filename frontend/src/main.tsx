@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { AuthProvider } from './auth/KeycloakContext';
 import './i18n';
+import './landing.css';
 import './opal-theme.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
