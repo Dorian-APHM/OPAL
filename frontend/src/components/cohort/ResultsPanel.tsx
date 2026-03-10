@@ -1,9 +1,6 @@
 import { useState, useRef } from 'react';
-import { Card, Statistic, Button, Typography, Space, Tooltip, Spin, Alert } from 'antd';
-import {
-  PlayCircleOutlined, TeamOutlined, BarChartOutlined,
-  DownloadOutlined, ThunderboltOutlined, StopOutlined,
-} from '@ant-design/icons';
+import { Card, Statistic, Button, Tooltip, Alert, Spinner } from '../../components/ui';
+import { Play, Users, BarChart3, Download, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -11,8 +8,6 @@ import {
 } from 'recharts';
 import { cohortApi, authDownload } from '../../api/client';
 import type { CohortCriteria, AttritionStep } from '../../types';
-
-const { Text } = Typography;
 
 interface Props {
   cdmName: string;
@@ -75,31 +70,30 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
   }));
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto' }}>
+    <div className="h-full flex flex-col gap-3 overflow-auto">
       {/* Patient count */}
       <Card size="small">
-        <div style={{ textAlign: 'center', marginBottom: 8 }}>
+        <div className="text-center mb-2">
           <Statistic
             title={
-              <Space>
-                <TeamOutlined />
+              <div className="flex items-center gap-1 justify-center">
+                <Users className="h-3.5 w-3.5" />
                 {t('cohort.patient_count', 'Patient Count')}
-              </Space>
+              </div>
             }
-            value={patientCount ?? '—'}
-            loading={countLoading}
+            value={countLoading ? '...' : (patientCount ?? '—')}
             valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
           />
         </div>
-        <Space style={{ width: '100%', justifyContent: 'center' }}>
+        <div className="flex items-center justify-center gap-2">
           {anyLoading ? (
-            <Button danger icon={<StopOutlined />} onClick={cancelOperation} size="small">
+            <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={cancelOperation} size="small">
               {t('common.cancel')}
             </Button>
           ) : (
             <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
+              variant="primary"
+              icon={<Play className="h-3.5 w-3.5" />}
               onClick={runCount}
               disabled={!hasCriteria || !cdmName}
               size="small"
@@ -108,26 +102,28 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
             </Button>
           )}
           <Tooltip title={t('cohort.approximate_tooltip', 'Quick approximate count')}>
-            <Button
-              icon={<ThunderboltOutlined />}
-              onClick={async () => {
-                setCountLoading(true);
-                try {
-                  const resp = await cohortApi.countApprox(cdmName, criteria);
-                  setPatientCount(resp.data.patient_count);
-                } catch (e: any) {
-                  setError(e.response?.data?.detail || 'Error');
-                } finally {
-                  setCountLoading(false);
-                }
-              }}
-              disabled={!hasCriteria || !cdmName}
-              size="small"
-            >
-              ~
-            </Button>
+            <span>
+              <Button
+                icon={<Play className="h-3.5 w-3.5" />}
+                onClick={async () => {
+                  setCountLoading(true);
+                  try {
+                    const resp = await cohortApi.countApprox(cdmName, criteria);
+                    setPatientCount(resp.data.patient_count);
+                  } catch (e: any) {
+                    setError(e.response?.data?.detail || 'Error');
+                  } finally {
+                    setCountLoading(false);
+                  }
+                }}
+                disabled={!hasCriteria || !cdmName}
+                size="small"
+              >
+                ~
+              </Button>
+            </span>
           </Tooltip>
-        </Space>
+        </div>
       </Card>
 
       {error && <Alert type="error" message={error} closable onClose={() => setError('')} />}
@@ -136,10 +132,10 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       <Card
         size="small"
         title={
-          <Space>
-            <BarChartOutlined />
+          <div className="flex items-center gap-1">
+            <BarChart3 className="h-4 w-4" />
             {t('cohort.attrition', 'Attrition Diagram')}
-          </Space>
+          </div>
         }
         extra={
           <Button
@@ -153,7 +149,7 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
         }
       >
         {attritionLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
+          <div className="text-center py-5"><Spinner /></div>
         ) : attrition.length > 0 ? (
           <ResponsiveContainer width="100%" height={Math.max(150, attrition.length * 30)}>
             <BarChart data={attritionChartData} layout="vertical" margin={{ left: 10, right: 10 }}>
@@ -174,21 +170,21 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <span className="text-text-muted text-xs">
             {t('cohort.click_run_attrition', 'Click Run to see attrition diagram')}
-          </Text>
+          </span>
         )}
       </Card>
 
       {/* Export */}
-      <Card size="small" title={<Space><DownloadOutlined />{t('cohort.export', 'Export')}</Space>}>
-        <Space wrap>
+      <Card size="small" title={<div className="flex items-center gap-1"><Download className="h-4 w-4" />{t('cohort.export', 'Export')}</div>}>
+        <div className="flex flex-wrap gap-2">
           {savedCohortId && (
             <>
               <Button
                 size="small"
-                type="primary"
-                icon={<DownloadOutlined />}
+                variant="primary"
+                icon={<Download className="h-3.5 w-3.5" />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
               >
                 {criteria.inclusion.sameVisit
@@ -197,20 +193,20 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
               </Button>
               <Button
                 size="small"
-                icon={<DownloadOutlined />}
+                icon={<Download className="h-3.5 w-3.5" />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
               >
                 SQL
               </Button>
             </>
           )}
-        </Space>
+        </div>
       </Card>
 
       {/* Generated SQL preview */}
       {generatedSql && (
         <Card size="small" title={t('cohort.generated_sql', 'Generated SQL')}>
-          <pre style={{ fontSize: 10, maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          <pre className="text-[10px] max-h-[200px] overflow-auto whitespace-pre-wrap break-all text-text-muted bg-deep-base p-2 rounded">
             {generatedSql}
           </pre>
         </Card>
