@@ -1,17 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Card, Table, Tag, Button, Space, Typography, message, Tabs, Badge,
-  Select, Modal, Descriptions, Switch, Empty, Popconfirm, Result, Input, Form,
-} from 'antd';
+  Card, Table, Tag, Button, Tabs, Badge, Select, Modal, Switch, Empty, Confirm, Input, useToast,
+} from '../components/ui';
+import type { Column } from '../components/ui';
 import {
-  UserOutlined, ReloadOutlined, CheckCircleOutlined,
-  StopOutlined, PlusOutlined, CloseCircleOutlined, UserAddOutlined,
-} from '@ant-design/icons';
+  User, RefreshCw, CheckCircle, Ban, Plus, XCircle, UserPlus,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { adminApi } from '../api/client';
 import type { AdminUser, AccessRequest } from '../types';
-
-const { Text } = Typography;
 
 const OPAL_ROLES = ['admin', 'omop-dim', 'chercheur', 'medecin'];
 
@@ -24,6 +21,7 @@ const ROLE_COLORS: Record<string, string> = {
 
 export default function UserManagementPage() {
   const { t } = useTranslation();
+  const toast = useToast();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,21 +31,43 @@ export default function UserManagementPage() {
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('users');
+
+  // Add user modal
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [addUserLoading, setAddUserLoading] = useState(false);
-  const [addUserForm] = Form.useForm();
+  const [addUsername, setAddUsername] = useState('');
+  const [addRole, setAddRole] = useState('');
+  const [addErrors, setAddErrors] = useState<{ username?: string; role?: string }>({});
 
-  const handleAddUser = async (values: { username: string; role: string }) => {
+  // Confirm dialogs
+  const [approveConfirm, setApproveConfirm] = useState<number | null>(null);
+  const [rejectConfirm, setRejectConfirm] = useState<number | null>(null);
+
+  const resetAddForm = () => {
+    setAddUsername('');
+    setAddRole('');
+    setAddErrors({});
+  };
+
+  const handleAddUser = async () => {
+    const errors: { username?: string; role?: string } = {};
+    if (!addUsername) errors.username = 'Matricule requis';
+    else if (!/^[a-zA-Z0-9._-]+$/.test(addUsername)) errors.username = 'Lettres, chiffres, . - _ uniquement';
+    if (!addRole) errors.role = 'Choisissez un role';
+    if (Object.keys(errors).length > 0) {
+      setAddErrors(errors);
+      return;
+    }
     setAddUserLoading(true);
     try {
-      await adminApi.addUser(values.username, values.role);
-      message.success(`Utilisateur ${values.username} ajoute avec le role ${values.role}`);
+      await adminApi.addUser(addUsername, addRole);
+      toast.success(`Utilisateur ${addUsername} ajoute avec le role ${addRole}`);
       setAddUserOpen(false);
-      addUserForm.resetFields();
+      resetAddForm();
       fetchUsers();
     } catch (e: any) {
       const detail = e?.response?.data?.detail || 'Echec';
-      message.error(detail);
+      toast.error(detail);
     } finally {
       setAddUserLoading(false);
     }
@@ -89,70 +109,71 @@ export default function UserManagementPage() {
   const handleAssignRole = async (userId: string, role: string) => {
     try {
       await adminApi.assignRole(userId, role);
-      message.success(t('admin.role_assigned', 'Role assigned'));
+      toast.success(t('admin.role_assigned', 'Role assigned'));
       fetchUsers();
     } catch (e: any) {
-      message.error(e.message || 'Failed to assign role');
+      toast.error(e.message || 'Failed to assign role');
     }
   };
 
   const handleRemoveRole = async (userId: string, role: string) => {
     try {
       await adminApi.removeRole(userId, role);
-      message.success(t('admin.role_removed', 'Role removed'));
+      toast.success(t('admin.role_removed', 'Role removed'));
       fetchUsers();
     } catch (e: any) {
-      message.error(e.message || 'Failed to remove role');
+      toast.error(e.message || 'Failed to remove role');
     }
   };
 
   const handleToggleUser = async (userId: string, enabled: boolean) => {
     try {
       await adminApi.toggleUser(userId, enabled);
-      message.success(enabled
+      toast.success(enabled
         ? t('admin.user_enabled', 'User enabled')
         : t('admin.user_disabled', 'User disabled'));
       fetchUsers();
     } catch (e: any) {
-      message.error(e.message || 'Failed to update user');
+      toast.error(e.message || 'Failed to update user');
     }
   };
 
   const handleApproveRequest = async (id: number) => {
     try {
       await adminApi.approveRequest(id);
-      message.success("Demande approuvee. L'utilisateur peut se connecter avec ses identifiants APHM.");
+      toast.success("Demande approuvee. L'utilisateur peut se connecter avec ses identifiants APHM.");
       fetchRequests();
       fetchUsers();
     } catch (e: any) {
       const detail = e?.response?.data?.detail || 'Failed to approve';
-      message.error(detail);
+      toast.error(detail);
     }
   };
 
   const handleRejectRequest = async (id: number) => {
     try {
       await adminApi.rejectRequest(id);
-      message.success(t('admin.request_rejected', 'Request rejected'));
+      toast.success(t('admin.request_rejected', 'Request rejected'));
       fetchRequests();
     } catch (e: any) {
-      message.error(e.message || 'Failed to reject');
+      toast.error(e.message || 'Failed to reject');
     }
   };
 
-  const userColumns = [
+  const userColumns: Column<AdminUser>[] = [
     {
       title: t('admin.username', 'Username'),
       dataIndex: 'username',
       key: 'username',
       width: 150,
       render: (u: string, record: AdminUser) => (
-        <a onClick={() => setSelectedUser(record)}>
-          <Space>
-            <UserOutlined />
-            {u}
-          </Space>
-        </a>
+        <button
+          onClick={() => setSelectedUser(record)}
+          className="flex items-center gap-2 text-emerald-accent hover:text-emerald-light bg-transparent border-none cursor-pointer text-sm"
+        >
+          <User className="h-3.5 w-3.5" />
+          {u}
+        </button>
       ),
     },
     {
@@ -167,8 +188,9 @@ export default function UserManagementPage() {
       dataIndex: 'email',
       key: 'email',
       width: 220,
-      ellipsis: true,
-      render: (e: string) => e || '\u2014',
+      render: (e: string) => (
+        <span className="text-sm text-text-muted truncate block max-w-[200px]">{e || '\u2014'}</span>
+      ),
     },
     {
       title: t('admin.roles', 'Roles'),
@@ -176,33 +198,30 @@ export default function UserManagementPage() {
       key: 'roles',
       width: 280,
       render: (roles: string[], record: AdminUser) => (
-        <Space wrap size={4}>
+        <div className="flex items-center gap-1 flex-wrap">
           {roles
             .filter(r => OPAL_ROLES.includes(r))
             .map(r => (
               <Tag
                 key={r}
-                color={ROLE_COLORS[r] || 'default'}
+                color={(ROLE_COLORS[r] || 'default') as any}
                 closable
-                onClose={(e) => {
-                  e.preventDefault();
-                  handleRemoveRole(record.id, r);
-                }}
+                onClose={() => handleRemoveRole(record.id, r)}
               >
                 {r}
               </Tag>
             ))}
           <Select
             size="small"
-            placeholder={<PlusOutlined />}
-            style={{ width: 100 }}
-            value={undefined}
+            placeholder="+"
+            className="w-24"
+            value={undefined as any}
             onChange={(v) => { if (v) handleAssignRole(record.id, v); }}
             options={OPAL_ROLES
               .filter(r => !roles.includes(r))
               .map(r => ({ value: r, label: r }))}
           />
-        </Space>
+        </div>
       ),
     },
     {
@@ -211,13 +230,16 @@ export default function UserManagementPage() {
       key: 'enabled',
       width: 100,
       render: (enabled: boolean, record: AdminUser) => (
-        <Switch
-          checked={enabled}
-          checkedChildren={<CheckCircleOutlined />}
-          unCheckedChildren={<StopOutlined />}
-          onChange={(checked) => handleToggleUser(record.id, checked)}
-          size="small"
-        />
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={enabled}
+            onChange={(checked) => handleToggleUser(record.id, checked)}
+            size="small"
+          />
+          {enabled
+            ? <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
+            : <Ban className="h-3.5 w-3.5 text-red-400" />}
+        </div>
       ),
     },
     {
@@ -230,13 +252,18 @@ export default function UserManagementPage() {
     },
   ];
 
-  const requestColumns = [
+  const requestColumns: Column<AccessRequest>[] = [
     {
       title: t('admin.username', 'Username'),
       dataIndex: 'username',
       key: 'username',
       width: 150,
-      render: (u: string) => <Space><UserOutlined />{u}</Space>,
+      render: (u: string) => (
+        <div className="flex items-center gap-2">
+          <User className="h-3.5 w-3.5 text-text-dim" />
+          {u}
+        </div>
+      ),
     },
     {
       title: t('admin.name', 'Name'),
@@ -249,7 +276,9 @@ export default function UserManagementPage() {
       dataIndex: 'email',
       key: 'email',
       width: 220,
-      ellipsis: true,
+      render: (e: string) => (
+        <span className="text-sm text-text-muted truncate block max-w-[200px]">{e || '\u2014'}</span>
+      ),
     },
     {
       title: t('admin.requested_role', 'Requested Role'),
@@ -257,7 +286,7 @@ export default function UserManagementPage() {
       key: 'requested_role',
       width: 130,
       render: (role: string) => (
-        <Tag color={ROLE_COLORS[role] || 'default'}>{role}</Tag>
+        <Tag color={(ROLE_COLORS[role] || 'default') as any}>{role}</Tag>
       ),
     },
     {
@@ -273,28 +302,24 @@ export default function UserManagementPage() {
       key: 'actions',
       width: 200,
       render: (_: any, record: AccessRequest) => (
-        <Space>
-          <Popconfirm
-            title={t('admin.confirm_approve', 'Approve this access request?')}
-            description="Le role sera assigne et l'utilisateur pourra se connecter avec ses identifiants APHM."
-            onConfirm={() => handleApproveRequest(record.id)}
-            okText={t('admin.approve', 'Approve')}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            size="small"
+            icon={<CheckCircle className="h-3.5 w-3.5" />}
+            onClick={() => setApproveConfirm(record.id)}
           >
-            <Button type="primary" size="small" icon={<CheckCircleOutlined />}>
-              {t('admin.approve', 'Approve')}
-            </Button>
-          </Popconfirm>
-          <Popconfirm
-            title={t('admin.confirm_reject', 'Reject this request?')}
-            onConfirm={() => handleRejectRequest(record.id)}
-            okText={t('admin.reject', 'Reject')}
-            okButtonProps={{ danger: true }}
+            {t('admin.approve', 'Approve')}
+          </Button>
+          <Button
+            variant="danger"
+            size="small"
+            icon={<XCircle className="h-3.5 w-3.5" />}
+            onClick={() => setRejectConfirm(record.id)}
           >
-            <Button danger size="small" icon={<CloseCircleOutlined />}>
-              {t('admin.reject', 'Reject')}
-            </Button>
-          </Popconfirm>
-        </Space>
+            {t('admin.reject', 'Reject')}
+          </Button>
+        </div>
       ),
     },
   ];
@@ -311,16 +336,16 @@ export default function UserManagementPage() {
             {
               key: 'users',
               label: (
-                <Space>
-                  <UserOutlined />
+                <div className="flex items-center gap-2">
+                  <User className="h-4 w-4" />
                   {t('admin.user_management', 'User Management')}
                   <Tag>{users.length}</Tag>
-                </Space>
+                </div>
               ),
               children: (
                 <>
                   {error && (
-                    <div style={{ marginBottom: 12 }}>
+                    <div className="mb-3">
                       <Tag color="orange">{t('admin.keycloak_warning', 'Keycloak connection issue')}: {error}</Tag>
                     </div>
                   )}
@@ -330,9 +355,9 @@ export default function UserManagementPage() {
                     rowKey="id"
                     loading={loading}
                     size="small"
-                    pagination={{ pageSize: 25, size: 'small', showSizeChanger: true }}
+                    pagination={{ current: 1, pageSize: 25, total: users.length }}
                     scroll={{ x: true }}
-                    locale={{ emptyText: <Empty description={t('admin.no_users', 'No users found')} /> }}
+                    emptyText={<Empty description={t('admin.no_users', 'No users found')} />}
                   />
                 </>
               ),
@@ -340,11 +365,11 @@ export default function UserManagementPage() {
             {
               key: 'requests',
               label: (
-                <Badge count={pendingCount} offset={[10, 0]} size="small">
-                  <Space>
-                    <PlusOutlined />
+                <Badge count={pendingCount}>
+                  <div className="flex items-center gap-2">
+                    <Plus className="h-4 w-4" />
                     {t('admin.access_requests', 'Access Requests')}
-                  </Space>
+                  </div>
                 </Badge>
               ),
               children: (
@@ -354,129 +379,183 @@ export default function UserManagementPage() {
                   rowKey="id"
                   loading={requestsLoading}
                   size="small"
-                  pagination={false}
                   scroll={{ x: true }}
-                  locale={{
-                    emptyText: (
-                      <Result
-                        status="success"
-                        title={t('admin.no_pending', 'No pending requests')}
-                        subTitle={t('admin.all_clear', 'All access requests have been processed.')}
-                      />
-                    ),
-                  }}
+                  emptyText={
+                    <div className="py-12 text-center">
+                      <CheckCircle className="h-12 w-12 text-emerald-accent mx-auto mb-3" />
+                      <h3 className="text-lg font-semibold text-text-bright mb-1">
+                        {t('admin.no_pending', 'No pending requests')}
+                      </h3>
+                      <span className="text-sm text-text-muted">
+                        {t('admin.all_clear', 'All access requests have been processed.')}
+                      </span>
+                    </div>
+                  }
                 />
               ),
             },
           ]}
-          tabBarExtraContent={
-            <Space>
-              <Button icon={<UserAddOutlined />} size="small" type="primary" onClick={() => setAddUserOpen(true)}>
+          extra={
+            <div className="flex items-center gap-2">
+              <Button
+                icon={<UserPlus className="h-3.5 w-3.5" />}
+                size="small"
+                variant="primary"
+                onClick={() => setAddUserOpen(true)}
+              >
                 Ajouter un utilisateur
               </Button>
-              <Button icon={<ReloadOutlined />} size="small" onClick={() => {
-                fetchUsers();
-                fetchRequests();
-              }}>
+              <Button
+                icon={<RefreshCw className="h-3.5 w-3.5" />}
+                size="small"
+                onClick={() => {
+                  fetchUsers();
+                  fetchRequests();
+                }}
+              >
                 {t('audit.refresh', 'Refresh')}
               </Button>
-            </Space>
+            </div>
           }
         />
       </Card>
 
+      {/* Approve confirm */}
+      <Confirm
+        open={approveConfirm !== null}
+        onClose={() => setApproveConfirm(null)}
+        onConfirm={() => {
+          if (approveConfirm !== null) handleApproveRequest(approveConfirm);
+        }}
+        title={t('admin.confirm_approve', 'Approve this access request?')}
+        description="Le role sera assigne et l'utilisateur pourra se connecter avec ses identifiants APHM."
+        confirmText={t('admin.approve', 'Approve')}
+      />
+
+      {/* Reject confirm */}
+      <Confirm
+        open={rejectConfirm !== null}
+        onClose={() => setRejectConfirm(null)}
+        onConfirm={() => {
+          if (rejectConfirm !== null) handleRejectRequest(rejectConfirm);
+        }}
+        title={t('admin.confirm_reject', 'Reject this request?')}
+        confirmText={t('admin.reject', 'Reject')}
+        danger
+      />
+
       {/* User detail modal */}
       <Modal
-        title={
-          <Space>
-            <UserOutlined />
-            {selectedUser?.username}
-          </Space>
-        }
         open={!!selectedUser}
-        onCancel={() => setSelectedUser(null)}
-        footer={null}
-        width={500}
+        onClose={() => setSelectedUser(null)}
+        title={
+          <div className="flex items-center gap-2">
+            <User className="h-4 w-4" />
+            {selectedUser?.username}
+          </div>
+        }
+        width="max-w-md"
       >
         {selectedUser && (
-          <Descriptions column={1} size="small" bordered>
-            <Descriptions.Item label={t('admin.username', 'Username')}>
-              {selectedUser.username}
-            </Descriptions.Item>
-            <Descriptions.Item label="Email">
-              {selectedUser.email || '\u2014'}
-            </Descriptions.Item>
-            <Descriptions.Item label={t('admin.name', 'Name')}>
-              {`${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || '\u2014'}
-            </Descriptions.Item>
-            <Descriptions.Item label={t('admin.status', 'Status')}>
-              <Tag color={selectedUser.enabled ? 'green' : 'red'}>
-                {selectedUser.enabled
-                  ? t('admin.enabled', 'Enabled')
-                  : t('admin.disabled', 'Disabled')}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label={t('admin.roles', 'Roles')}>
-              <Space wrap>
+          <dl className="divide-y divide-glass-border">
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">{t('admin.username', 'Username')}</dt>
+              <dd className="text-sm text-text-bright">{selectedUser.username}</dd>
+            </div>
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">Email</dt>
+              <dd className="text-sm text-text-bright">{selectedUser.email || '\u2014'}</dd>
+            </div>
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">{t('admin.name', 'Name')}</dt>
+              <dd className="text-sm text-text-bright">
+                {`${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || '\u2014'}
+              </dd>
+            </div>
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">{t('admin.status', 'Status')}</dt>
+              <dd>
+                <Tag color={selectedUser.enabled ? 'green' : 'red'}>
+                  {selectedUser.enabled
+                    ? t('admin.enabled', 'Enabled')
+                    : t('admin.disabled', 'Disabled')}
+                </Tag>
+              </dd>
+            </div>
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">{t('admin.roles', 'Roles')}</dt>
+              <dd className="flex flex-wrap gap-1">
                 {selectedUser.roles
                   .filter(r => OPAL_ROLES.includes(r))
                   .map(r => (
-                    <Tag key={r} color={ROLE_COLORS[r]}>{r}</Tag>
+                    <Tag key={r} color={(ROLE_COLORS[r] || 'default') as any}>{r}</Tag>
                   ))}
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label={t('admin.created', 'Created')}>
-              {selectedUser.created_at
-                ? new Date(selectedUser.created_at).toLocaleString()
-                : '\u2014'}
-            </Descriptions.Item>
-            <Descriptions.Item label="ID">
-              <Text copyable style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                {selectedUser.id}
-              </Text>
-            </Descriptions.Item>
-          </Descriptions>
+              </dd>
+            </div>
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">{t('admin.created', 'Created')}</dt>
+              <dd className="text-sm text-text-bright">
+                {selectedUser.created_at
+                  ? new Date(selectedUser.created_at).toLocaleString()
+                  : '\u2014'}
+              </dd>
+            </div>
+            <div className="flex py-2.5">
+              <dt className="w-28 text-xs font-medium text-text-dim shrink-0">ID</dt>
+              <dd className="text-[11px] font-mono text-text-muted">{selectedUser.id}</dd>
+            </div>
+          </dl>
         )}
       </Modal>
 
       {/* Add user modal */}
       <Modal
-        title={<Space><UserAddOutlined /> Ajouter un utilisateur</Space>}
         open={addUserOpen}
-        onCancel={() => { setAddUserOpen(false); addUserForm.resetFields(); }}
-        footer={null}
-        width={400}
+        onClose={() => { setAddUserOpen(false); resetAddForm(); }}
+        title={
+          <div className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4" />
+            Ajouter un utilisateur
+          </div>
+        }
+        width="max-w-sm"
       >
-        <Form form={addUserForm} layout="vertical" onFinish={handleAddUser} requiredMark={false}>
-          <Form.Item
-            name="username"
-            label="Matricule APHM"
-            rules={[
-              { required: true, message: 'Matricule requis' },
-              { pattern: /^[a-zA-Z0-9._-]+$/, message: 'Lettres, chiffres, . - _ uniquement' },
-            ]}
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">Matricule APHM</label>
+            <Input
+              placeholder="ex: redacted"
+              prefix={<User className="h-3.5 w-3.5" />}
+              value={addUsername}
+              onChange={e => { setAddUsername(e.target.value); setAddErrors(prev => ({ ...prev, username: undefined })); }}
+              error={addErrors.username}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">Role</label>
+            <Select
+              placeholder="Choisir un role"
+              value={addRole || null}
+              onChange={v => { setAddRole(v); setAddErrors(prev => ({ ...prev, role: undefined })); }}
+              options={OPAL_ROLES.map(r => ({
+                value: r,
+                label: r,
+              }))}
+            />
+            {addErrors.role && (
+              <span className="text-xs text-red-400 mt-1 block">{addErrors.role}</span>
+            )}
+          </div>
+          <Button
+            variant="primary"
+            block
+            loading={addUserLoading}
+            icon={<UserPlus className="h-3.5 w-3.5" />}
+            onClick={handleAddUser}
           >
-            <Input placeholder="ex: redacted" prefix={<UserOutlined />} />
-          </Form.Item>
-          <Form.Item
-            name="role"
-            label="Role"
-            rules={[{ required: true, message: 'Choisissez un role' }]}
-          >
-            <Select placeholder="Choisir un role">
-              {OPAL_ROLES.map(r => (
-                <Select.Option key={r} value={r}>
-                  <Tag color={ROLE_COLORS[r]}>{r}</Tag>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item style={{ marginBottom: 0 }}>
-            <Button type="primary" htmlType="submit" loading={addUserLoading} block icon={<UserAddOutlined />}>
-              Ajouter
-            </Button>
-          </Form.Item>
-        </Form>
+            Ajouter
+          </Button>
+        </div>
       </Modal>
     </div>
   );

@@ -1,9 +1,5 @@
 import { useState, useEffect } from 'react';
-import {
-  Card, Select, Button, Space, Typography, Row, Col, Statistic,
-  Empty, message, Spin, Radio, Checkbox, Tag, Divider, Table,
-} from 'antd';
-import { LineChartOutlined, CalculatorOutlined } from '@ant-design/icons';
+import { TrendingUp, Calculator } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -11,14 +7,16 @@ import {
 } from 'recharts';
 import { cohortApi, estimationApi } from '../api/client';
 import type { CohortSummary, KaplanMeierResult, KMPoint } from '../types';
-
-const { Title, Text } = Typography;
-const { Option } = Select;
+import {
+  Card, Button, Select, Statistic, Empty, Spinner, Tag, Checkbox, useToast,
+} from '../components/ui';
+import type { Column } from '../components/ui';
 
 const STRATA_COLORS = ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444'];
 
 export default function EstimationPage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
   const [targetId, setTargetId] = useState<number | null>(null);
   const [outcomeId, setOutcomeId] = useState<number | null>(null);
@@ -45,13 +43,24 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
       });
       setResult(r.data);
     } catch (e: any) {
-      message.error(e.message || 'Computation failed');
+      toast.error(e.message || 'Computation failed');
     } finally {
       setComputing(false);
     }
   };
 
+  const toggleStratum = (value: string) => {
+    setStrata(prev =>
+      prev.includes(value) ? prev.filter(s => s !== value) : [...prev, value]
+    );
+  };
+
   if (!selectedCdm) return <Card><Empty description="Select a CDM first" /></Card>;
+
+  const cohortOptions = cohorts.map(c => ({
+    value: String(c.id),
+    label: `${c.name} (${c.patient_count ?? '?'})`,
+  }));
 
   // Prepare chart data
   const chartData = result ? prepareChartData(result) : [];
@@ -59,108 +68,134 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
   const hasStrata = strataNames.length > 0;
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-      <Title level={4}><LineChartOutlined /> {t('estimation.kaplan_meier', 'Kaplan-Meier Survival')}</Title>
+    <div className="max-w-[1100px] mx-auto">
+      <h4 className="text-lg font-semibold text-text-bright mb-4 flex items-center gap-2">
+        <TrendingUp className="h-5 w-5" />
+        {t('estimation.kaplan_meier', 'Kaplan-Meier Survival')}
+      </h4>
 
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Text strong>{t('estimation.target_cohort', 'Target Cohort')}</Text>
+      <Card size="small" className="mb-4">
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <span className="text-sm font-semibold text-text-bright block mb-1">
+                {t('estimation.target_cohort', 'Target Cohort')}
+              </span>
               <Select
                 placeholder="Select target cohort..."
-                value={targetId}
-                onChange={setTargetId}
-                style={{ width: '100%', marginTop: 4 }}
-              >
-                {cohorts.map(c => <Option key={c.id} value={c.id}>{c.name} ({c.patient_count ?? '?'})</Option>)}
-              </Select>
-            </Col>
-            <Col span={12}>
-              <Text strong>{t('estimation.outcome_cohort', 'Outcome Event')}</Text>
+                value={targetId != null ? String(targetId) : null}
+                onChange={(v) => setTargetId(v ? Number(v) : null)}
+                options={cohortOptions}
+              />
+            </div>
+            <div>
+              <span className="text-sm font-semibold text-text-bright block mb-1">
+                {t('estimation.outcome_cohort', 'Outcome Event')}
+              </span>
               <Select
                 placeholder="Select outcome cohort..."
-                value={outcomeId}
-                onChange={setOutcomeId}
-                style={{ width: '100%', marginTop: 4 }}
-              >
-                {cohorts.map(c => <Option key={c.id} value={c.id}>{c.name} ({c.patient_count ?? '?'})</Option>)}
-              </Select>
-            </Col>
-          </Row>
+                value={outcomeId != null ? String(outcomeId) : null}
+                onChange={(v) => setOutcomeId(v ? Number(v) : null)}
+                options={cohortOptions}
+              />
+            </div>
+          </div>
 
-          <Row gutter={16}>
-            <Col span={8}>
-              <Text strong>{t('estimation.time_unit', 'Time Unit')}</Text>
-              <div style={{ marginTop: 4 }}>
-                <Radio.Group value={timeUnit} onChange={e => setTimeUnit(e.target.value)}>
-                  <Radio.Button value="days">{t('estimation.days', 'Days')}</Radio.Button>
-                  <Radio.Button value="months">{t('estimation.months', 'Months')}</Radio.Button>
-                  <Radio.Button value="years">{t('estimation.years', 'Years')}</Radio.Button>
-                </Radio.Group>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <span className="text-sm font-semibold text-text-bright block mb-1">
+                {t('estimation.time_unit', 'Time Unit')}
+              </span>
+              <div className="flex rounded-[10px] border border-glass-border overflow-hidden mt-1">
+                {(['days', 'months', 'years'] as const).map((unit) => (
+                  <button
+                    key={unit}
+                    onClick={() => setTimeUnit(unit)}
+                    className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer border-none ${
+                      timeUnit === unit
+                        ? 'bg-emerald-accent/15 text-emerald-400'
+                        : 'bg-deep-base text-text-muted hover:text-text-bright'
+                    }`}
+                  >
+                    {t(`estimation.${unit}`, unit.charAt(0).toUpperCase() + unit.slice(1))}
+                  </button>
+                ))}
               </div>
-            </Col>
-            <Col span={16}>
-              <Text strong>{t('estimation.strata', 'Stratify by')}</Text>
-              <div style={{ marginTop: 4 }}>
-                <Checkbox.Group value={strata} onChange={v => setStrata(v as string[])}>
-                  <Checkbox value="gender">Gender</Checkbox>
-                  <Checkbox value="age_group">Age Group</Checkbox>
-                </Checkbox.Group>
+            </div>
+            <div className="col-span-2">
+              <span className="text-sm font-semibold text-text-bright block mb-1">
+                {t('estimation.strata', 'Stratify by')}
+              </span>
+              <div className="flex items-center gap-4 mt-1">
+                <Checkbox
+                  checked={strata.includes('gender')}
+                  onChange={() => toggleStratum('gender')}
+                >
+                  Gender
+                </Checkbox>
+                <Checkbox
+                  checked={strata.includes('age_group')}
+                  onChange={() => toggleStratum('age_group')}
+                >
+                  Age Group
+                </Checkbox>
               </div>
-            </Col>
-          </Row>
+            </div>
+          </div>
 
-          <Button type="primary" icon={<CalculatorOutlined />} onClick={compute}
-            loading={computing} disabled={!targetId || !outcomeId}>
+          <Button
+            variant="primary"
+            icon={<Calculator className="h-4 w-4" />}
+            onClick={compute}
+            loading={computing}
+            disabled={!targetId || !outcomeId}
+          >
             {t('estimation.compute', 'Compute')}
           </Button>
-        </Space>
+        </div>
       </Card>
 
-      {computing && <div style={{ textAlign: 'center', padding: 40 }}><Spin size="large" /></div>}
+      {computing && (
+        <div className="text-center py-10">
+          <Spinner size="large" />
+        </div>
+      )}
 
       {result && !computing && (
         <>
           {/* Summary stats */}
-          <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col span={6}>
-              <Card size="small">
-                <Statistic title="N" value={result.summary.n} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small">
-                <Statistic title={t('estimation.events', 'Events')} value={result.summary.events} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small">
-                <Statistic title={t('estimation.censored', 'Censored')} value={result.summary.censored} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small">
-                <Statistic
-                  title={t('estimation.median_survival', 'Median Survival')}
-                  value={result.median_survival ?? '—'}
-                  suffix={result.median_survival != null ? timeUnit : ''}
-                />
-              </Card>
-            </Col>
-          </Row>
+          <div className="grid grid-cols-4 gap-4 mb-4">
+            <Card size="small">
+              <Statistic title="N" value={result.summary.n} />
+            </Card>
+            <Card size="small">
+              <Statistic title={t('estimation.events', 'Events')} value={result.summary.events} />
+            </Card>
+            <Card size="small">
+              <Statistic title={t('estimation.censored', 'Censored')} value={result.summary.censored} />
+            </Card>
+            <Card size="small">
+              <Statistic
+                title={t('estimation.median_survival', 'Median Survival')}
+                value={result.median_survival ?? '\u2014'}
+                suffix={result.median_survival != null ? timeUnit : ''}
+              />
+            </Card>
+          </div>
 
           {/* Log-rank test */}
           {result.log_rank && (
-            <Card size="small" style={{ marginBottom: 16 }}>
-              <Space>
+            <Card size="small" className="mb-4">
+              <div className="flex items-center gap-3">
                 <Tag color={result.log_rank.p_value < 0.05 ? 'red' : 'green'}>
                   {t('estimation.log_rank', 'Log-Rank Test')}
                 </Tag>
-                <Text>Chi² = {result.log_rank.chi_square}</Text>
-                <Text strong>{t('estimation.p_value', 'p-value')} = {result.log_rank.p_value < 0.001 ? '< 0.001' : result.log_rank.p_value.toFixed(4)}</Text>
-                <Text type="secondary">(df = {result.log_rank.df})</Text>
-              </Space>
+                <span className="text-sm text-text-bright">Chi² = {result.log_rank.chi_square}</span>
+                <span className="text-sm font-semibold text-text-bright">
+                  {t('estimation.p_value', 'p-value')} = {result.log_rank.p_value < 0.001 ? '< 0.001' : result.log_rank.p_value.toFixed(4)}
+                </span>
+                <span className="text-sm text-text-dim">(df = {result.log_rank.df})</span>
+              </div>
             </Card>
           )}
 
@@ -219,7 +254,13 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
           </Card>
 
           {/* Number at risk table */}
-          <Divider orientation="left">{t('estimation.at_risk', 'Number at Risk')}</Divider>
+          <div className="my-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="h-px flex-1 bg-glass-border" />
+              <span className="text-sm text-text-muted font-medium">{t('estimation.at_risk', 'Number at Risk')}</span>
+              <div className="h-px flex-1 bg-glass-border" />
+            </div>
+          </div>
           <AtRiskTable
             overall={result.overall}
             strata={result.strata}
@@ -278,18 +319,9 @@ function AtRiskTable({ overall, strata, timeUnit }: {
   const step = Math.max(1, Math.floor(source.length / 8));
   const timePoints = source.filter((_, i) => i % step === 0 || i === source.length - 1);
 
-  const columns = [
-    { title: '', dataIndex: 'label', key: 'label', fixed: 'left' as const },
-    ...timePoints.map((p, i) => ({
-      title: `${Math.round(p.time)}`,
-      key: `t${i}`,
-      render: (_: any, row: any) => row[`t${i}`],
-    })),
-  ];
-
   const data = hasStrata
     ? strataNames.map(name => {
-        const row: any = { label: name, key: name };
+        const row: Record<string, any> = { label: name, key: name };
         timePoints.forEach((tp, i) => {
           const curve = strata[name];
           let last: KMPoint | null = null;
@@ -297,7 +329,7 @@ function AtRiskTable({ overall, strata, timeUnit }: {
             if (p.time <= tp.time) last = p;
             else break;
           }
-          row[`t${i}`] = last?.at_risk ?? '—';
+          row[`t${i}`] = last?.at_risk ?? '\u2014';
         });
         return row;
       })
@@ -308,12 +340,31 @@ function AtRiskTable({ overall, strata, timeUnit }: {
       }];
 
   return (
-    <Table
-      dataSource={data}
-      columns={columns}
-      size="small"
-      pagination={false}
-      scroll={{ x: 'max-content' }}
-    />
+    <div className="w-full overflow-x-auto">
+      <table className="w-full border-collapse">
+        <thead>
+          <tr>
+            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-muted bg-surface-dark border-b border-glass-border sticky left-0">
+              &nbsp;
+            </th>
+            {timePoints.map((p, i) => (
+              <th key={i} className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-muted bg-surface-dark border-b border-glass-border">
+                {Math.round(p.time)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.key} className="border-b border-border-subtle hover:bg-emerald-accent/4 transition-colors">
+              <td className="px-3 py-2 text-sm text-text-bright font-medium sticky left-0 bg-surface">{row.label}</td>
+              {timePoints.map((_, i) => (
+                <td key={i} className="px-3 py-2 text-sm text-text-bright">{row[`t${i}`]}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

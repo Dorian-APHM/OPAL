@@ -1,19 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Card, Table, Tag, DatePicker, Select, Button, Space, Typography,
-  Row, Col, Statistic, Input, message,
-} from 'antd';
+  Card, Table, Tag, Select, Button, Input, Statistic, useToast,
+} from '../components/ui';
+import type { Column } from '../components/ui';
 import {
-  DownloadOutlined, ReloadOutlined, SearchOutlined,
-  FieldTimeOutlined, UserOutlined, ThunderboltOutlined,
-} from '@ant-design/icons';
-import dayjs from 'dayjs';
+  Download, RefreshCw, Search,
+  Clock, User, Zap,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { auditApi, authDownload } from '../api/client';
 import type { AuditEntry, AuditStats } from '../types';
-
-const { RangePicker } = DatePicker;
-const { Text } = Typography;
 
 const ACTION_COLORS: Record<string, string> = {
   'quality': 'blue',
@@ -38,6 +34,7 @@ function statusColor(status: number): string {
 
 export default function AuditPage() {
   const { t } = useTranslation();
+  const toast = useToast();
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [stats, setStats] = useState<AuditStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,9 +43,8 @@ export default function AuditPage() {
   const [pageSize, setPageSize] = useState(50);
 
   // Filters
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
-    dayjs(), dayjs(),
-  ]);
+  const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [userFilter, setUserFilter] = useState<string>('');
   const [actionFilter, setActionFilter] = useState<string>('');
 
@@ -56,8 +52,8 @@ export default function AuditPage() {
     setLoading(true);
     try {
       const params: Record<string, any> = {
-        date_from: dateRange[0].format('YYYY-MM-DD'),
-        date_to: dateRange[1].format('YYYY-MM-DD'),
+        date_from: dateFrom,
+        date_to: dateTo,
         page: p,
         page_size: pageSize,
       };
@@ -68,49 +64,49 @@ export default function AuditPage() {
       setEntries(resp.data.entries);
       setTotal(resp.data.total);
     } catch {
-      message.error(t('audit.load_error', 'Failed to load audit logs'));
+      toast.error(t('audit.load_error', 'Failed to load audit logs'));
     } finally {
       setLoading(false);
     }
-  }, [dateRange, userFilter, actionFilter, page, pageSize, t]);
+  }, [dateFrom, dateTo, userFilter, actionFilter, page, pageSize, t, toast]);
 
   const fetchStats = useCallback(async () => {
     try {
       const resp = await auditApi.stats({
-        date_from: dateRange[0].format('YYYY-MM-DD'),
-        date_to: dateRange[1].format('YYYY-MM-DD'),
+        date_from: dateFrom,
+        date_to: dateTo,
       });
       setStats(resp.data);
     } catch {
       // stats are optional
     }
-  }, [dateRange]);
+  }, [dateFrom, dateTo]);
 
   useEffect(() => {
     fetchLogs(page);
     fetchStats();
-  }, [dateRange, userFilter, actionFilter, page, pageSize]);
+  }, [dateFrom, dateTo, userFilter, actionFilter, page, pageSize]);
 
   const handleExport = () => {
     const params: Record<string, string> = {
-      date_from: dateRange[0].format('YYYY-MM-DD'),
-      date_to: dateRange[1].format('YYYY-MM-DD'),
+      date_from: dateFrom,
+      date_to: dateTo,
     };
     if (userFilter) params.user = userFilter;
     if (actionFilter) params.action = actionFilter;
     authDownload(auditApi.exportUrl(params), 'audit_logs.csv');
   };
 
-  const columns = [
+  const columns: Column<AuditEntry>[] = [
     {
       title: t('audit.time', 'Time'),
       dataIndex: 'ts',
       key: 'ts',
       width: 170,
       render: (ts: string) => (
-        <Text style={{ fontSize: 12, fontFamily: 'monospace' }}>
-          {ts ? new Date(ts).toLocaleString() : '—'}
-        </Text>
+        <span className="text-xs font-mono text-text-muted">
+          {ts ? new Date(ts).toLocaleString() : '\u2014'}
+        </span>
       ),
     },
     {
@@ -118,14 +114,19 @@ export default function AuditPage() {
       dataIndex: 'user',
       key: 'user',
       width: 120,
-      render: (u: string) => <Tag icon={<UserOutlined />}>{u}</Tag>,
+      render: (u: string) => (
+        <Tag>
+          <User className="h-3 w-3" />
+          {u}
+        </Tag>
+      ),
     },
     {
       title: t('audit.action', 'Action'),
       dataIndex: 'action',
       key: 'action',
       width: 180,
-      render: (a: string) => <Tag color={actionColor(a)}>{a}</Tag>,
+      render: (a: string) => <Tag color={actionColor(a) as any}>{a}</Tag>,
     },
     {
       title: t('audit.method', 'Method'),
@@ -139,28 +140,28 @@ export default function AuditPage() {
       dataIndex: 'path',
       key: 'path',
       ellipsis: true,
-      render: (p: string) => <Text style={{ fontSize: 12, fontFamily: 'monospace' }}>{p}</Text>,
+      render: (p: string) => <span className="text-xs font-mono text-text-muted">{p}</span>,
     },
     {
       title: t('audit.status', 'Status'),
       dataIndex: 'status',
       key: 'status',
       width: 70,
-      render: (s: number) => <Tag color={statusColor(s)}>{s}</Tag>,
+      render: (s: number) => <Tag color={statusColor(s) as any}>{s}</Tag>,
     },
     {
       title: t('audit.duration', 'Duration'),
       dataIndex: 'duration_ms',
       key: 'duration_ms',
       width: 90,
-      render: (ms: number) => <Text type="secondary" style={{ fontSize: 12 }}>{ms}ms</Text>,
+      render: (ms: number) => <span className="text-xs text-text-dim">{ms}ms</span>,
     },
     {
       title: 'IP',
       dataIndex: 'ip',
       key: 'ip',
       width: 120,
-      render: (ip: string) => <Text type="secondary" style={{ fontSize: 11 }}>{ip}</Text>,
+      render: (ip: string) => <span className="text-[11px] text-text-dim">{ip}</span>,
     },
   ];
 
@@ -168,66 +169,60 @@ export default function AuditPage() {
     <div>
       {/* Stats row */}
       {stats && (
-        <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={8}>
-            <Card size="small">
-              <Statistic
-                title={t('audit.total_events', 'Total Events')}
-                value={stats.total_events}
-                prefix={<ThunderboltOutlined />}
-              />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small">
-              <Statistic
-                title={t('audit.active_users', 'Active Users')}
-                value={stats.by_user.length}
-                prefix={<UserOutlined />}
-              />
-            </Card>
-          </Col>
-          <Col span={8}>
-            <Card size="small">
-              <Statistic
-                title={t('audit.action_types', 'Action Types')}
-                value={stats.by_action.length}
-                prefix={<FieldTimeOutlined />}
-              />
-            </Card>
-          </Col>
-        </Row>
+        <div className="grid grid-cols-3 gap-4 mb-4">
+          <Card size="small">
+            <Statistic
+              title={t('audit.total_events', 'Total Events')}
+              value={stats.total_events}
+              prefix={<Zap className="h-5 w-5" />}
+            />
+          </Card>
+          <Card size="small">
+            <Statistic
+              title={t('audit.active_users', 'Active Users')}
+              value={stats.by_user.length}
+              prefix={<User className="h-5 w-5" />}
+            />
+          </Card>
+          <Card size="small">
+            <Statistic
+              title={t('audit.action_types', 'Action Types')}
+              value={stats.by_action.length}
+              prefix={<Clock className="h-5 w-5" />}
+            />
+          </Card>
+        </div>
       )}
 
       {/* Filters */}
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <RangePicker
-            value={dateRange}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setDateRange([dates[0], dates[1]]);
-                setPage(1);
-              }
-            }}
-            size="small"
+      <Card size="small" className="mb-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+            className="bg-deep-base border border-glass-border rounded-[10px] px-3 py-1.5 text-sm text-text-bright outline-none focus:border-emerald-accent/40 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.1)] transition-all duration-200"
+          />
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+            className="bg-deep-base border border-glass-border rounded-[10px] px-3 py-1.5 text-sm text-text-bright outline-none focus:border-emerald-accent/40 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.1)] transition-all duration-200"
           />
           <Input
             placeholder={t('audit.filter_user', 'Filter by user')}
-            prefix={<UserOutlined />}
+            prefix={<User className="h-3.5 w-3.5" />}
             value={userFilter}
             onChange={e => { setUserFilter(e.target.value); setPage(1); }}
-            allowClear
-            size="small"
-            style={{ width: 160 }}
+            className="!w-40"
           />
           <Select
             placeholder={t('audit.filter_action', 'Filter by action')}
-            value={actionFilter || undefined}
+            value={actionFilter || null}
             onChange={v => { setActionFilter(v || ''); setPage(1); }}
             allowClear
             size="small"
-            style={{ width: 180 }}
+            className="w-44"
             options={[
               { value: 'quality', label: 'Quality' },
               { value: 'cohort', label: 'Cohort' },
@@ -237,13 +232,13 @@ export default function AuditPage() {
               { value: 'ohdsi', label: 'OHDSI' },
             ]}
           />
-          <Button icon={<ReloadOutlined />} size="small" onClick={() => fetchLogs(page)}>
+          <Button icon={<RefreshCw className="h-3.5 w-3.5" />} size="small" onClick={() => fetchLogs(page)}>
             {t('audit.refresh', 'Refresh')}
           </Button>
-          <Button icon={<DownloadOutlined />} size="small" onClick={handleExport}>
+          <Button icon={<Download className="h-3.5 w-3.5" />} size="small" onClick={handleExport}>
             CSV
           </Button>
-        </Space>
+        </div>
       </Card>
 
       {/* Table */}
@@ -251,20 +246,21 @@ export default function AuditPage() {
         <Table
           dataSource={entries}
           columns={columns}
-          rowKey={(_, idx) => String(idx)}
+          rowKey={(_: any, idx?: number) => String(idx)}
           loading={loading}
           size="small"
           pagination={{
             current: page,
             pageSize,
             total,
-            showSizeChanger: true,
-            pageSizeOptions: ['25', '50', '100'],
-            onChange: (p, ps) => { setPage(p); setPageSize(ps); },
-            showTotal: (total) => `${total} ${t('audit.entries', 'entries')}`,
-            size: 'small',
+            onChange: (p) => { setPage(p); },
           }}
           scroll={{ x: true }}
+          emptyText={
+            <span className="text-sm text-text-dim">
+              {total === 0 ? t('audit.no_entries', 'No audit entries found') : ''}
+            </span>
+          }
         />
       </Card>
     </div>

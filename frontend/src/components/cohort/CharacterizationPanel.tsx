@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  Card, Button, Spin, Typography, Table, Tag, Space, Statistic,
-  Row, Col, Progress, Collapse, Descriptions, Alert, Empty, Tooltip,
-  Switch, message,
-} from 'antd';
+  Card, Button, Alert, Empty, Tooltip, Switch, Statistic, Progress,
+  Collapse, Table, Tag, Spinner, useToast,
+} from '../../components/ui';
+import type { Column } from '../../components/ui';
 import {
-  TableOutlined, TeamOutlined, MedicineBoxOutlined, ExperimentOutlined,
-  HeartOutlined, EyeOutlined, ScheduleOutlined, DownloadOutlined,
-  CheckCircleOutlined, StopOutlined,
-} from '@ant-design/icons';
+  BarChart3, Users, Download, Check, X, Activity, Eye, Calendar, Hash,
+} from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell,
@@ -16,8 +14,6 @@ import {
 import { useTranslation } from 'react-i18next';
 import { cohortApi } from '../../api/client';
 import type { CohortCriteria, CharacterizationResult } from '../../types';
-
-const { Text, Title } = Typography;
 
 const DOMAIN_COLORS: Record<string, string> = {
   Condition: '#f5222d',
@@ -29,13 +25,14 @@ const DOMAIN_COLORS: Record<string, string> = {
   Visit: '#eb2f96',
 };
 
-const DOMAIN_ICONS: Record<string, React.ReactNode> = {
-  Condition: <HeartOutlined />,
-  Drug: <MedicineBoxOutlined />,
-  Procedure: <ScheduleOutlined />,
-  Measurement: <ExperimentOutlined />,
-  Observation: <EyeOutlined />,
-  Device: <MedicineBoxOutlined />,
+const DOMAIN_TAG_COLORS: Record<string, 'red' | 'blue' | 'green' | 'orange' | 'purple' | 'cyan' | 'magenta' | 'default'> = {
+  Condition: 'red',
+  Drug: 'blue',
+  Procedure: 'green',
+  Measurement: 'orange',
+  Observation: 'purple',
+  Device: 'cyan',
+  Visit: 'magenta',
 };
 
 const PIE_COLORS = ['#1890ff', '#f5222d', '#52c41a', '#fa8c16', '#722ed1', '#13c2c2', '#eb2f96', '#aaa'];
@@ -48,6 +45,7 @@ interface Props {
 
 export default function CharacterizationPanel({ cdmName, criteria, cohortId }: Props) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [result, setResult] = useState<CharacterizationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingSaved, setLoadingSaved] = useState(false);
@@ -116,7 +114,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
       if (cohortId) {
         try {
           await cohortApi.saveCharacterization(cohortId, resp.data);
-          message.success(t('cohort.characterization_saved', 'Characterization saved'));
+          toast.success(t('cohort.characterization_saved', 'Characterization saved'));
         } catch {
           // non-blocking — results are still displayed
         }
@@ -179,7 +177,6 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
     return (
       <Card size="small">
         <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={t('cohort.define_criteria_first', 'Define cohort criteria to run characterization')}
         />
       </Card>
@@ -187,45 +184,45 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="flex flex-col gap-3">
       {/* Header */}
       <Card size="small">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Space>
-            <TableOutlined style={{ fontSize: 18 }} />
-            <Title level={5} style={{ margin: 0 }}>Table 1 — Cohort Characterization</Title>
-          </Space>
-          <Space>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-[18px] w-[18px] text-text-muted" />
+            <h5 className="text-sm font-semibold text-text-bright m-0">Table 1 — Cohort Characterization</h5>
+          </div>
+          <div className="flex items-center gap-2">
             {hasSameVisit && (
               <Tooltip title={
                 visitLevel
                   ? t('cohort.visit_level_on', 'Clinical data restricted to the qualifying visit only')
                   : t('cohort.visit_level_off', 'All patient data across all visits (standard)')
               }>
-                <Space size={4}>
+                <div className="flex items-center gap-1">
                   <Switch
                     size="small"
                     checked={visitLevel}
                     onChange={setVisitLevel}
                   />
-                  <Text type="secondary" style={{ fontSize: 11 }}>
+                  <span className="text-text-muted text-[11px]">
                     {t('cohort.visit_level', 'Visit-level')}
-                  </Text>
-                </Space>
+                  </span>
+                </div>
               </Tooltip>
             )}
             {characterizedAt && (
               <Tooltip title={`Last run: ${new Date(characterizedAt).toLocaleString()}`}>
-                <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 14 }} />
+                <span><Check className="h-3.5 w-3.5 text-emerald-400" /></span>
               </Tooltip>
             )}
             {result && (
-              <Button size="small" icon={<DownloadOutlined />} onClick={exportCsv}>
+              <Button size="small" icon={<Download className="h-3.5 w-3.5" />} onClick={exportCsv}>
                 CSV
               </Button>
             )}
             <Button
-              type="primary"
+              variant="primary"
               size="small"
               onClick={runCharacterization}
               loading={loading}
@@ -233,7 +230,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
             >
               {result ? t('cohort.refresh', 'Refresh') : t('cohort.run_characterization', 'Run Characterization')}
             </Button>
-          </Space>
+          </div>
         </div>
       </Card>
 
@@ -241,20 +238,20 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
 
       {(loading || loadingSaved) && (
         <Card size="small">
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin size="large" />
-            <div style={{ marginTop: 16 }}>
-              <Text type="secondary">
+          <div className="text-center py-10">
+            <Spinner size="large" />
+            <div className="mt-4">
+              <span className="text-text-muted text-sm">
                 {loadingSaved ? t('cohort.loading_saved', 'Loading saved results...') : 'Running characterization queries...'}
-              </Text>
+              </span>
             </div>
             {loading && (
               <Button
-                danger
+                variant="danger"
                 size="small"
-                icon={<StopOutlined />}
+                icon={<X className="h-3.5 w-3.5" />}
                 onClick={stopCharacterization}
-                style={{ marginTop: 12 }}
+                className="mt-3"
               >
                 {t('common.stop', 'Stop')}
               </Button>
@@ -271,14 +268,14 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
               type="info"
               showIcon
               message={t('cohort.visit_level_active', 'Visit-level characterization — clinical data restricted to qualifying visits only. Demographics remain patient-level.')}
-              style={{ fontSize: 12 }}
+              className="text-xs"
             />
           )}
 
           {/* Cohort Size */}
           <Card size="small">
             <Statistic
-              title={<Space><TeamOutlined />{t('cohort.cohort_size', 'Cohort Size')}</Space>}
+              title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{t('cohort.cohort_size', 'Cohort Size')}</div>}
               value={result.cohort_size}
               valueStyle={{ color: '#1890ff', fontSize: 28 }}
               suffix="patients"
@@ -287,170 +284,183 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
 
           {/* Demographics */}
           <Card size="small" title={t('cohort.demographics', 'Demographics')}>
-            <Row gutter={[16, 16]}>
+            <div className="grid grid-cols-1 gap-4">
               {/* Age Stats */}
-              <Col span={24}>
-                <Descriptions size="small" bordered column={{ xs: 2, sm: 3, md: 4 }}>
-                  <Descriptions.Item label="Mean Age">
-                    {result.demographics.age.mean_age ?? '—'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="SD">
-                    {result.demographics.age.std_age ?? '—'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Median">
-                    {result.demographics.age.median_age ?? '—'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Range">
-                    {result.demographics.age.min_age ?? '?'}–{result.demographics.age.max_age ?? '?'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="IQR">
-                    {result.demographics.age.q1_age ?? '?'}–{result.demographics.age.q3_age ?? '?'}
-                  </Descriptions.Item>
-                </Descriptions>
-              </Col>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 bg-surface-dark rounded-xl p-3">
+                <div>
+                  <span className="text-xs text-text-dim">Mean Age</span>
+                  <p className="text-sm font-semibold text-text-bright">{result.demographics.age.mean_age ?? '—'}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">SD</span>
+                  <p className="text-sm font-semibold text-text-bright">{result.demographics.age.std_age ?? '—'}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">Median</span>
+                  <p className="text-sm font-semibold text-text-bright">{result.demographics.age.median_age ?? '—'}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">Range</span>
+                  <p className="text-sm font-semibold text-text-bright">{result.demographics.age.min_age ?? '?'}–{result.demographics.age.max_age ?? '?'}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">IQR</span>
+                  <p className="text-sm font-semibold text-text-bright">{result.demographics.age.q1_age ?? '?'}–{result.demographics.age.q3_age ?? '?'}</p>
+                </div>
+              </div>
 
-              {/* Age Distribution Bar Chart */}
-              {result.demographics.age_groups.length > 0 && (
-                <Col xs={24} md={12}>
-                  <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                    Age Distribution
-                  </Text>
-                  <ResponsiveContainer width="100%" height={180}>
-                    <BarChart data={result.demographics.age_groups} margin={{ left: -10 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="age_group" tick={{ fontSize: 10 }} />
-                      <YAxis tick={{ fontSize: 10 }} />
-                      <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
-                      <Bar dataKey="count" fill="#1890ff" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </Col>
-              )}
-
-              {/* Gender Pie */}
-              {result.demographics.gender.length > 0 && (
-                <Col xs={24} md={12}>
-                  <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                    Gender
-                  </Text>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <ResponsiveContainer width="50%" height={150}>
-                      <PieChart>
-                        <Pie
-                          data={result.demographics.gender}
-                          dataKey="count"
-                          nameKey="label"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={55}
-                          innerRadius={25}
-                        >
-                          {result.demographics.gender.map((_, idx) => (
-                            <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                          ))}
-                        </Pie>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Age Distribution Bar Chart */}
+                {result.demographics.age_groups.length > 0 && (
+                  <div>
+                    <span className="text-xs font-semibold text-text-bright block mb-1">
+                      Age Distribution
+                    </span>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <BarChart data={result.demographics.age_groups} margin={{ left: -10 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="age_group" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} />
                         <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
-                      </PieChart>
+                        <Bar dataKey="count" fill="#1890ff" />
+                      </BarChart>
                     </ResponsiveContainer>
-                    <div style={{ flex: 1 }}>
-                      {result.demographics.gender.map((g, i) => (
-                        <div key={i} style={{ fontSize: 11, marginBottom: 2 }}>
-                          <span style={{
-                            display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                            backgroundColor: PIE_COLORS[i % PIE_COLORS.length], marginRight: 4,
-                          }} />
-                          {g.label}: <strong>{g.count.toLocaleString()}</strong>
-                          {' '}({result.cohort_size > 0 ? ((g.count / result.cohort_size) * 100).toFixed(1) : 0}%)
-                        </div>
-                      ))}
+                  </div>
+                )}
+
+                {/* Gender Pie */}
+                {result.demographics.gender.length > 0 && (
+                  <div>
+                    <span className="text-xs font-semibold text-text-bright block mb-1">
+                      Gender
+                    </span>
+                    <div className="flex items-center">
+                      <ResponsiveContainer width="50%" height={150}>
+                        <PieChart>
+                          <Pie
+                            data={result.demographics.gender}
+                            dataKey="count"
+                            nameKey="label"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={55}
+                            innerRadius={25}
+                          >
+                            {result.demographics.gender.map((_, idx) => (
+                              <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="flex-1">
+                        {result.demographics.gender.map((g, i) => (
+                          <div key={i} className="text-[11px] mb-0.5 text-text-muted">
+                            <span
+                              className="inline-block w-2 h-2 rounded-full mr-1"
+                              style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                            />
+                            {g.label}: <strong className="text-text-bright">{g.count.toLocaleString()}</strong>
+                            {' '}({result.cohort_size > 0 ? ((g.count / result.cohort_size) * 100).toFixed(1) : 0}%)
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </Col>
-              )}
+                )}
 
-              {/* Race */}
-              {result.demographics.race.length > 1 && (
-                <Col xs={24} md={12}>
-                  <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                    Race
-                  </Text>
-                  <Table
-                    size="small"
-                    dataSource={result.demographics.race}
-                    rowKey={(_, i) => String(i)}
-                    pagination={false}
-                    showHeader={false}
-                    columns={[
-                      { dataIndex: 'label', key: 'label', ellipsis: true },
-                      {
-                        dataIndex: 'count', key: 'count', width: 80, align: 'right' as const,
-                        render: (v: number) => v?.toLocaleString(),
-                      },
-                      {
-                        key: 'pct', width: 60, align: 'right' as const,
-                        render: (_, r: any) =>
-                          result.cohort_size > 0
-                            ? `${((r.count / result.cohort_size) * 100).toFixed(1)}%`
-                            : '—',
-                      },
-                    ]}
-                  />
-                </Col>
-              )}
+                {/* Race */}
+                {result.demographics.race.length > 1 && (
+                  <div>
+                    <span className="text-xs font-semibold text-text-bright block mb-1">
+                      Race
+                    </span>
+                    <Table
+                      size="small"
+                      dataSource={result.demographics.race}
+                      rowKey={(r: any) => String(r.label)}
+                      pagination={false}
+                      columns={[
+                        { key: 'label', title: '', dataIndex: 'label', ellipsis: true },
+                        {
+                          key: 'count', title: '', dataIndex: 'count', width: 80, align: 'right' as const,
+                          render: (v: number) => v?.toLocaleString(),
+                        },
+                        {
+                          key: 'pct', title: '', width: 60, align: 'right' as const,
+                          render: (_: any, r: any) =>
+                            result.cohort_size > 0
+                              ? `${((r.count / result.cohort_size) * 100).toFixed(1)}%`
+                              : '—',
+                        },
+                      ]}
+                    />
+                  </div>
+                )}
 
-              {/* Ethnicity */}
-              {result.demographics.ethnicity.length > 1 && (
-                <Col xs={24} md={12}>
-                  <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                    Ethnicity
-                  </Text>
-                  <Table
-                    size="small"
-                    dataSource={result.demographics.ethnicity}
-                    rowKey={(_, i) => String(i)}
-                    pagination={false}
-                    showHeader={false}
-                    columns={[
-                      { dataIndex: 'label', key: 'label', ellipsis: true },
-                      {
-                        dataIndex: 'count', key: 'count', width: 80, align: 'right' as const,
-                        render: (v: number) => v?.toLocaleString(),
-                      },
-                      {
-                        key: 'pct', width: 60, align: 'right' as const,
-                        render: (_, r: any) =>
-                          result.cohort_size > 0
-                            ? `${((r.count / result.cohort_size) * 100).toFixed(1)}%`
-                            : '—',
-                      },
-                    ]}
-                  />
-                </Col>
-              )}
-            </Row>
+                {/* Ethnicity */}
+                {result.demographics.ethnicity.length > 1 && (
+                  <div>
+                    <span className="text-xs font-semibold text-text-bright block mb-1">
+                      Ethnicity
+                    </span>
+                    <Table
+                      size="small"
+                      dataSource={result.demographics.ethnicity}
+                      rowKey={(r: any) => String(r.label)}
+                      pagination={false}
+                      columns={[
+                        { key: 'label', title: '', dataIndex: 'label', ellipsis: true },
+                        {
+                          key: 'count', title: '', dataIndex: 'count', width: 80, align: 'right' as const,
+                          render: (v: number) => v?.toLocaleString(),
+                        },
+                        {
+                          key: 'pct', title: '', width: 60, align: 'right' as const,
+                          render: (_: any, r: any) =>
+                            result.cohort_size > 0
+                              ? `${((r.count / result.cohort_size) * 100).toFixed(1)}%`
+                              : '—',
+                        },
+                      ]}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           </Card>
 
           {/* Observation Period */}
           {result.observation_period && result.observation_period.n_persons > 0 && (
             <Card size="small" title={t('cohort.observation_period', 'Observation Period')}>
-              <Descriptions size="small" bordered column={{ xs: 2, sm: 3, md: 4 }}>
-                <Descriptions.Item label="Persons">
-                  {result.observation_period.n_persons?.toLocaleString()}
-                </Descriptions.Item>
-                <Descriptions.Item label="Mean Duration">
-                  {result.observation_period.mean_days != null
-                    ? `${Math.round(result.observation_period.mean_days / 365.25 * 10) / 10} yrs`
-                    : '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Median Duration">
-                  {result.observation_period.median_days != null
-                    ? `${Math.round(result.observation_period.median_days / 365.25 * 10) / 10} yrs`
-                    : '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Range">
-                  {result.observation_period.earliest_start?.substring(0, 10) ?? '?'} — {result.observation_period.latest_end?.substring(0, 10) ?? '?'}
-                </Descriptions.Item>
-              </Descriptions>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-surface-dark rounded-xl p-3">
+                <div>
+                  <span className="text-xs text-text-dim">Persons</span>
+                  <p className="text-sm font-semibold text-text-bright">{result.observation_period.n_persons?.toLocaleString()}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">Mean Duration</span>
+                  <p className="text-sm font-semibold text-text-bright">
+                    {result.observation_period.mean_days != null
+                      ? `${Math.round(result.observation_period.mean_days / 365.25 * 10) / 10} yrs`
+                      : '—'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">Median Duration</span>
+                  <p className="text-sm font-semibold text-text-bright">
+                    {result.observation_period.median_days != null
+                      ? `${Math.round(result.observation_period.median_days / 365.25 * 10) / 10} yrs`
+                      : '—'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-xs text-text-dim">Range</span>
+                  <p className="text-sm font-semibold text-text-bright">
+                    {result.observation_period.earliest_start?.substring(0, 10) ?? '?'} — {result.observation_period.latest_end?.substring(0, 10) ?? '?'}
+                  </p>
+                </div>
+              </div>
             </Card>
           )}
 
@@ -484,37 +494,40 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
           {/* Domain Prevalence */}
           <Card size="small" title={t('cohort.domain_prevalence', 'Clinical Domain Prevalence')}>
             {/* Domain summary bar */}
-            <div style={{ marginBottom: 12 }}>
+            <div className="mb-3">
               {result.domain_prevalence.map(dp => (
-                <div key={dp.domain} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <Tag color={DOMAIN_COLORS[dp.domain] || '#64748B'} style={{ width: 100, textAlign: 'center' }}>
-                    {DOMAIN_ICONS[dp.domain]} {dp.domain}
+                <div key={dp.domain} className="flex items-center gap-2 mb-1">
+                  <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'} className="w-[100px] text-center justify-center">
+                    {dp.domain}
                   </Tag>
-                  <Progress
-                    percent={dp.pct_with_data}
-                    size="small"
-                    style={{ flex: 1, margin: 0 }}
-                    strokeColor={DOMAIN_COLORS[dp.domain] || '#64748B'}
-                    format={pct => `${dp.patients_with_data.toLocaleString()} (${pct}%)`}
-                  />
+                  <div className="flex-1 flex items-center gap-2">
+                    <Progress
+                      percent={dp.pct_with_data}
+                      size="small"
+                      showLabel={false}
+                      strokeColor={DOMAIN_COLORS[dp.domain] || '#64748B'}
+                    />
+                    <span className="text-xs text-text-muted whitespace-nowrap">
+                      {dp.patients_with_data.toLocaleString()} ({dp.pct_with_data}%)
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
 
             {/* Top concepts per domain */}
             <Collapse
-              size="small"
               items={result.domain_prevalence
                 .filter(dp => dp.top_concepts.length > 0)
                 .map(dp => ({
                   key: dp.domain,
                   label: (
-                    <Space>
-                      <Tag color={DOMAIN_COLORS[dp.domain] || '#64748B'}>{dp.domain}</Tag>
-                      <Text type="secondary" style={{ fontSize: 11 }}>
+                    <div className="flex items-center gap-2">
+                      <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'}>{dp.domain}</Tag>
+                      <span className="text-text-muted text-[11px]">
                         Top {dp.top_concepts.length} concepts
-                      </Text>
-                    </Space>
+                      </span>
+                    </div>
                   ),
                   children: (
                     <Table
@@ -522,13 +535,12 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                       dataSource={dp.top_concepts}
                       rowKey="concept_id"
                       pagination={false}
-                      scroll={{ x: true }}
                       columns={[
                         {
                           title: 'Concept', dataIndex: 'concept_name', key: 'name', ellipsis: true,
                           render: (name: string, rec: any) => (
                             <Tooltip title={`${rec.concept_code} · ${rec.vocabulary_id} · ID: ${rec.concept_id}`}>
-                              <span style={{ fontSize: 11 }}>{name}</span>
+                              <span className="text-[11px]">{name}</span>
                             </Tooltip>
                           ),
                         },
@@ -540,7 +552,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                         {
                           title: '%', dataIndex: 'pct_persons', key: 'pct', width: 55, align: 'right' as const,
                           render: (v: number) => (
-                            <Text style={{ fontSize: 11 }}>{v}%</Text>
+                            <span className="text-[11px]">{v}%</span>
                           ),
                         },
                         {
@@ -557,24 +569,23 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
           {/* Measurement Stats */}
           {result.measurement_stats.length > 0 && (
             <Card size="small" title={
-              <Space>
-                <ExperimentOutlined />
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4" />
                 {t('cohort.measurement_stats', 'Measurement Value Statistics')}
-              </Space>
+              </div>
             }>
               <Table
                 size="small"
                 dataSource={result.measurement_stats}
                 rowKey="concept_id"
                 pagination={false}
-                scroll={{ x: true }}
                 columns={[
                   {
                     title: 'Measurement', dataIndex: 'concept_name', key: 'name',
                     ellipsis: true, width: 180,
                     render: (name: string, rec: any) => (
                       <Tooltip title={`${rec.concept_code} · ID: ${rec.concept_id}`}>
-                        <span style={{ fontSize: 11 }}>{name}</span>
+                        <span className="text-[11px]">{name}</span>
                       </Tooltip>
                     ),
                   },
@@ -608,7 +619,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                   },
                   {
                     title: 'Unit', dataIndex: 'unit', key: 'unit', width: 60,
-                    render: (v: string) => <Text type="secondary" style={{ fontSize: 10 }}>{v || '—'}</Text>,
+                    render: (v: string) => <span className="text-text-muted text-[10px]">{v || '—'}</span>,
                   },
                 ]}
               />

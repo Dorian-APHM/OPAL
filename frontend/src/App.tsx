@@ -1,9 +1,9 @@
 import { useState, lazy, Suspense, Component, useEffect, useRef, type ReactNode, type ErrorInfo } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { Layout, ConfigProvider, theme as antTheme, Result, Spin, Button, Skeleton } from 'antd';
-import Sidebar from './components/layout/Sidebar';
+import TopNav from './components/layout/TopNav';
 import { useAuth } from './auth/KeycloakContext';
-import { colors, typography, radii } from './theme/tokens';
+import { Button } from './components/ui/Button';
+import { Spinner, Skeleton } from './components/ui/Spinner';
 
 // Lazy-loaded pages for code splitting
 const LandingPage = lazy(() => import('./pages/LandingPage'));
@@ -18,13 +18,8 @@ const AuditPage = lazy(() => import('./pages/AuditPage'));
 const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 
-const { Content } = Layout;
-
-// Error Boundary for catching render errors
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error?: Error;
-}
+// Error Boundary
+interface ErrorBoundaryState { hasError: boolean; error?: Error; }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
   state: ErrorBoundaryState = { hasError: false };
@@ -40,16 +35,14 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   render() {
     if (this.state.hasError) {
       return (
-        <Result
-          status="error"
-          title="Something went wrong"
-          subTitle={this.state.error?.message || 'An unexpected error occurred.'}
-          extra={
-            <Button type="primary" onClick={() => this.setState({ hasError: false })}>
-              Try Again
-            </Button>
-          }
-        />
+        <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+          <div className="text-6xl text-red-400/30">!</div>
+          <h2 className="text-xl font-semibold text-text-bright">Something went wrong</h2>
+          <p className="text-sm text-text-muted">{this.state.error?.message || 'An unexpected error occurred.'}</p>
+          <Button variant="primary" onClick={() => this.setState({ hasError: false })}>
+            Try Again
+          </Button>
+        </div>
       );
     }
     return this.props.children;
@@ -58,15 +51,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 
 function PageSkeleton() {
   return (
-    <div style={{ padding: 24 }}>
-      <Skeleton active title={{ width: '30%' }} paragraph={{ rows: 0 }} style={{ marginBottom: 24 }} />
-      <div style={{ display: 'flex', gap: 16 }}>
-        <div style={{ flex: 1 }}>
-          <Skeleton active paragraph={{ rows: 4 }} />
-        </div>
-        <div style={{ flex: 2 }}>
-          <Skeleton active paragraph={{ rows: 6 }} />
-        </div>
+    <div className="p-6">
+      <Skeleton lines={1} className="mb-6" />
+      <div className="flex gap-4">
+        <div className="flex-1"><Skeleton lines={4} /></div>
+        <div className="flex-[2]"><Skeleton lines={6} /></div>
       </div>
     </div>
   );
@@ -100,11 +89,11 @@ function PageSuspense({ children }: { children: ReactNode }) {
 
 function ForbiddenPage() {
   return (
-    <Result
-      status="403"
-      title="403"
-      subTitle="You do not have permission to access this page."
-    />
+    <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+      <div className="text-7xl font-bold text-text-dim/20">403</div>
+      <h2 className="text-xl font-semibold text-text-bright">Forbidden</h2>
+      <p className="text-sm text-text-muted">You do not have permission to access this page.</p>
+    </div>
   );
 }
 
@@ -126,7 +115,6 @@ export default function App() {
   const [selectedCdm, setSelectedCdm] = useState<string | null>(
     localStorage.getItem('opal-selected-cdm')
   );
-  const [collapsed, setCollapsed] = useState(false);
 
   const handleCdmChange = (cdm: string) => {
     setSelectedCdm(cdm);
@@ -135,150 +123,43 @@ export default function App() {
 
   if (!initialized) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: colors.deepBase }}>
-        <Spin size="large" tip="Connecting to authentication server..." />
+      <div className="flex items-center justify-center h-screen bg-deep-base">
+        <Spinner size="large" tip="Connecting to authentication server..." />
       </div>
     );
   }
 
   if (!authenticated) {
     return (
-      <ConfigProvider
-        theme={{
-          algorithm: antTheme.darkAlgorithm,
-          token: {
-            colorPrimary: colors.primary,
-            colorBgContainer: colors.surface,
-            colorBgLayout: colors.deepBase,
-            colorText: colors.textPrimary,
-            colorTextSecondary: colors.textSecondary,
-            borderRadius: radii.md,
-            fontFamily: typography.fontFamily,
-            fontFamilyCode: typography.fontFamilyMono,
-          },
-        }}
-      >
-        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: colors.deepBase }}><Spin size="large" /></div>}>
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/landing" element={<LandingPage />} />
-            <Route path="*" element={<LoginPage onSignIn={login} />} />
-          </Routes>
-        </Suspense>
-      </ConfigProvider>
+      <Suspense fallback={<div className="flex items-center justify-center h-screen bg-deep-base"><Spinner size="large" /></div>}>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/landing" element={<LandingPage />} />
+          <Route path="*" element={<LoginPage onSignIn={login} />} />
+        </Routes>
+      </Suspense>
     );
   }
 
   return (
-    <ConfigProvider
-      theme={{
-        algorithm: antTheme.darkAlgorithm,
-        token: {
-          colorPrimary: colors.primary,
-          colorSuccess: colors.success,
-          colorWarning: colors.warning,
-          colorError: colors.error,
-          colorInfo: colors.info,
-          colorLink: colors.primary,
-          colorBgContainer: colors.surface,
-          colorBgElevated: colors.surface,
-          colorBgLayout: colors.deepBase,
-          colorBgSpotlight: colors.surfaceLight,
-          colorText: colors.textPrimary,
-          colorTextSecondary: colors.textSecondary,
-          colorTextTertiary: colors.textDim,
-          colorTextQuaternary: colors.textDisabled,
-          colorBorder: 'rgba(255, 255, 255, 0.06)',
-          colorBorderSecondary: 'rgba(255, 255, 255, 0.03)',
-          borderRadius: radii.md,
-          fontFamily: typography.fontFamily,
-          fontFamilyCode: typography.fontFamilyMono,
-        },
-        components: {
-          Switch: {
-            colorPrimary: colors.accent,
-            colorPrimaryHover: colors.accentHover,
-          },
-          Tabs: {
-            inkBarColor: colors.accent,
-            itemActiveColor: colors.accent,
-            itemHoverColor: colors.accentHover,
-            itemSelectedColor: colors.accent,
-          },
-          Progress: {
-            defaultColor: colors.accent,
-          },
-          Checkbox: {
-            colorPrimary: colors.accent,
-            colorPrimaryHover: colors.accentHover,
-          },
-          Tag: {
-            colorSuccess: colors.accent,
-            colorSuccessBg: colors.accentLight,
-            colorSuccessBorder: 'rgba(16, 185, 129, 0.3)',
-          },
-          Card: {
-            borderRadiusLG: radii.xl,
-          },
-        },
-      }}
-    >
-      <Layout style={{ minHeight: '100vh', background: colors.deepBase }}>
-        <Sidebar
-          selectedCdm={selectedCdm}
-          onCdmChange={handleCdmChange}
-          collapsed={collapsed}
-          onCollapse={setCollapsed}
-        />
-        <Layout style={{ background: colors.deepBase }}>
-          <Content
-            style={{
-              padding: 16,
-              margin: 0,
-              background: colors.deepBase,
-              overflow: 'auto',
-            }}
-          >
-            <Routes>
-              <Route path="/" element={<DefaultRedirect />} />
-              <Route
-                path="/quality"
-                element={<ProtectedRoute path="/quality"><PageSuspense><QualityPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
-              />
-              <Route path="/cdm" element={<ProtectedRoute path="/cdm"><PageSuspense><CdmManagementPage /></PageSuspense></ProtectedRoute>} />
-              <Route
-                path="/settings"
-                element={<ProtectedRoute path="/settings"><PageSuspense><SettingsPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
-              />
-              <Route
-                path="/cohorts"
-                element={<ProtectedRoute path="/cohorts"><PageSuspense><CohortPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
-              />
-              <Route
-                path="/mapping"
-                element={<ProtectedRoute path="/mapping"><PageSuspense><MappingPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
-              />
-              <Route
-                path="/concepts"
-                element={<ProtectedRoute path="/concepts"><PageSuspense><ConceptExplorerPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
-              />
-              <Route
-                path="/ohdsi"
-                element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>}
-              />
-              <Route
-                path="/audit"
-                element={<ProtectedRoute path="/audit"><PageSuspense><AuditPage /></PageSuspense></ProtectedRoute>}
-              />
-              <Route
-                path="/users"
-                element={<ProtectedRoute path="/users"><PageSuspense><UserManagementPage /></PageSuspense></ProtectedRoute>}
-              />
-              <Route path="*" element={<ForbiddenPage />} />
-            </Routes>
-          </Content>
-        </Layout>
-      </Layout>
-    </ConfigProvider>
+    <div className="min-h-screen bg-deep-base">
+      <TopNav selectedCdm={selectedCdm} onCdmChange={handleCdmChange} />
+      {/* Content with top padding for fixed nav */}
+      <main className="pt-[68px] px-4 lg:px-6 pb-8 max-w-[1600px] mx-auto">
+        <Routes>
+          <Route path="/" element={<DefaultRedirect />} />
+          <Route path="/quality" element={<ProtectedRoute path="/quality"><PageSuspense><QualityPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/cdm" element={<ProtectedRoute path="/cdm"><PageSuspense><CdmManagementPage /></PageSuspense></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute path="/settings"><PageSuspense><SettingsPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/cohorts" element={<ProtectedRoute path="/cohorts"><PageSuspense><CohortPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/mapping" element={<ProtectedRoute path="/mapping"><PageSuspense><MappingPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/concepts" element={<ProtectedRoute path="/concepts"><PageSuspense><ConceptExplorerPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/ohdsi" element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/audit" element={<ProtectedRoute path="/audit"><PageSuspense><AuditPage /></PageSuspense></ProtectedRoute>} />
+          <Route path="/users" element={<ProtectedRoute path="/users"><PageSuspense><UserManagementPage /></PageSuspense></ProtectedRoute>} />
+          <Route path="*" element={<ForbiddenPage />} />
+        </Routes>
+      </main>
+    </div>
   );
 }

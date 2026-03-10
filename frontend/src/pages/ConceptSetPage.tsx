@@ -1,23 +1,27 @@
 import { useState, useEffect } from 'react';
-import {
-  Card, Table, Button, Input, Modal, Form, Select, Tag, Space, Typography,
-  Empty, message, Popconfirm, Spin,
-} from 'antd';
-import { PlusOutlined, DeleteOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons';
+import { Search, Eye, Trash2, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { conceptSetApi, cohortApi } from '../api/client';
 import type { ConceptSetSummary, ConceptSetDetail, OmopConcept } from '../types';
-
-const { Text, Title } = Typography;
+import {
+  Card, Table, Button, Input, TextArea, Modal, Tag, Empty, Spinner,
+} from '../components/ui';
+import { useToast } from '../components/ui';
+import type { Column } from '../components/ui';
 
 export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [sets, setSets] = useState<ConceptSetSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<ConceptSetDetail | null>(null);
-  const [form] = Form.useForm();
+
+  // Form state (replacing antd Form)
+  const [formName, setFormName] = useState('');
+  const [formDomain, setFormDomain] = useState('');
+  const [formDescription, setFormDescription] = useState('');
 
   // Concept search state for creation modal
   const [searchQuery, setSearchQuery] = useState('');
@@ -25,12 +29,18 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
   const [searchLoading, setSearchLoading] = useState(false);
   const [selectedConcepts, setSelectedConcepts] = useState<OmopConcept[]>([]);
 
+  const resetForm = () => {
+    setFormName('');
+    setFormDomain('');
+    setFormDescription('');
+  };
+
   const load = () => {
     if (!selectedCdm) return;
     setLoading(true);
     conceptSetApi.list(selectedCdm)
       .then(r => setSets(r.data.concept_sets))
-      .catch(() => message.error('Failed to load concept sets'))
+      .catch(() => toast.error('Failed to load concept sets'))
       .finally(() => setLoading(false));
   };
 
@@ -62,32 +72,44 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
 
   const handleCreate = async () => {
     if (!selectedCdm) return;
-    const values = await form.validateFields();
-    await conceptSetApi.create({
-      name: values.name,
-      cdm_name: selectedCdm,
-      domain: values.domain || undefined,
-      description: values.description || '',
-      concepts: selectedConcepts.map(c => ({
-        concept_id: c.concept_id,
-        concept_name: c.concept_name,
-        concept_code: c.concept_code,
-        vocabulary_id: c.vocabulary_id,
-        include_descendants: true,
-      })),
-    });
-    message.success('Concept set created');
-    setCreateOpen(false);
-    setSelectedConcepts([]);
-    setSearchQuery('');
-    form.resetFields();
-    load();
+    if (!formName.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    try {
+      await conceptSetApi.create({
+        name: formName,
+        cdm_name: selectedCdm,
+        domain: formDomain || undefined,
+        description: formDescription || '',
+        concepts: selectedConcepts.map(c => ({
+          concept_id: c.concept_id,
+          concept_name: c.concept_name,
+          concept_code: c.concept_code,
+          vocabulary_id: c.vocabulary_id,
+          include_descendants: true,
+        })),
+      });
+      toast.success('Concept set created');
+      setCreateOpen(false);
+      setSelectedConcepts([]);
+      setSearchQuery('');
+      resetForm();
+      load();
+    } catch {
+      toast.error('Failed to create concept set');
+    }
   };
 
   const handleDelete = async (id: number) => {
-    await conceptSetApi.delete(id);
-    message.success('Deleted');
-    load();
+    if (!window.confirm('Delete this concept set?')) return;
+    try {
+      await conceptSetApi.delete(id);
+      toast.success('Deleted');
+      load();
+    } catch {
+      toast.error('Failed to delete');
+    }
   };
 
   const openDetail = async (id: number) => {
@@ -100,103 +122,120 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
     return <Card><Empty description="Select a CDM first" /></Card>;
   }
 
-  const columns = [
-    { title: t('concept_sets.name', 'Name'), dataIndex: 'name', key: 'name' },
-    { title: 'Domain', dataIndex: 'domain', key: 'domain', render: (v: string) => v || '—' },
-    { title: t('concept_sets.concepts', 'Concepts'), dataIndex: 'concept_count', key: 'count' },
-    { title: 'Created by', dataIndex: 'created_by', key: 'created_by' },
+  const columns: Column<ConceptSetSummary>[] = [
+    { key: 'name', title: t('concept_sets.name', 'Name'), dataIndex: 'name' },
+    { key: 'domain', title: 'Domain', dataIndex: 'domain', render: (v: string) => v || '—' },
+    { key: 'count', title: t('concept_sets.concepts', 'Concepts'), dataIndex: 'concept_count' },
+    { key: 'created_by', title: 'Created by', dataIndex: 'created_by' },
     {
-      title: '', key: 'actions', width: 100,
+      key: 'actions', title: '', width: 100,
       render: (_: any, record: ConceptSetSummary) => (
-        <Space>
-          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(record.id)} />
-          <Popconfirm title="Delete?" onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
+        <div className="flex items-center gap-1">
+          <Button size="small" icon={<Eye className="h-3.5 w-3.5" />} onClick={() => openDetail(record.id)} />
+          <Button size="small" variant="danger" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => handleDelete(record.id)} />
+        </div>
       ),
     },
   ];
 
+  const detailColumns: Column<any>[] = [
+    { key: 'concept_id', title: 'ID', dataIndex: 'concept_id', width: 80 },
+    { key: 'concept_name', title: 'Name', dataIndex: 'concept_name' },
+    { key: 'concept_code', title: 'Code', dataIndex: 'concept_code', width: 100 },
+    { key: 'vocabulary_id', title: 'Vocabulary', dataIndex: 'vocabulary_id', width: 100 },
+  ];
+
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>{t('concept_sets.title', 'Concept Sets')}</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+    <div className="max-w-[1000px] mx-auto">
+      <div className="flex justify-between items-center mb-4">
+        <h4 className="text-lg font-semibold text-text-bright">{t('concept_sets.title', 'Concept Sets')}</h4>
+        <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setCreateOpen(true)}>
           {t('concept_sets.create', 'Create')}
         </Button>
       </div>
 
-      <Table
+      <Table<ConceptSetSummary>
         dataSource={sets}
         columns={columns}
         rowKey="id"
         loading={loading}
         size="small"
         pagination={{ pageSize: 20 }}
-        locale={{ emptyText: t('concept_sets.no_sets', 'No concept sets yet') }}
+        emptyText={t('concept_sets.no_sets', 'No concept sets yet')}
       />
 
       {/* Create Modal */}
       <Modal
         title={t('concept_sets.create', 'Create Concept Set')}
         open={createOpen}
-        onOk={handleCreate}
-        onCancel={() => { setCreateOpen(false); setSelectedConcepts([]); setSearchQuery(''); form.resetFields(); }}
-        width={700}
-        okButtonProps={{ disabled: selectedConcepts.length === 0 }}
+        onClose={() => { setCreateOpen(false); setSelectedConcepts([]); setSearchQuery(''); resetForm(); }}
+        width="max-w-2xl"
+        footer={
+          <>
+            <Button onClick={() => { setCreateOpen(false); setSelectedConcepts([]); setSearchQuery(''); resetForm(); }}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={handleCreate} disabled={selectedConcepts.length === 0}>
+              Create
+            </Button>
+          </>
+        }
       >
-        <Form form={form} layout="vertical" size="small">
-          <Form.Item name="name" label={t('concept_sets.name', 'Name')} rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="domain" label="Domain">
-            <Input placeholder="e.g. Condition, Drug (optional)" />
-          </Form.Item>
-          <Form.Item name="description" label={t('concept_sets.description', 'Description')}>
-            <Input.TextArea rows={2} />
-          </Form.Item>
-        </Form>
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">{t('concept_sets.name', 'Name')} *</label>
+            <Input value={formName} onChange={(e) => setFormName(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">Domain</label>
+            <Input value={formDomain} onChange={(e) => setFormDomain(e.target.value)} placeholder="e.g. Condition, Drug (optional)" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">{t('concept_sets.description', 'Description')}</label>
+            <TextArea value={formDescription} onChange={(e) => setFormDescription(e.target.value)} rows={2} />
+          </div>
+        </div>
 
-        <Input
-          prefix={<SearchOutlined />}
-          placeholder="Search concepts..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          allowClear
-          style={{ marginBottom: 8 }}
-        />
+        <div className="mb-2">
+          <Input
+            prefix={<Search className="h-4 w-4" />}
+            placeholder="Search concepts..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
 
         {selectedConcepts.length > 0 && (
-          <div style={{ marginBottom: 8, padding: 4, background: '#f0f5ff', borderRadius: 4 }}>
-            <Space size={[4, 4]} wrap>
+          <div className="mb-2 p-2 bg-emerald-accent/5 border border-emerald-accent/20 rounded-lg">
+            <div className="flex flex-wrap gap-1">
               {selectedConcepts.map(c => (
                 <Tag key={c.concept_id} closable onClose={() => toggleConcept(c)} color="blue">
                   {c.concept_name}
                 </Tag>
               ))}
-            </Space>
+            </div>
           </div>
         )}
 
         {searchLoading ? (
-          <Spin size="small" />
+          <Spinner size="small" />
         ) : (
-          <div style={{ maxHeight: 250, overflow: 'auto' }}>
+          <div className="max-h-[250px] overflow-auto">
             {searchResults.map(c => (
               <div
                 key={c.concept_id}
-                style={{
-                  padding: '4px 8px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0',
-                  background: selectedConcepts.some(s => s.concept_id === c.concept_id) ? '#e6f7ff' : undefined,
-                }}
+                className={`px-2 py-1 cursor-pointer border-b border-glass-border transition-colors ${
+                  selectedConcepts.some(s => s.concept_id === c.concept_id)
+                    ? 'bg-emerald-accent/10'
+                    : 'hover:bg-surface-light'
+                }`}
                 onClick={() => toggleConcept(c)}
               >
-                <Text strong style={{ fontSize: 12 }}>{c.concept_name}</Text>
-                <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
+                <span className="font-semibold text-text-bright text-xs">{c.concept_name}</span>
+                <span className="text-text-dim text-[11px] ml-2">
                   {c.concept_code} · {c.vocabulary_id} · {c.domain_id}
-                </Text>
-                {c.standard_concept === 'S' && <Tag color="green" style={{ fontSize: 10, marginLeft: 4 }}>S</Tag>}
+                </span>
+                {c.standard_concept === 'S' && <Tag color="green" className="ml-1 text-[10px]">S</Tag>}
               </div>
             ))}
           </div>
@@ -207,22 +246,16 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
       <Modal
         title={detail?.name || 'Concept Set'}
         open={detailOpen}
-        onCancel={() => setDetailOpen(false)}
-        footer={null}
-        width={600}
+        onClose={() => setDetailOpen(false)}
+        width="max-w-xl"
       >
         {detail && (
           <>
-            <Text type="secondary">{detail.description}</Text>
-            <div style={{ marginTop: 12, maxHeight: 400, overflow: 'auto' }}>
+            <p className="text-sm text-text-muted mb-3">{detail.description}</p>
+            <div className="max-h-[400px] overflow-auto">
               <Table
                 dataSource={detail.concepts}
-                columns={[
-                  { title: 'ID', dataIndex: 'concept_id', width: 80 },
-                  { title: 'Name', dataIndex: 'concept_name' },
-                  { title: 'Code', dataIndex: 'concept_code', width: 100 },
-                  { title: 'Vocabulary', dataIndex: 'vocabulary_id', width: 100 },
-                ]}
+                columns={detailColumns}
                 rowKey="concept_id"
                 size="small"
                 pagination={false}
