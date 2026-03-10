@@ -190,7 +190,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                       </Space>
                     </div>
                     {cs.description && (
-                      <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{cs.description}</div>
+                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{cs.description}</div>
                     )}
                   </div>
                 </List.Item>
@@ -255,7 +255,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                         <Text strong style={{ fontSize: 12 }}>{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}</Text>
                         <Text type="secondary" style={{ fontSize: 10 }}>{r.n_records.toLocaleString()} rec</Text>
                       </div>
-                      <div style={{ fontSize: 11, color: '#999' }}>{r.domain} · {r.n_persons.toLocaleString()} pers</div>
+                      <div style={{ fontSize: 11, color: '#64748B' }}>{r.domain} · {r.n_persons.toLocaleString()} pers</div>
                     </div>
                   </List.Item>
                 );
@@ -358,7 +358,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                         <Text strong style={{ fontSize: 12 }}>{c.concept_name}</Text>
                         {c.standard_concept === 'S' && <Tag color="green" style={{ fontSize: 10 }}>S</Tag>}
                       </div>
-                      <div style={{ fontSize: 11, color: '#999' }}>
+                      <div style={{ fontSize: 11, color: '#64748B' }}>
                         {c.concept_code} · {c.vocabulary_id} · {c.domain_id}
                       </div>
                     </div>

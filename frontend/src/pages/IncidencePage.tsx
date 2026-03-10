@@ -169,7 +169,7 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
                     <XAxis dataKey="label" />
                     <YAxis label={{ value: 'IR / 1000 PY', angle: -90, position: 'insideLeft' }} />
                     <Tooltip />
-                    <Bar dataKey="rate" fill="#1f77b4" />
+                    <Bar dataKey="rate" fill="#3B82F6" />
                   </BarChart>
                 </ResponsiveContainer>
               </Card>

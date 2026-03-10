@@ -24,7 +24,7 @@ interface Props {
   selectedCdm: string;
 }
 
-const COLORS = ['#1f77b4', '#ff7f0e', '#2bc459', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f'];
+const COLORS = ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#6366F1'];
 
 export default function SnapshotTimeline({ selectedCdm }: Props) {
   const { t } = useTranslation();
@@ -194,12 +194,12 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
                     size="small"
                     hoverable
                     onClick={() => setSelectedDomain(dom)}
-                    style={{ borderColor: dom === selectedDomain ? '#2bc459' : undefined }}
+                    style={{ borderColor: dom === selectedDomain ? '#10B981' : undefined }}
                   >
                     <Text strong style={{ fontSize: 12 }}>{t(`domains.${dom}`, dom)}</Text>
                     <ResponsiveContainer width="100%" height={40}>
                       <LineChart data={data}>
-                        <Line type="monotone" dataKey={mainMetric} stroke="#1f77b4" strokeWidth={1.5} dot={false} />
+                        <Line type="monotone" dataKey={mainMetric} stroke="#3B82F6" strokeWidth={1.5} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   </Card>
