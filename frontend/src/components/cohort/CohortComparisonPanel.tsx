@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import {
-  Card, Button, Select, Spin, Typography, Table, Tag, Space, Statistic,
-  Row, Col, Collapse, Descriptions, Alert, Empty, Tooltip, Switch,
-} from 'antd';
-import {
-  SwapOutlined, DownloadOutlined, TeamOutlined,
-} from '@ant-design/icons';
+  Card, Button, Select, Alert, Empty, Tooltip, Switch, Statistic,
+  Collapse, Table, Tag, Spinner,
+} from '../../components/ui';
+import { ArrowLeftRight, Download, Users } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine,
   Tooltip as RechartsTooltip, ResponsiveContainer, Cell,
@@ -14,7 +12,15 @@ import { useTranslation } from 'react-i18next';
 import { cohortApi } from '../../api/client';
 import type { CohortSummary, CohortComparisonResult, CohortComparisonVariable } from '../../types';
 
-const { Text, Title } = Typography;
+const DOMAIN_TAG_COLORS: Record<string, 'red' | 'blue' | 'green' | 'orange' | 'purple' | 'cyan' | 'magenta' | 'default'> = {
+  Condition: 'red',
+  Drug: 'blue',
+  Procedure: 'green',
+  Measurement: 'orange',
+  Observation: 'purple',
+  Device: 'cyan',
+  Visit: 'magenta',
+};
 
 interface Props {
   cdmName: string;
@@ -32,24 +38,14 @@ function smdColor(smd: number | null): string {
 function SmdTag({ smd }: { smd: number | null }) {
   if (smd === null) return <Tag color="default">N/A</Tag>;
   const abs = Math.abs(smd);
-  const color = abs < 0.1 ? 'green' : abs < 0.2 ? 'orange' : 'red';
+  const color: 'green' | 'orange' | 'red' = abs < 0.1 ? 'green' : abs < 0.2 ? 'orange' : 'red';
   return <Tag color={color}>{smd.toFixed(3)}</Tag>;
 }
 
-const DOMAIN_COLORS: Record<string, string> = {
-  Condition: '#f5222d',
-  Drug: '#1890ff',
-  Procedure: '#52c41a',
-  Measurement: '#fa8c16',
-  Observation: '#722ed1',
-  Device: '#13c2c2',
-  Visit: '#eb2f96',
-};
-
 export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
   const { t } = useTranslation();
-  const [cohortIdA, setCohortIdA] = useState<number | undefined>();
-  const [cohortIdB, setCohortIdB] = useState<number | undefined>();
+  const [cohortIdA, setCohortIdA] = useState<string | undefined>();
+  const [cohortIdB, setCohortIdB] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<CohortComparisonResult | null>(null);
@@ -61,7 +57,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
     setError('');
     setResult(null);
     try {
-      const resp = await cohortApi.compare(cdmName, cohortIdA, cohortIdB, visitLevel);
+      const resp = await cohortApi.compare(cdmName, Number(cohortIdA), Number(cohortIdB), visitLevel);
       setResult(resp.data);
     } catch (e: any) {
       setError(e.response?.data?.detail || 'Comparison failed');
@@ -97,7 +93,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
   };
 
   const cohortOptions = cohorts.map(c => ({
-    value: c.id,
+    value: String(c.id),
     label: `${c.name}${c.patient_count != null ? ` (${c.patient_count.toLocaleString()} pts)` : ''}`,
   }));
 
@@ -111,78 +107,66 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
     : [];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="flex flex-col gap-3">
       {/* Selection */}
       <Card size="small">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Space>
-            <SwapOutlined style={{ fontSize: 18 }} />
-            <Title level={5} style={{ margin: 0 }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ArrowLeftRight className="h-[18px] w-[18px] text-text-muted" />
+            <h5 className="text-sm font-semibold text-text-bright m-0">
               {t('cohort.compare_cohorts', 'Compare Cohorts')}
-            </Title>
-          </Space>
-          <Space>
+            </h5>
+          </div>
+          <div className="flex items-center gap-2">
             {result && (
-              <Button size="small" icon={<DownloadOutlined />} onClick={exportCsv}>
+              <Button size="small" icon={<Download className="h-3.5 w-3.5" />} onClick={exportCsv}>
                 CSV
               </Button>
             )}
-          </Space>
+          </div>
         </div>
-        <Row gutter={8} style={{ marginTop: 12 }}>
-          <Col span={10}>
-            <Select
-              placeholder={t('cohort.select_cohort_a', 'Cohort A')}
-              options={cohortOptions}
-              value={cohortIdA}
-              onChange={setCohortIdA}
-              style={{ width: '100%' }}
-              size="small"
-              showSearch
-              optionFilterProp="label"
-            />
-          </Col>
-          <Col span={10}>
-            <Select
-              placeholder={t('cohort.select_cohort_b', 'Cohort B')}
-              options={cohortOptions}
-              value={cohortIdB}
-              onChange={setCohortIdB}
-              style={{ width: '100%' }}
-              size="small"
-              showSearch
-              optionFilterProp="label"
-            />
-          </Col>
-          <Col span={4}>
-            <Button
-              type="primary"
-              size="small"
-              block
-              onClick={runCompare}
-              loading={loading}
-              disabled={!cohortIdA || !cohortIdB || cohortIdA === cohortIdB}
-            >
-              {t('cohort.compare', 'Compare')}
-            </Button>
-          </Col>
-        </Row>
-        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
+        <div className="grid grid-cols-[5fr_5fr_2fr] gap-2 mt-3">
+          <Select
+            placeholder={t('cohort.select_cohort_a', 'Cohort A')}
+            options={cohortOptions}
+            value={cohortIdA}
+            onChange={(v) => setCohortIdA(v || undefined)}
+            size="small"
+          />
+          <Select
+            placeholder={t('cohort.select_cohort_b', 'Cohort B')}
+            options={cohortOptions}
+            value={cohortIdB}
+            onChange={(v) => setCohortIdB(v || undefined)}
+            size="small"
+          />
+          <Button
+            variant="primary"
+            size="small"
+            block
+            onClick={runCompare}
+            loading={loading}
+            disabled={!cohortIdA || !cohortIdB || cohortIdA === cohortIdB}
+          >
+            {t('cohort.compare', 'Compare')}
+          </Button>
+        </div>
+        <div className="mt-2 flex justify-end">
           <Tooltip title={
             visitLevel
               ? t('cohort.visit_level_on', 'Clinical data restricted to the qualifying visit only')
               : t('cohort.visit_level_off', 'All patient data across all visits (standard)')
           }>
-            <Space size={4}>
+            <div className="flex items-center gap-1">
               <Switch
                 size="small"
                 checked={visitLevel}
                 onChange={setVisitLevel}
               />
-              <Text type="secondary" style={{ fontSize: 11 }}>
+              <span className="text-text-muted text-[11px]">
                 {t('cohort.visit_level', 'Visit-level')}
-              </Text>
-            </Space>
+              </span>
+            </div>
           </Tooltip>
         </div>
       </Card>
@@ -191,10 +175,10 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
 
       {loading && (
         <Card size="small">
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin size="large" />
-            <div style={{ marginTop: 16 }}>
-              <Text type="secondary">{t('cohort.comparing', 'Comparing cohorts...')}</Text>
+          <div className="text-center py-10">
+            <Spinner size="large" />
+            <div className="mt-4">
+              <span className="text-text-muted text-sm">{t('cohort.comparing', 'Comparing cohorts...')}</span>
             </div>
           </div>
         </Card>
@@ -203,7 +187,6 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
       {!result && !loading && !error && (
         <Card size="small">
           <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={t('cohort.select_two_cohorts', 'Select two cohorts to compare')}
           />
         </Card>
@@ -212,37 +195,33 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
       {result && !loading && (
         <>
           {/* Cohort sizes */}
-          <Row gutter={8}>
-            <Col span={12}>
-              <Card size="small">
-                <Statistic
-                  title={<Space><TeamOutlined /><Text strong>{result.cohort_a_name}</Text></Space>}
-                  value={result.cohort_a_size}
-                  suffix="patients"
-                  valueStyle={{ color: '#1890ff', fontSize: 22 }}
-                />
-              </Card>
-            </Col>
-            <Col span={12}>
-              <Card size="small">
-                <Statistic
-                  title={<Space><TeamOutlined /><Text strong>{result.cohort_b_name}</Text></Space>}
-                  value={result.cohort_b_size}
-                  suffix="patients"
-                  valueStyle={{ color: '#722ed1', fontSize: 22 }}
-                />
-              </Card>
-            </Col>
-          </Row>
+          <div className="grid grid-cols-2 gap-2">
+            <Card size="small">
+              <Statistic
+                title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /><span className="font-semibold">{result.cohort_a_name}</span></div>}
+                value={result.cohort_a_size}
+                suffix="patients"
+                valueStyle={{ color: '#1890ff', fontSize: 22 }}
+              />
+            </Card>
+            <Card size="small">
+              <Statistic
+                title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /><span className="font-semibold">{result.cohort_b_name}</span></div>}
+                value={result.cohort_b_size}
+                suffix="patients"
+                valueStyle={{ color: '#722ed1', fontSize: 22 }}
+              />
+            </Card>
+          </div>
 
           {/* SMD Legend */}
-          <Card size="small" bodyStyle={{ padding: '6px 12px' }}>
-            <Space>
-              <Text type="secondary" style={{ fontSize: 11 }}>SMD:</Text>
+          <Card size="small">
+            <div className="flex items-center gap-2 py-0.5">
+              <span className="text-text-muted text-[11px]">SMD:</span>
               <Tag color="green">&lt; 0.1 balanced</Tag>
               <Tag color="orange">0.1–0.2 small imbalance</Tag>
               <Tag color="red">&gt; 0.2 imbalanced</Tag>
-            </Space>
+            </div>
           </Card>
 
           {/* Demographics */}
@@ -287,6 +266,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                   smd: ag.smd,
                 })),
               ]}
+              rowKey="key"
               columns={[
                 { title: 'Variable', dataIndex: 'variable', key: 'var', ellipsis: true },
                 { title: result.cohort_a_name, dataIndex: 'cohort_a', key: 'a', width: 120, align: 'right' as const },
@@ -314,10 +294,12 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                   pct_b: `${dp.pct_with_data_b}%`,
                   smd: dp.smd,
                 }))}
+                rowKey="key"
+                className="mb-3"
                 columns={[
                   {
                     title: 'Domain', dataIndex: 'domain', key: 'd',
-                    render: (d: string) => <Tag color={DOMAIN_COLORS[d] || '#64748B'}>{d}</Tag>,
+                    render: (d: string) => <Tag color={DOMAIN_TAG_COLORS[d] || 'default'}>{d}</Tag>,
                   },
                   { title: result.cohort_a_name, dataIndex: 'pct_a', key: 'a', width: 120, align: 'right' as const },
                   { title: result.cohort_b_name, dataIndex: 'pct_b', key: 'b', width: 120, align: 'right' as const },
@@ -326,23 +308,21 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                     render: (smd: number | null) => <SmdTag smd={smd} />,
                   },
                 ]}
-                style={{ marginBottom: 12 }}
               />
 
               {/* Per-domain concept details */}
               <Collapse
-                size="small"
                 items={result.domain_prevalence
                   .filter(dp => dp.concepts.length > 0)
                   .map(dp => ({
                     key: dp.domain,
                     label: (
-                      <Space>
-                        <Tag color={DOMAIN_COLORS[dp.domain] || '#64748B'}>{dp.domain}</Tag>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
+                      <div className="flex items-center gap-2">
+                        <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'}>{dp.domain}</Tag>
+                        <span className="text-text-muted text-[11px]">
                           {dp.concepts.length} concepts
-                        </Text>
-                      </Space>
+                        </span>
+                      </div>
                     ),
                     children: (
                       <Table
@@ -350,11 +330,10 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                         dataSource={dp.concepts}
                         rowKey="concept_id"
                         pagination={false}
-                        scroll={{ x: true }}
                         columns={[
                           { title: 'Concept', dataIndex: 'concept_name', key: 'name', ellipsis: true },
-                          { title: result.cohort_a_name, key: 'a', width: 100, align: 'right' as const, render: (_, r) => `${r.pct_persons_a}%` },
-                          { title: result.cohort_b_name, key: 'b', width: 100, align: 'right' as const, render: (_, r) => `${r.pct_persons_b}%` },
+                          { title: result.cohort_a_name, key: 'a', width: 100, align: 'right' as const, render: (_: any, r: any) => `${r.pct_persons_a}%` },
+                          { title: result.cohort_b_name, key: 'b', width: 100, align: 'right' as const, render: (_: any, r: any) => `${r.pct_persons_b}%` },
                           {
                             title: 'SMD', dataIndex: 'smd', key: 'smd', width: 90, align: 'center' as const,
                             render: (smd: number | null) => <SmdTag smd={smd} />,
@@ -376,16 +355,15 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                 dataSource={result.measurement_stats}
                 rowKey="concept_id"
                 pagination={false}
-                scroll={{ x: true }}
                 columns={[
                   { title: 'Measurement', dataIndex: 'concept_name', key: 'name', ellipsis: true, width: 160 },
                   {
                     title: `Mean (${result.cohort_a_name})`, key: 'mean_a', width: 100, align: 'right' as const,
-                    render: (_, r) => r.mean_a != null ? r.mean_a.toFixed(1) : '—',
+                    render: (_: any, r: any) => r.mean_a != null ? r.mean_a.toFixed(1) : '—',
                   },
                   {
                     title: `Mean (${result.cohort_b_name})`, key: 'mean_b', width: 100, align: 'right' as const,
-                    render: (_, r) => r.mean_b != null ? r.mean_b.toFixed(1) : '—',
+                    render: (_: any, r: any) => r.mean_b != null ? r.mean_b.toFixed(1) : '—',
                   },
                   {
                     title: 'SMD (value)', dataIndex: 'smd', key: 'smd', width: 100, align: 'center' as const,
@@ -408,8 +386,8 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                 pagination={false}
                 columns={[
                   { title: 'Visit Type', dataIndex: 'concept_name', key: 'name', ellipsis: true },
-                  { title: result.cohort_a_name, key: 'a', width: 100, align: 'right' as const, render: (_, r) => `${r.pct_persons_a}%` },
-                  { title: result.cohort_b_name, key: 'b', width: 100, align: 'right' as const, render: (_, r) => `${r.pct_persons_b}%` },
+                  { title: result.cohort_a_name, key: 'a', width: 100, align: 'right' as const, render: (_: any, r: any) => `${r.pct_persons_a}%` },
+                  { title: result.cohort_b_name, key: 'b', width: 100, align: 'right' as const, render: (_: any, r: any) => `${r.pct_persons_b}%` },
                   {
                     title: 'SMD', dataIndex: 'smd', key: 'smd', width: 90, align: 'center' as const,
                     render: (smd: number | null) => <SmdTag smd={smd} />,
@@ -421,21 +399,28 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
 
           {/* Observation Period */}
           <Card size="small" title={t('cohort.observation_period', 'Observation Period')}>
-            <Descriptions size="small" bordered column={3}>
-              <Descriptions.Item label="Mean Duration (A)">
-                {result.observation_period.mean_days_a != null
-                  ? `${Math.round(result.observation_period.mean_days_a)} days`
-                  : '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Mean Duration (B)">
-                {result.observation_period.mean_days_b != null
-                  ? `${Math.round(result.observation_period.mean_days_b)} days`
-                  : '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="SMD">
-                <SmdTag smd={result.observation_period.smd} />
-              </Descriptions.Item>
-            </Descriptions>
+            <div className="grid grid-cols-3 gap-2 bg-surface-dark rounded-xl p-3">
+              <div>
+                <span className="text-xs text-text-dim">Mean Duration (A)</span>
+                <p className="text-sm font-semibold text-text-bright">
+                  {result.observation_period.mean_days_a != null
+                    ? `${Math.round(result.observation_period.mean_days_a)} days`
+                    : '—'}
+                </p>
+              </div>
+              <div>
+                <span className="text-xs text-text-dim">Mean Duration (B)</span>
+                <p className="text-sm font-semibold text-text-bright">
+                  {result.observation_period.mean_days_b != null
+                    ? `${Math.round(result.observation_period.mean_days_b)} days`
+                    : '—'}
+                </p>
+              </div>
+              <div>
+                <span className="text-xs text-text-dim">SMD</span>
+                <div className="mt-1"><SmdTag smd={result.observation_period.smd} /></div>
+              </div>
+            </div>
           </Card>
 
           {/* Love Plot */}

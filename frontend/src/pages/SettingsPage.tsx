@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Card, Form, InputNumber, Input, Button, Typography, message, Alert } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../api/client';
-
-const { Title } = Typography;
+import { Card, Button, Input, NumberInput, Alert, useToast } from '../components/ui';
 
 interface Props {
   selectedCdm: string | null;
@@ -11,13 +9,27 @@ interface Props {
 
 export default function SettingsPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
-  const [form] = Form.useForm();
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
+
+  // Form state
+  const [omopSchema, setOmopSchema] = useState('');
+  const [topUnmappedTerms, setTopUnmappedTerms] = useState<number | null>(null);
+  const [topConcepts, setTopConcepts] = useState<number | null>(null);
+  const [maxRecordsPerPerson, setMaxRecordsPerPerson] = useState<number | null>(null);
+  const [maxObservationMonths, setMaxObservationMonths] = useState<number | null>(null);
+  const [comparisonAlertThreshold, setComparisonAlertThreshold] = useState<number | null>(null);
 
   useEffect(() => {
     if (selectedCdm) {
       cdmApi.getSettings(selectedCdm).then((res) => {
-        form.setFieldsValue(res.data);
+        const data = res.data;
+        setOmopSchema(data.omop_schema ?? '');
+        setTopUnmappedTerms(data.top_unmapped_terms ?? null);
+        setTopConcepts(data.top_concepts ?? null);
+        setMaxRecordsPerPerson(data.max_records_per_person ?? null);
+        setMaxObservationMonths(data.max_observation_months ?? null);
+        setComparisonAlertThreshold(data.comparison_alert_threshold ?? null);
       });
     }
   }, [selectedCdm]);
@@ -25,12 +37,18 @@ export default function SettingsPage({ selectedCdm }: Props) {
   const handleSave = async () => {
     if (!selectedCdm) return;
     try {
-      const values = await form.validateFields();
       setLoading(true);
-      await cdmApi.updateSettings(selectedCdm, values);
-      message.success(t('settings.saved'));
+      await cdmApi.updateSettings(selectedCdm, {
+        omop_schema: omopSchema,
+        top_unmapped_terms: topUnmappedTerms ?? undefined,
+        top_concepts: topConcepts ?? undefined,
+        max_records_per_person: maxRecordsPerPerson ?? undefined,
+        max_observation_months: maxObservationMonths ?? undefined,
+        comparison_alert_threshold: comparisonAlertThreshold ?? undefined,
+      });
+      toast.success(t('settings.saved'));
     } catch {
-      message.error(t('common.error'));
+      toast.error(t('common.error'));
     } finally {
       setLoading(false);
     }
@@ -39,7 +57,7 @@ export default function SettingsPage({ selectedCdm }: Props) {
   if (!selectedCdm) {
     return (
       <div>
-        <Title level={3}>{t('settings.title')}</Title>
+        <h3 className="text-2xl font-bold text-text-bright mb-4">{t('settings.title')}</h3>
         <Alert message={t('cdm.select_cdm')} type="info" showIcon />
       </div>
     );
@@ -47,33 +65,39 @@ export default function SettingsPage({ selectedCdm }: Props) {
 
   return (
     <div>
-      <Title level={3}>
+      <h3 className="text-2xl font-bold text-text-bright mb-4">
         {t('settings.title')} — {selectedCdm}
-      </Title>
-      <Card style={{ maxWidth: 500 }}>
-        <Form form={form} layout="vertical">
-          <Form.Item label={t('settings.omop_schema')} name="omop_schema">
-            <Input />
-          </Form.Item>
-          <Form.Item label={t('settings.top_unmapped_terms')} name="top_unmapped_terms">
-            <InputNumber min={1} max={500} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label={t('settings.top_concepts')} name="top_concepts">
-            <InputNumber min={1} max={500} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label={t('settings.max_records_per_person')} name="max_records_per_person">
-            <InputNumber min={10} max={1000} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label={t('settings.max_observation_months')} name="max_observation_months">
-            <InputNumber min={12} max={600} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label={t('settings.comparison_threshold')} name="comparison_alert_threshold">
-            <InputNumber min={0.1} max={50} step={0.5} style={{ width: '100%' }} />
-          </Form.Item>
-          <Button type="primary" onClick={handleSave} loading={loading}>
+      </h3>
+      <Card className="max-w-lg">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.omop_schema')}</label>
+            <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_unmapped_terms')}</label>
+            <NumberInput value={topUnmappedTerms ?? undefined} onChange={(v) => setTopUnmappedTerms(v)} min={1} max={500} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_concepts')}</label>
+            <NumberInput value={topConcepts ?? undefined} onChange={(v) => setTopConcepts(v)} min={1} max={500} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.max_records_per_person')}</label>
+            <NumberInput value={maxRecordsPerPerson ?? undefined} onChange={(v) => setMaxRecordsPerPerson(v)} min={10} max={1000} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.max_observation_months')}</label>
+            <NumberInput value={maxObservationMonths ?? undefined} onChange={(v) => setMaxObservationMonths(v)} min={12} max={600} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.comparison_threshold')}</label>
+            <NumberInput value={comparisonAlertThreshold ?? undefined} onChange={(v) => setComparisonAlertThreshold(v)} min={0.1} max={50} step={0.5} />
+          </div>
+          <Button variant="primary" onClick={handleSave} loading={loading}>
             {t('common.save')}
           </Button>
-        </Form>
+        </div>
       </Card>
     </div>
   );

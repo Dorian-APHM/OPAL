@@ -1,12 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Card, Input, Select, Tag, List, Typography, Spin, Empty, Space, Collapse } from 'antd';
-import { SearchOutlined, PlusOutlined, CodeOutlined, AppstoreOutlined } from '@ant-design/icons';
+import { Card, Input, Select, Tag, Empty, Spinner, Collapse } from '../../components/ui';
+import { Search, Plus, Hash, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cohortApi, conceptApi, conceptSetApi } from '../../api/client';
 import type { OmopConcept, CohortCriterion, ConceptSetSummary, ConceptSetDetail } from '../../types';
-
-const { Text } = Typography;
-const { Option } = Select;
 
 interface Props {
   cdmName: string;
@@ -114,8 +111,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
     setSelectedSourceCodes([]);
   };
 
-
-  // ── Concept Sets integration ──
+  // -- Concept Sets integration --
   const [conceptSets, setConceptSets] = useState<ConceptSetSummary[]>([]);
   const [conceptSetsLoading, setConceptSetsLoading] = useState(false);
 
@@ -157,162 +153,140 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
     }
   };
 
+  const domainOptions = domains.map(d => ({ value: d.name, label: d.name }));
+  const vocabOptions = vocabularies.map(v => ({ value: v.vocabulary_id, label: v.vocabulary_id }));
+
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="h-full flex flex-col gap-3">
       {/* Concept Sets */}
       {conceptSets.length > 0 && (
         <Card
           size="small"
-          title={<><AppstoreOutlined /> {t('cohort.concept_sets', 'Concept Sets')}</>}
-          bodyStyle={{ padding: 0 }}
+          title={<span className="flex items-center gap-1"><Layers className="h-4 w-4" /> {t('cohort.concept_sets', 'Concept Sets')}</span>}
         >
           {conceptSetsLoading ? (
-            <div style={{ textAlign: 'center', padding: 12 }}><Spin size="small" /></div>
+            <div className="text-center p-3"><Spinner size="small" /></div>
           ) : (
-            <List
-              size="small"
-              dataSource={conceptSets}
-              style={{ maxHeight: 180, overflow: 'auto' }}
-              renderItem={cs => (
-                <List.Item
-                  style={{ cursor: 'pointer', padding: '6px 12px' }}
+            <div className="max-h-[180px] overflow-auto">
+              {conceptSets.map(cs => (
+                <div
+                  key={cs.id}
+                  className="cursor-pointer px-3 py-1.5 hover:bg-emerald-accent/5 border-b border-border-subtle last:border-b-0 transition-colors"
                   onClick={() => addConceptSetAsCriterion(cs)}
                 >
-                  <div style={{ width: '100%' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Space size={4}>
-                        <PlusOutlined style={{ color: '#52c41a', fontSize: 10 }} />
-                        <Typography.Text strong style={{ fontSize: 12 }}>{cs.name}</Typography.Text>
-                      </Space>
-                      <Space size={4}>
-                        {cs.domain && <Tag style={{ fontSize: 10 }}>{cs.domain}</Tag>}
-                        <Tag color="blue" style={{ fontSize: 10 }}>{cs.concept_count} concepts</Tag>
-                      </Space>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-1">
+                      <Plus className="h-2.5 w-2.5 text-emerald-400" />
+                      <span className="text-xs font-semibold text-text-bright">{cs.name}</span>
                     </div>
-                    {cs.description && (
-                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{cs.description}</div>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {cs.domain && <Tag className="text-[10px]">{cs.domain}</Tag>}
+                      <Tag color="blue" className="text-[10px]">{cs.concept_count} concepts</Tag>
+                    </div>
                   </div>
-                </List.Item>
-              )}
-            />
+                  {cs.description && (
+                    <div className="text-[11px] text-text-dim mt-0.5">{cs.description}</div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </Card>
       )}
 
       {/* Source code input */}
-      <Card size="small" title={<><CodeOutlined /> {t('cohort.source_code_search', 'Source Code')}</>} bodyStyle={{ padding: 8 }}>
-        <Space size={4} style={{ width: '100%' }} direction="vertical">
+      <Card size="small" title={<span className="flex items-center gap-1"><Hash className="h-4 w-4" /> {t('cohort.source_code_search', 'Source Code')}</span>}>
+        <div className="flex flex-col gap-1 w-full">
           <Select
             size="small"
             value={sourceCodeDomain}
-            onChange={setSourceCodeDomain}
-            style={{ width: '100%' }}
-          >
-            {domains.map(d => (
-              <Option key={d.name} value={d.name}>{d.name}</Option>
-            ))}
-          </Select>
+            onChange={v => setSourceCodeDomain(v)}
+            options={domainOptions}
+          />
           <Input
-            size="small"
-            prefix={<SearchOutlined />}
+            prefix={<Search className="h-3.5 w-3.5" />}
             placeholder={t('cohort.search_source_placeholder', 'Search by keyword...')}
             value={sourceSearchQuery}
             onChange={e => setSourceSearchQuery(e.target.value)}
-            allowClear
           />
           {/* Selected source codes */}
           {selectedSourceCodes.length > 0 && (
-            <div style={{ padding: 4, background: '#f0f5ff', borderRadius: 4 }}>
-              <Space size={[4, 4]} wrap>
+            <div className="p-1 bg-surface-dark rounded">
+              <div className="flex flex-wrap gap-1">
                 {selectedSourceCodes.map(code => (
                   <Tag key={code} closable onClose={() => toggleSourceCode(code)} color="blue">{code}</Tag>
                 ))}
-                <Tag color="green" style={{ cursor: 'pointer' }} onClick={addSelectedSourceCodes}>
-                  <PlusOutlined /> {t('cohort.add_criterion', 'Add as criterion')}
+                <Tag color="green" className="cursor-pointer" style={{ cursor: 'pointer' }}>
+                  <span onClick={addSelectedSourceCodes} className="flex items-center gap-0.5">
+                    <Plus className="h-2.5 w-2.5" /> {t('cohort.add_criterion', 'Add as criterion')}
+                  </span>
                 </Tag>
-              </Space>
+              </div>
             </div>
           )}
 
           {/* Source search results */}
           {sourceSearchLoading ? (
-            <div style={{ textAlign: 'center', padding: 8 }}><Spin size="small" /></div>
+            <div className="text-center p-2"><Spinner size="small" /></div>
           ) : sourceSearchResults.length > 0 ? (
-            <List
-              size="small"
-              dataSource={sourceSearchResults}
-              style={{ maxHeight: 200, overflow: 'auto' }}
-              renderItem={r => {
+            <div className="max-h-[200px] overflow-auto">
+              {sourceSearchResults.map(r => {
                 const isSelected = selectedSourceCodes.includes(r.source_value);
                 return (
-                  <List.Item
-                    style={{ cursor: 'pointer', background: isSelected ? '#e6f7ff' : undefined, padding: '4px 8px' }}
+                  <div
+                    key={r.source_value}
+                    className={`cursor-pointer px-2 py-1 border-b border-border-subtle last:border-b-0 transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-emerald-accent/5'}`}
                     onClick={() => toggleSourceCode(r.source_value)}
                   >
-                    <div style={{ width: '100%' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Text strong style={{ fontSize: 12 }}>{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}</Text>
-                        <Text type="secondary" style={{ fontSize: 10 }}>{r.n_records.toLocaleString()} rec</Text>
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748B' }}>{r.domain} · {r.n_persons.toLocaleString()} pers</div>
+                    <div className="flex justify-between">
+                      <span className="text-xs font-semibold text-text-bright">{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}</span>
+                      <span className="text-text-dim text-[10px]">{r.n_records.toLocaleString()} rec</span>
                     </div>
-                  </List.Item>
+                    <div className="text-[11px] text-text-dim">{r.domain} · {r.n_persons.toLocaleString()} pers</div>
+                  </div>
                 );
-              }}
-            />
+              })}
+            </div>
           ) : sourceSearchQuery.length >= 2 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('cohort.no_source_codes', 'No source codes found')} style={{ margin: 8 }} />
+            <Empty description={t('cohort.no_source_codes', 'No source codes found')} className="!py-2" />
           ) : null}
-        </Space>
+        </div>
       </Card>
 
       {/* Concept search */}
-      <Card size="small" title={t('cohort.concept_search', 'Concept Search')} bodyStyle={{ padding: 8 }} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Card size="small" title={t('cohort.concept_search', 'Concept Search')} className="flex-1 overflow-hidden flex flex-col">
         <Input
-          prefix={<SearchOutlined />}
+          prefix={<Search className="h-3.5 w-3.5" />}
           placeholder={t('cohort.search_placeholder', 'Search by name or code...')}
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
-          allowClear
-          size="small"
-          style={{ marginBottom: 8 }}
+          className="mb-2"
         />
-        <Space size={4} style={{ marginBottom: 8 }}>
+        <div className="flex items-center gap-1 mb-2">
           <Select
             size="small"
             placeholder={t('cohort.domain', 'Domain')}
-            value={searchDomain}
-            onChange={v => setSearchDomain(v)}
+            value={searchDomain || ''}
+            onChange={v => setSearchDomain(v || undefined)}
             allowClear
-            style={{ width: 120 }}
-          >
-            {domains.map(d => (
-              <Option key={d.name} value={d.name}>{d.name}</Option>
-            ))}
-          </Select>
+            className="w-[120px]"
+            options={domainOptions}
+          />
           <Select
             size="small"
             placeholder={t('cohort.vocabulary', 'Vocabulary')}
-            value={searchVocab}
-            onChange={v => setSearchVocab(v)}
+            value={searchVocab || ''}
+            onChange={v => setSearchVocab(v || undefined)}
             allowClear
-            style={{ width: 120 }}
-            showSearch
-            filterOption={(input, option) =>
-              (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase()) ?? false
-            }
-          >
-            {vocabularies.map(v => (
-              <Option key={v.vocabulary_id} value={v.vocabulary_id}>{v.vocabulary_id}</Option>
-            ))}
-          </Select>
-        </Space>
+            className="w-[120px]"
+            options={vocabOptions}
+          />
+        </div>
 
         {/* Selected concepts */}
         {selectedConcepts.length > 0 && (
-          <div style={{ marginBottom: 8, padding: 4, background: '#f0f5ff', borderRadius: 4 }}>
-            <Space size={[4, 4]} wrap>
+          <div className="mb-2 p-1 bg-surface-dark rounded">
+            <div className="flex flex-wrap gap-1">
               {selectedConcepts.map(c => (
                 <Tag
                   key={c.concept_id}
@@ -325,49 +299,42 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
               ))}
               <Tag
                 color="green"
+                className="cursor-pointer"
                 style={{ cursor: 'pointer' }}
-                onClick={() => addAsCriterion()}
               >
-                <PlusOutlined /> {t('cohort.add_criterion', 'Add as criterion')}
+                <span onClick={() => addAsCriterion()} className="flex items-center gap-0.5">
+                  <Plus className="h-2.5 w-2.5" /> {t('cohort.add_criterion', 'Add as criterion')}
+                </span>
               </Tag>
-            </Space>
+            </div>
           </div>
         )}
 
         {/* Search results */}
-        <div style={{ maxHeight: 300, overflow: 'auto' }}>
+        <div className="max-h-[300px] overflow-auto">
           {loading ? (
-            <div style={{ textAlign: 'center', padding: 16 }}><Spin size="small" /></div>
+            <div className="text-center p-4"><Spinner size="small" /></div>
           ) : concepts.length > 0 ? (
-            <List
-              size="small"
-              dataSource={concepts}
-              renderItem={c => {
-                const isSelected = selectedConcepts.some(s => s.concept_id === c.concept_id);
-                return (
-                  <List.Item
-                    style={{
-                      cursor: 'pointer',
-                      background: isSelected ? '#e6f7ff' : undefined,
-                      padding: '4px 8px',
-                    }}
-                    onClick={() => toggleConcept(c)}
-                  >
-                    <div style={{ width: '100%' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <Text strong style={{ fontSize: 12 }}>{c.concept_name}</Text>
-                        {c.standard_concept === 'S' && <Tag color="green" style={{ fontSize: 10 }}>S</Tag>}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748B' }}>
-                        {c.concept_code} · {c.vocabulary_id} · {c.domain_id}
-                      </div>
-                    </div>
-                  </List.Item>
-                );
-              }}
-            />
+            concepts.map(c => {
+              const isSelected = selectedConcepts.some(s => s.concept_id === c.concept_id);
+              return (
+                <div
+                  key={c.concept_id}
+                  className={`cursor-pointer px-2 py-1 border-b border-border-subtle last:border-b-0 transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-emerald-accent/5'}`}
+                  onClick={() => toggleConcept(c)}
+                >
+                  <div className="flex justify-between">
+                    <span className="text-xs font-semibold text-text-bright">{c.concept_name}</span>
+                    {c.standard_concept === 'S' && <Tag color="green" className="text-[10px]">S</Tag>}
+                  </div>
+                  <div className="text-[11px] text-text-dim">
+                    {c.concept_code} · {c.vocabulary_id} · {c.domain_id}
+                  </div>
+                </div>
+              );
+            })
           ) : searchQuery.length >= 2 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('cohort.no_concepts', 'No concepts found')} />
+            <Empty description={t('cohort.no_concepts', 'No concepts found')} />
           ) : null}
         </div>
       </Card>

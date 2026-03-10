@@ -1,39 +1,36 @@
 import { useState, useEffect } from 'react';
-import {
-  Card,
-  Form,
-  Input,
-  InputNumber,
-  Button,
-  Table,
-  Space,
-  message,
-  Popconfirm,
-  Typography,
-} from 'antd';
-import {
-  PlusOutlined,
-  ApiOutlined,
-  DeleteOutlined,
-} from '@ant-design/icons';
+import { Plus, Plug, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../api/client';
+import { Card, Button, Input, NumberInput, Table, Confirm, useToast } from '../components/ui';
+import type { Column } from '../components/ui';
 import type { CdmConfig } from '../types';
-
-const { Title } = Typography;
 
 export default function CdmManagementPage() {
   const { t } = useTranslation();
+  const toast = useToast();
   const [cdms, setCdms] = useState<CdmConfig[]>([]);
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
+
+  // Form state
+  const [name, setName] = useState('');
+  const [dbHost, setDbHost] = useState('');
+  const [dbPort, setDbPort] = useState<number | null>(5432);
+  const [dbName, setDbName] = useState('');
+  const [dbUser, setDbUser] = useState('');
+  const [dbPassword, setDbPassword] = useState('');
+  const [omopSchema, setOmopSchema] = useState('omop_cdm');
+
+  // Confirm dialog state
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const loadCdms = async () => {
     try {
       const res = await cdmApi.list();
       setCdms(res.data.cdms);
     } catch {
-      message.error(t('common.error'));
+      toast.error(t('common.error'));
     }
   };
 
@@ -41,14 +38,33 @@ export default function CdmManagementPage() {
     loadCdms();
   }, []);
 
+  const getFormValues = () => ({
+    name,
+    db_host: dbHost,
+    db_port: dbPort ?? 5432,
+    db_name: dbName,
+    db_user: dbUser,
+    db_password: dbPassword,
+    omop_schema: omopSchema || 'omop_cdm',
+  });
+
+  const resetForm = () => {
+    setName('');
+    setDbHost('');
+    setDbPort(5432);
+    setDbName('');
+    setDbUser('');
+    setDbPassword('');
+    setOmopSchema('omop_cdm');
+  };
+
   const handleTestConnection = async () => {
     try {
-      const values = await form.validateFields();
       setLoading(true);
-      await cdmApi.test(values);
-      message.success(t('cdm.connection_success'));
+      await cdmApi.test(getFormValues());
+      toast.success(t('cdm.connection_success'));
     } catch {
-      message.error(t('cdm.connection_failed'));
+      toast.error(t('cdm.connection_failed'));
     } finally {
       setLoading(false);
     }
@@ -56,43 +72,42 @@ export default function CdmManagementPage() {
 
   const handleRegister = async () => {
     try {
-      const values = await form.validateFields();
       setLoading(true);
-      await cdmApi.create({ ...values, omop_schema: values.omop_schema || 'omop_cdm' });
-      message.success(t('common.success'));
-      form.resetFields();
+      await cdmApi.create(getFormValues());
+      toast.success(t('common.success'));
+      resetForm();
       await loadCdms();
     } catch (err: any) {
-      message.error(err?.response?.data?.detail || t('common.error'));
+      toast.error(err?.response?.data?.detail || t('common.error'));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (name: string) => {
+  const handleDelete = async (cdmName: string) => {
     try {
-      await cdmApi.delete(name);
-      message.success(t('common.success'));
+      await cdmApi.delete(cdmName);
+      toast.success(t('common.success'));
       await loadCdms();
     } catch {
-      message.error(t('common.error'));
+      toast.error(t('common.error'));
     }
   };
 
-  const handleTestSaved = async (name: string) => {
+  const handleTestSaved = async (cdmName: string) => {
     try {
-      const res = await cdmApi.testSaved(name);
+      const res = await cdmApi.testSaved(cdmName);
       if (res.data.success) {
-        message.success(t('cdm.connection_success'));
+        toast.success(t('cdm.connection_success'));
       } else {
-        message.error(t('cdm.connection_failed'));
+        toast.error(t('cdm.connection_failed'));
       }
     } catch {
-      message.error(t('cdm.connection_failed'));
+      toast.error(t('cdm.connection_failed'));
     }
   };
 
-  const columns = [
+  const columns: Column<CdmConfig>[] = [
     { title: t('cdm.name'), dataIndex: 'name', key: 'name' },
     {
       title: t('cdm.host'),
@@ -106,90 +121,75 @@ export default function CdmManagementPage() {
       title: '',
       key: 'actions',
       render: (_: unknown, r: CdmConfig) => (
-        <Space>
+        <div className="flex items-center gap-2">
           <Button
             size="small"
-            icon={<ApiOutlined />}
+            icon={<Plug className="h-3.5 w-3.5" />}
             onClick={() => handleTestSaved(r.name)}
           >
             {t('cdm.test_connection')}
           </Button>
-          <Popconfirm
-            title={t('cdm.delete_confirm')}
-            onConfirm={() => handleDelete(r.name)}
+          <Button
+            size="small"
+            variant="danger"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            onClick={() => {
+              setDeleteTarget(r.name);
+              setConfirmOpen(true);
+            }}
           >
-            <Button size="small" danger icon={<DeleteOutlined />}>
-              {t('cdm.delete')}
-            </Button>
-          </Popconfirm>
-        </Space>
+            {t('cdm.delete')}
+          </Button>
+        </div>
       ),
     },
   ];
 
   return (
     <div>
-      <Title level={3}>{t('cdm.title')}</Title>
+      <h3 className="text-2xl font-bold text-text-bright mb-4">{t('cdm.title')}</h3>
 
-      <Card title={t('cdm.register')} style={{ marginBottom: 24 }}>
-        <Form form={form} layout="vertical" style={{ maxWidth: 600 }}>
-          <Form.Item
-            label={t('cdm.name')}
-            name="name"
-            rules={[{ required: true }]}
-          >
-            <Input />
-          </Form.Item>
-          <Space style={{ width: '100%' }} size="large">
-            <Form.Item
-              label={t('cdm.host')}
-              name="db_host"
-              rules={[{ required: true }]}
-            >
-              <Input />
-            </Form.Item>
-            <Form.Item
-              label={t('cdm.port')}
-              name="db_port"
-              initialValue={5432}
-              rules={[{ required: true }]}
-            >
-              <InputNumber min={1} max={65535} />
-            </Form.Item>
-          </Space>
-          <Form.Item
-            label={t('cdm.database')}
-            name="db_name"
-            rules={[{ required: true }]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item
-            label={t('cdm.user')}
-            name="db_user"
-            rules={[{ required: true }]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item
-            label={t('cdm.password')}
-            name="db_password"
-            rules={[{ required: true }]}
-          >
-            <Input.Password />
-          </Form.Item>
-          <Form.Item label={t('cdm.schema')} name="omop_schema" initialValue="omop_cdm">
-            <Input />
-          </Form.Item>
-          <Space>
-            <Button onClick={handleTestConnection} loading={loading} icon={<ApiOutlined />}>
+      <Card title={t('cdm.register')} className="mb-6">
+        <div className="max-w-xl space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.name')}</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.host')}</label>
+              <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} />
+            </div>
+            <div className="w-32">
+              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')}</label>
+              <NumberInput value={dbPort ?? undefined} onChange={(v) => setDbPort(v)} min={1} max={65535} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.database')}</label>
+            <Input value={dbName} onChange={(e) => setDbName(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.user')}</label>
+            <Input value={dbUser} onChange={(e) => setDbUser(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.password')}</label>
+            <Input type="password" value={dbPassword} onChange={(e) => setDbPassword(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.schema')}</label>
+            <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button onClick={handleTestConnection} loading={loading} icon={<Plug className="h-4 w-4" />}>
               {t('cdm.test_connection')}
             </Button>
-            <Button type="primary" onClick={handleRegister} loading={loading} icon={<PlusOutlined />}>
+            <Button variant="primary" onClick={handleRegister} loading={loading} icon={<Plus className="h-4 w-4" />}>
               {t('cdm.save')}
             </Button>
-          </Space>
-        </Form>
+          </div>
+        </div>
       </Card>
 
       <Card title={t('cdm.registered_cdms')}>
@@ -198,9 +198,24 @@ export default function CdmManagementPage() {
           columns={columns}
           rowKey="id"
           pagination={false}
-          locale={{ emptyText: t('cdm.no_cdms') }}
+          emptyText={t('cdm.no_cdms')}
         />
       </Card>
+
+      <Confirm
+        open={confirmOpen}
+        onClose={() => {
+          setConfirmOpen(false);
+          setDeleteTarget(null);
+        }}
+        onConfirm={() => {
+          if (deleteTarget) handleDelete(deleteTarget);
+          setDeleteTarget(null);
+        }}
+        title={t('cdm.delete_confirm')}
+        confirmText={t('cdm.delete')}
+        danger
+      />
     </div>
   );
 }

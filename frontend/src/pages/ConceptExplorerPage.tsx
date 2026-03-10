@@ -1,17 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Card, Input, Select, Button, Table, Space, Typography, Tag, Switch,
-  Tabs, Descriptions, List, Alert, Row, Col, Spin, Empty, Drawer, Radio,
-} from 'antd';
+  Card, Input, Select, Button, Table, Tag, Switch, Tabs, Drawer, Alert, Empty, Spinner, Tooltip,
+} from '../components/ui';
+import type { Column, TabItem } from '../components/ui';
 import {
-  SearchOutlined, ApartmentOutlined, LinkOutlined, FileTextOutlined, DatabaseOutlined, DownloadOutlined, StopOutlined,
-} from '@ant-design/icons';
+  Search, GitBranch, Link, FileText, Database, Download, StopCircle,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { conceptApi, authDownload } from '../api/client';
 import useIsMobile from '../hooks/useIsMobile';
-
-const { Title, Text } = Typography;
-const { TabPane } = Tabs;
 
 interface Props {
   selectedCdm: string | null;
@@ -209,38 +206,45 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
   if (!selectedCdm) {
     return (
       <div>
-        <Title level={3}>{t('concept.title')}</Title>
-        <Alert message={t('cdm.select_cdm')} type="info" showIcon />
+        <h3 className="text-lg font-semibold text-text-bright mb-4">{t('concept.title')}</h3>
+        <Alert type="info" message={t('cdm.select_cdm')} />
       </div>
     );
   }
 
-  const baseColumns = [
+  const baseColumns: Column<ConceptItem>[] = [
     {
-      title: 'ID', dataIndex: 'concept_id', width: 90,
-      render: (id: number) => <a onClick={() => { const c = concepts.find(x => x.concept_id === id); if (c) openDetail(c); }}>{id}</a>,
+      key: 'concept_id', title: 'ID', dataIndex: 'concept_id', width: 90,
+      render: (id: number) => (
+        <a
+          className="text-emerald-accent hover:underline cursor-pointer"
+          onClick={() => { const c = concepts.find(x => x.concept_id === id); if (c) openDetail(c); }}
+        >
+          {id}
+        </a>
+      ),
     },
-    { title: t('concept.concept_name'), dataIndex: 'concept_name', ellipsis: true },
-    { title: 'Code', dataIndex: 'concept_code', width: 120 },
-    { title: t('concept.domain'), dataIndex: 'domain_id', width: 120 },
-    { title: t('concept.vocabulary'), dataIndex: 'vocabulary_id', width: 120 },
-    { title: 'Class', dataIndex: 'concept_class_id', width: 120 },
+    { key: 'concept_name', title: t('concept.concept_name'), dataIndex: 'concept_name', ellipsis: true },
+    { key: 'concept_code', title: 'Code', dataIndex: 'concept_code', width: 120 },
+    { key: 'domain_id', title: t('concept.domain'), dataIndex: 'domain_id', width: 120 },
+    { key: 'vocabulary_id', title: t('concept.vocabulary'), dataIndex: 'vocabulary_id', width: 120 },
+    { key: 'concept_class_id', title: 'Class', dataIndex: 'concept_class_id', width: 120 },
     {
-      title: 'Std', dataIndex: 'standard_concept', width: 60,
+      key: 'standard_concept', title: 'Std', dataIndex: 'standard_concept', width: 60,
       render: (v: string | null) => v === 'S' ? <Tag color="green">S</Tag> : v === 'C' ? <Tag color="blue">C</Tag> : <Tag>-</Tag>,
     },
     {
-      title: t('quality.n_records'), dataIndex: 'concept_id', key: 'n_records', width: 100,
+      key: 'n_records', title: t('quality.n_records'), dataIndex: 'concept_id', width: 100,
       render: (id: number) => {
         const c = conceptCounts[id];
-        return c ? c.n_records.toLocaleString() : countsLoading ? <Spin size="small" /> : '—';
+        return c ? c.n_records.toLocaleString() : countsLoading ? <Spinner className="h-4 w-4" /> : '—';
       },
     },
     {
-      title: t('quality.n_persons'), dataIndex: 'concept_id', key: 'n_persons', width: 100,
+      key: 'n_persons', title: t('quality.n_persons'), dataIndex: 'concept_id', width: 100,
       render: (id: number) => {
         const c = conceptCounts[id];
-        return c ? c.n_persons.toLocaleString() : countsLoading ? <Spin size="small" /> : '—';
+        return c ? c.n_persons.toLocaleString() : countsLoading ? <Spinner className="h-4 w-4" /> : '—';
       },
     },
   ];
@@ -250,248 +254,314 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
     ? baseColumns.filter((c) => ['concept_id', 'concept_name', 'standard_concept'].includes(c.dataIndex as string))
     : baseColumns;
 
-  const sourceColumns = [
-    { title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true, render: (_: string, r: SourceValueSearchResult) => r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value },
-    { title: t('concept.domain'), dataIndex: 'domain', width: 110 },
-    { title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v?.toLocaleString() },
-    ...(!isMobile ? [{ title: t('quality.n_persons'), dataIndex: 'n_persons', width: 90, render: (v: number) => v?.toLocaleString() }] : []),
+  const sourceColumns: Column<SourceValueSearchResult>[] = [
     {
-      title: t('concept.mapped_concept'), dataIndex: 'mapped_concept_name', ellipsis: true,
+      key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true,
+      render: (_: string, r: SourceValueSearchResult) => r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value,
+    },
+    { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 110 },
+    { key: 'n_records', title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v?.toLocaleString() },
+    ...(!isMobile ? [{
+      key: 'n_persons', title: t('quality.n_persons'), dataIndex: 'n_persons', width: 90,
+      render: (v: number) => v?.toLocaleString(),
+    } as Column<SourceValueSearchResult>] : []),
+    {
+      key: 'mapped_concept_name', title: t('concept.mapped_concept'), dataIndex: 'mapped_concept_name', ellipsis: true,
       render: (name: string | null, r: SourceValueSearchResult) => {
         if (!r.mapped_concept_id || r.mapped_concept_id === 0) return <Tag>—</Tag>;
         return (
-          <a onClick={() => openDetail({
-            concept_id: r.mapped_concept_id!,
-            concept_name: r.mapped_concept_name || '',
-            concept_code: '',
-            domain_id: r.domain,
-            vocabulary_id: r.mapped_vocabulary_id || '',
-            concept_class_id: '',
-            standard_concept: r.mapped_standard_concept,
-          })}>
-            {name} {r.mapped_standard_concept === 'S' && <Tag color="green" style={{ marginLeft: 4 }}>S</Tag>}
+          <a
+            className="text-emerald-accent hover:underline cursor-pointer"
+            onClick={() => openDetail({
+              concept_id: r.mapped_concept_id!,
+              concept_name: r.mapped_concept_name || '',
+              concept_code: '',
+              domain_id: r.domain,
+              vocabulary_id: r.mapped_vocabulary_id || '',
+              concept_class_id: '',
+              standard_concept: r.mapped_standard_concept,
+            })}
+          >
+            {name} {r.mapped_standard_concept === 'S' && <Tag color="green" className="ml-1">S</Tag>}
           </a>
         );
       },
     },
   ];
 
-  const detailContent = selectedConcept ? (
-    detailLoading ? (
-      <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
-    ) : (
-      <Tabs defaultActiveKey="info" size="small">
-        <TabPane tab={t('concept.info')} key="info">
-          <Descriptions column={1} size="small" bordered>
-            <Descriptions.Item label="Concept ID">{selectedConcept.concept_id}</Descriptions.Item>
-            <Descriptions.Item label={t('concept.concept_name')}>{selectedConcept.concept_name}</Descriptions.Item>
-            <Descriptions.Item label="Code">{selectedConcept.concept_code}</Descriptions.Item>
-            <Descriptions.Item label={t('concept.domain')}>{selectedConcept.domain_id}</Descriptions.Item>
-            <Descriptions.Item label={t('concept.vocabulary')}>{selectedConcept.vocabulary_id}</Descriptions.Item>
-            <Descriptions.Item label="Class">{selectedConcept.concept_class_id}</Descriptions.Item>
-            <Descriptions.Item label="Standard">
+  const relColumns: Column<RelationshipItem>[] = [
+    { key: 'relationship_id', title: t('concept.relationship'), dataIndex: 'relationship_id', width: 140 },
+    {
+      key: 'related_concept_name', title: 'Concept', dataIndex: 'related_concept_name', ellipsis: true,
+      render: (name: string, r: RelationshipItem) => (
+        <a
+          className="text-emerald-accent hover:underline cursor-pointer"
+          onClick={() => {
+            const fake: ConceptItem = {
+              concept_id: r.related_concept_id,
+              concept_name: r.related_concept_name,
+              concept_code: '',
+              domain_id: '',
+              vocabulary_id: r.related_vocabulary_id,
+              concept_class_id: r.related_concept_class_id,
+              standard_concept: r.related_standard_concept,
+            };
+            openDetail(fake);
+          }}
+        >
+          {name}
+        </a>
+      ),
+    },
+    ...(!isMobile ? [
+      { key: 'related_vocabulary_id', title: t('concept.vocabulary'), dataIndex: 'related_vocabulary_id', width: 100 } as Column<RelationshipItem>,
+      {
+        key: 'related_standard_concept', title: 'Std', dataIndex: 'related_standard_concept', width: 50,
+        render: (v: string | null) => v === 'S' ? <Tag color="green">S</Tag> : v ? <Tag>{v}</Tag> : <span>-</span>,
+      } as Column<RelationshipItem>,
+    ] : []),
+  ];
+
+  const svColumns: Column<SourceValueItem>[] = [
+    { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 120 },
+    { key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true },
+    { key: 'n_records', title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v.toLocaleString() },
+    { key: 'n_persons', title: t('quality.n_persons'), dataIndex: 'n_persons', width: 90, render: (v: number) => v.toLocaleString() },
+  ];
+
+  const detailTabItems: TabItem[] = selectedConcept ? [
+    {
+      key: 'info',
+      label: t('concept.info'),
+      children: (
+        <div>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt className="text-text-muted font-medium">Concept ID</dt>
+            <dd className="text-text-bright font-mono">{selectedConcept.concept_id}</dd>
+            <dt className="text-text-muted font-medium">{t('concept.concept_name')}</dt>
+            <dd className="text-text-bright">{selectedConcept.concept_name}</dd>
+            <dt className="text-text-muted font-medium">Code</dt>
+            <dd className="text-text-bright font-mono">{selectedConcept.concept_code}</dd>
+            <dt className="text-text-muted font-medium">{t('concept.domain')}</dt>
+            <dd className="text-text-bright">{selectedConcept.domain_id}</dd>
+            <dt className="text-text-muted font-medium">{t('concept.vocabulary')}</dt>
+            <dd className="text-text-bright">{selectedConcept.vocabulary_id}</dd>
+            <dt className="text-text-muted font-medium">Class</dt>
+            <dd className="text-text-bright">{selectedConcept.concept_class_id}</dd>
+            <dt className="text-text-muted font-medium">Standard</dt>
+            <dd>
               {selectedConcept.standard_concept === 'S' ? <Tag color="green">Standard</Tag> :
                selectedConcept.standard_concept === 'C' ? <Tag color="blue">Classification</Tag> :
                <Tag>Non-standard</Tag>}
-            </Descriptions.Item>
-            <Descriptions.Item label="Valid">{selectedConcept.valid_start_date} — {selectedConcept.valid_end_date}</Descriptions.Item>
-          </Descriptions>
+            </dd>
+            <dt className="text-text-muted font-medium">Valid</dt>
+            <dd className="text-text-bright">{selectedConcept.valid_start_date} — {selectedConcept.valid_end_date}</dd>
+          </dl>
           {synonyms.length > 0 && (
-            <>
-              <Text strong style={{ display: 'block', marginTop: 12, marginBottom: 4 }}>{t('concept.synonyms')}</Text>
-              {synonyms.map((s, i) => <Tag key={i}>{s.concept_synonym_name}</Tag>)}
-            </>
+            <div className="mt-3">
+              <span className="block text-sm font-semibold text-text-bright mb-1">{t('concept.synonyms')}</span>
+              <div className="flex flex-wrap gap-1">
+                {synonyms.map((s, i) => <Tag key={i}>{s.concept_synonym_name}</Tag>)}
+              </div>
+            </div>
           )}
-        </TabPane>
-
-        <TabPane tab={<><LinkOutlined /> {t('concept.relationships')} ({relationships.length})</>} key="rels">
-          {relationships.length === 0 ? <Empty description={t('concept.no_relationships')} /> : (
-            <Table
-              dataSource={relationships}
-              rowKey={(r, i) => `${r.relationship_id}-${r.related_concept_id}-${i}`}
-              size="small"
-              pagination={{ pageSize: 10, size: 'small' }}
-              columns={[
-                { title: t('concept.relationship'), dataIndex: 'relationship_id', width: 140 },
-                {
-                  title: 'Concept', dataIndex: 'related_concept_name', ellipsis: true,
-                  render: (name: string, r: RelationshipItem) => (
-                    <a onClick={() => {
-                      const fake: ConceptItem = {
-                        concept_id: r.related_concept_id,
-                        concept_name: r.related_concept_name,
-                        concept_code: '',
-                        domain_id: '',
-                        vocabulary_id: r.related_vocabulary_id,
-                        concept_class_id: r.related_concept_class_id,
-                        standard_concept: r.related_standard_concept,
-                      };
-                      openDetail(fake);
-                    }}>{name}</a>
-                  ),
-                },
-                ...(!isMobile ? [
-                  { title: t('concept.vocabulary'), dataIndex: 'related_vocabulary_id', width: 100 },
-                  {
-                    title: 'Std', dataIndex: 'related_standard_concept', width: 50,
-                    render: (v: string | null) => v === 'S' ? <Tag color="green">S</Tag> : v ? <Tag>{v}</Tag> : '-',
-                  },
-                ] : []),
-              ]}
-            />
-          )}
-        </TabPane>
-
-        <TabPane tab={<><ApartmentOutlined /> {t('concept.hierarchy')}</>} key="hier">
+        </div>
+      ),
+    },
+    {
+      key: 'rels',
+      label: (
+        <span className="inline-flex items-center gap-1">
+          <Link className="h-3.5 w-3.5" /> {t('concept.relationships')} ({relationships.length})
+        </span>
+      ),
+      children: relationships.length === 0 ? (
+        <Empty description={t('concept.no_relationships')} />
+      ) : (
+        <Table<RelationshipItem>
+          dataSource={relationships}
+          rowKey={(r: RelationshipItem, i?: number) => `${r.relationship_id}-${r.related_concept_id}-${i}`}
+          columns={relColumns}
+          size="small"
+          pagination={{ pageSize: 10 }}
+        />
+      ),
+    },
+    {
+      key: 'hier',
+      label: (
+        <span className="inline-flex items-center gap-1">
+          <GitBranch className="h-3.5 w-3.5" /> {t('concept.hierarchy')}
+        </span>
+      ),
+      children: (
+        <div>
           {ancestors.length > 0 && (
-            <>
-              <Text strong style={{ display: 'block', marginBottom: 4 }}>{t('concept.ancestors')} ({ancestors.length})</Text>
-              <List
-                size="small"
-                dataSource={ancestors}
-                style={{ marginBottom: 16, maxHeight: 200, overflowY: 'auto' }}
-                renderItem={(a) => (
-                  <List.Item style={{ padding: '4px 0' }}>
-                    <Space>
-                      <Tag color="orange">L{a.min_levels_of_separation}</Tag>
-                      <a onClick={() => openDetail({ ...a, domain_id: '', concept_class_id: a.concept_class_id } as any)}>
-                        {a.concept_name}
-                      </a>
-                      <Text type="secondary">{a.vocabulary_id}</Text>
-                    </Space>
-                  </List.Item>
-                )}
-              />
-            </>
+            <div className="mb-4">
+              <span className="block text-sm font-semibold text-text-bright mb-1">{t('concept.ancestors')} ({ancestors.length})</span>
+              <ul className="max-h-[200px] overflow-y-auto space-y-1">
+                {ancestors.map((a, i) => (
+                  <li key={`anc-${a.concept_id}-${i}`} className="flex items-center gap-2 py-1">
+                    <Tag color="orange">L{a.min_levels_of_separation}</Tag>
+                    <a
+                      className="text-emerald-accent hover:underline cursor-pointer text-sm"
+                      onClick={() => openDetail({ ...a, domain_id: '', concept_class_id: a.concept_class_id } as any)}
+                    >
+                      {a.concept_name}
+                    </a>
+                    <span className="text-text-dim text-xs">{a.vocabulary_id}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {descendants.length > 0 && (
-            <>
-              <Text strong style={{ display: 'block', marginBottom: 4 }}>{t('concept.descendants')} ({descendants.length})</Text>
-              <List
-                size="small"
-                dataSource={descendants}
-                style={{ maxHeight: 300, overflowY: 'auto' }}
-                renderItem={(d) => (
-                  <List.Item style={{ padding: '4px 0' }}>
-                    <Space>
-                      <Tag color="cyan">L{d.min_levels_of_separation}</Tag>
-                      <a onClick={() => openDetail({ ...d, domain_id: '', concept_class_id: d.concept_class_id } as any)}>
-                        {d.concept_name}
-                      </a>
-                      <Text type="secondary">{d.vocabulary_id}</Text>
-                    </Space>
-                  </List.Item>
-                )}
-              />
-            </>
+            <div>
+              <span className="block text-sm font-semibold text-text-bright mb-1">{t('concept.descendants')} ({descendants.length})</span>
+              <ul className="max-h-[300px] overflow-y-auto space-y-1">
+                {descendants.map((d, i) => (
+                  <li key={`desc-${d.concept_id}-${i}`} className="flex items-center gap-2 py-1">
+                    <Tag color="cyan">L{d.min_levels_of_separation}</Tag>
+                    <a
+                      className="text-emerald-accent hover:underline cursor-pointer text-sm"
+                      onClick={() => openDetail({ ...d, domain_id: '', concept_class_id: d.concept_class_id } as any)}
+                    >
+                      {d.concept_name}
+                    </a>
+                    <span className="text-text-dim text-xs">{d.vocabulary_id}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {ancestors.length === 0 && descendants.length === 0 && (
             <Empty description={t('concept.no_hierarchy')} />
           )}
-        </TabPane>
+        </div>
+      ),
+    },
+    {
+      key: 'sv',
+      label: (
+        <span className="inline-flex items-center gap-1">
+          <FileText className="h-3.5 w-3.5" /> {t('concept.source_values')} ({sourceValues.length})
+        </span>
+      ),
+      children: sourceValues.length === 0 ? (
+        <Empty description={t('concept.no_source_values')} />
+      ) : (
+        <Table<SourceValueItem>
+          dataSource={sourceValues}
+          rowKey={(r: SourceValueItem, i?: number) => `${r.domain}-${r.source_value}-${i}`}
+          columns={svColumns}
+          size="small"
+          pagination={{ pageSize: 10 }}
+        />
+      ),
+    },
+  ] : [];
 
-        <TabPane tab={<><FileTextOutlined /> {t('concept.source_values')} ({sourceValues.length})</>} key="sv">
-          {sourceValues.length === 0 ? <Empty description={t('concept.no_source_values')} /> : (
-            <Table
-              dataSource={sourceValues}
-              rowKey={(r, i) => `${r.domain}-${r.source_value}-${i}`}
-              size="small"
-              pagination={{ pageSize: 10, size: 'small' }}
-              columns={[
-                { title: t('concept.domain'), dataIndex: 'domain', width: 120 },
-                { title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true },
-                { title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v.toLocaleString() },
-                { title: t('quality.n_persons'), dataIndex: 'n_persons', width: 90, render: (v: number) => v.toLocaleString() },
-              ]}
-            />
-          )}
-        </TabPane>
-      </Tabs>
+  const detailContent = selectedConcept ? (
+    detailLoading ? (
+      <div className="flex justify-center py-10"><Spinner /></div>
+    ) : (
+      <Tabs items={detailTabItems} />
     )
   ) : null;
 
   return (
     <div>
-      <Title level={3} style={{ marginBottom: 16, fontSize: isMobile ? 18 : undefined }}>
+      <h3 className={`font-semibold text-text-bright mb-4 ${isMobile ? 'text-lg' : 'text-xl'}`}>
         {t('concept.title')} — {selectedCdm}
-      </Title>
+      </h3>
 
-      <Row gutter={16}>
+      <div className="grid grid-cols-24 gap-4">
         {/* Search panel */}
-        <Col xs={24} md={selectedConcept && !isMobile ? 14 : 24}>
-          <Card size="small" style={{ marginBottom: 16 }}>
-            <Radio.Group
-              value={searchMode}
-              onChange={(e) => setSearchMode(e.target.value)}
-              style={{ marginBottom: 12 }}
-              optionType="button"
-              buttonStyle="solid"
-            >
-              <Radio.Button value="concept"><SearchOutlined /> {t('concept.by_concept')}</Radio.Button>
-              <Radio.Button value="source"><DatabaseOutlined /> {t('concept.by_source_code')}</Radio.Button>
-            </Radio.Group>
-            <Space wrap style={{ width: '100%' }}>
-              <Input
-                placeholder={searchMode === 'concept' ? t('concept.search_placeholder') : t('concept.search_source_placeholder')}
-                prefix={<SearchOutlined />}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onPressEnter={() => handleSearch(1)}
-                style={{ width: isMobile ? '100%' : 280 }}
-                allowClear
-              />
-              <Select
-                placeholder={t('concept.domain')}
-                value={domainFilter}
-                onChange={setDomainFilter}
-                style={{ width: isMobile ? '100%' : 160 }}
-                allowClear
-                options={domains.map((d) => ({ value: d.domain_id, label: `${d.domain_id} (${d.count.toLocaleString()})` }))}
-              />
+        <div className={selectedConcept && !isMobile ? 'col-span-14' : 'col-span-24'} style={{ gridColumn: selectedConcept && !isMobile ? 'span 14' : 'span 24' }}>
+          <Card size="small" className="mb-4">
+            {/* Search mode toggle */}
+            <div className="flex mb-3">
+              <button
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-l-lg border cursor-pointer transition-colors ${
+                  searchMode === 'concept'
+                    ? 'bg-emerald-accent/20 border-emerald-accent/40 text-emerald-accent'
+                    : 'bg-surface-light border-glass-border text-text-muted hover:text-text-bright'
+                }`}
+                onClick={() => setSearchMode('concept')}
+              >
+                <Search className="h-3.5 w-3.5" /> {t('concept.by_concept')}
+              </button>
+              <button
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-r-lg border border-l-0 cursor-pointer transition-colors ${
+                  searchMode === 'source'
+                    ? 'bg-emerald-accent/20 border-emerald-accent/40 text-emerald-accent'
+                    : 'bg-surface-light border-glass-border text-text-muted hover:text-text-bright'
+                }`}
+                onClick={() => setSearchMode('source')}
+              >
+                <Database className="h-3.5 w-3.5" /> {t('concept.by_source_code')}
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className={isMobile ? 'w-full' : 'w-[280px]'}>
+                <Input
+                  placeholder={searchMode === 'concept' ? t('concept.search_placeholder') : t('concept.search_source_placeholder')}
+                  prefix={<Search className="h-4 w-4" />}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(1); }}
+                />
+              </div>
+              <div className={isMobile ? 'w-full' : 'w-[160px]'}>
+                <Select
+                  placeholder={t('concept.domain')}
+                  value={domainFilter}
+                  onChange={(v) => setDomainFilter(v || undefined)}
+                  allowClear
+                  options={domains.map((d) => ({ value: d.domain_id, label: `${d.domain_id} (${d.count.toLocaleString()})` }))}
+                />
+              </div>
               {searchMode === 'concept' && (
                 <>
-                  <Select
-                    placeholder={t('concept.vocabulary')}
-                    value={vocabFilter}
-                    onChange={setVocabFilter}
-                    style={{ width: isMobile ? '100%' : 180 }}
-                    allowClear
-                    showSearch
-                    filterOption={(input, option) =>
-                      (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                    }
-                    options={vocabs.map((v) => ({ value: v.vocabulary_id, label: `${v.vocabulary_id} (${v.count.toLocaleString()})` }))}
-                  />
+                  <div className={isMobile ? 'w-full' : 'w-[180px]'}>
+                    <Select
+                      placeholder={t('concept.vocabulary')}
+                      value={vocabFilter}
+                      onChange={(v) => setVocabFilter(v || undefined)}
+                      allowClear
+                      options={vocabs.map((v) => ({ value: v.vocabulary_id, label: `${v.vocabulary_id} (${v.count.toLocaleString()})` }))}
+                    />
+                  </div>
                   <Switch
                     checked={standardOnly}
                     onChange={setStandardOnly}
-                    checkedChildren={t('concept.standard_only')}
-                    unCheckedChildren={t('concept.standard_only')}
+                    label={t('concept.standard_only')}
                   />
                 </>
               )}
               {(loading || sourceLoading) ? (
-                <Button danger icon={<StopOutlined />} onClick={cancelSearch} block={isMobile}>
+                <Button variant="danger" icon={<StopCircle className="h-4 w-4" />} onClick={cancelSearch} block={isMobile}>
                   {t('common.cancel')}
                 </Button>
               ) : (
-                <Button type="primary" icon={<SearchOutlined />} onClick={() => handleSearch(1)} block={isMobile}>
+                <Button variant="primary" icon={<Search className="h-4 w-4" />} onClick={() => handleSearch(1)} block={isMobile}>
                   {t('concept.search')}
                 </Button>
               )}
               {searchMode === 'source' && sourceResults.length > 0 && (
                 <Button
-                  icon={<DownloadOutlined />}
+                  icon={<Download className="h-4 w-4" />}
                   onClick={() => authDownload(conceptApi.exportSourceValueUrl(selectedCdm!, query, domainFilter))}
                 >
                   CSV
                 </Button>
               )}
-            </Space>
+            </div>
           </Card>
 
           {searchMode === 'concept' ? (
-            <Table
+            <Table<ConceptItem>
               dataSource={concepts}
               columns={columns}
               rowKey="concept_id"
@@ -502,20 +572,18 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
                 current: page,
                 total,
                 pageSize: 50,
-                showTotal: isMobile ? undefined : (t) => `${t.toLocaleString()} concepts`,
                 onChange: (p) => doSearch(p),
-                size: 'small',
               }}
               onRow={(record) => ({
                 onClick: () => openDetail(record),
-                style: { cursor: 'pointer' },
+                className: 'cursor-pointer',
               })}
             />
           ) : (
-            <Table
+            <Table<SourceValueSearchResult>
               dataSource={sourceResults}
               columns={sourceColumns}
-              rowKey={(r, i) => `${r.domain}-${r.source_value}-${r.mapped_concept_id}-${i}`}
+              rowKey={(r: SourceValueSearchResult, i?: number) => `${r.domain}-${r.source_value}-${r.mapped_concept_id}-${i}`}
               loading={sourceLoading}
               size="small"
               scroll={isMobile ? { x: 400 } : undefined}
@@ -523,48 +591,49 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
                 current: sourcePage,
                 total: sourceTotal,
                 pageSize: 50,
-                showTotal: isMobile ? undefined : (total) => `${total.toLocaleString()} results`,
                 onChange: (p) => doSourceSearch(p),
-                size: 'small',
               }}
             />
           )}
-        </Col>
+        </div>
 
-        {/* Detail panel — desktop: inline side panel */}
+        {/* Detail panel -- desktop: inline side panel */}
         {selectedConcept && !isMobile && (
-          <Col md={10}>
+          <div style={{ gridColumn: 'span 10' }}>
             <Card
               size="small"
               title={
-                <Space>
+                <div className="flex items-center gap-2">
                   <Tag color="blue">{selectedConcept.concept_id}</Tag>
-                  <Text strong ellipsis>{selectedConcept.concept_name}</Text>
-                </Space>
+                  <span className="font-semibold text-text-bright truncate">{selectedConcept.concept_name}</span>
+                </div>
               }
-              extra={<Button type="text" size="small" onClick={() => setSelectedConcept(null)}>{t('common.close')}</Button>}
+              extra={
+                <Button variant="text" size="small" onClick={() => setSelectedConcept(null)}>
+                  {t('common.close')}
+                </Button>
+              }
             >
               {detailContent}
             </Card>
-          </Col>
+          </div>
         )}
-      </Row>
+      </div>
 
-      {/* Detail panel — mobile: bottom drawer */}
+      {/* Detail panel -- mobile: drawer */}
       {isMobile && (
         <Drawer
           open={!!selectedConcept}
           onClose={() => setSelectedConcept(null)}
-          placement="bottom"
-          height="85vh"
           title={
             selectedConcept ? (
-              <Space>
+              <div className="flex items-center gap-2">
                 <Tag color="blue">{selectedConcept.concept_id}</Tag>
-                <Text strong ellipsis>{selectedConcept.concept_name}</Text>
-              </Space>
-            ) : null
+                <span className="font-semibold text-text-bright truncate">{selectedConcept.concept_name}</span>
+              </div>
+            ) : undefined
           }
+          width="max-w-full"
         >
           {detailContent}
         </Drawer>

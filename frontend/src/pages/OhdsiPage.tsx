@@ -1,32 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Card,
-  Button,
-  Input,
-  Row,
-  Col,
-  Badge,
-  Tabs,
-  Typography,
-  Space,
-  message,
-  Breadcrumb,
-  List,
-  Tag,
-} from 'antd';
+  Card, Button, Input, Tabs, Tag, Badge, Spinner,
+} from '../components/ui';
+import type { TabItem } from '../components/ui';
+import { useToast } from '../components/ui';
 import {
-  PlayCircleOutlined,
-  StopOutlined,
-  FolderOutlined,
-  FileOutlined,
-  DownloadOutlined,
-  HomeOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
+  Play, StopCircle, Folder, File, Download, Home, RefreshCw,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ohdsiApi, cdmApi, authDownload } from '../api/client';
-
-const { Text, Title } = Typography;
 
 interface Props {
   selectedCdm: string | null;
@@ -53,11 +35,18 @@ const SERVICES = [
   { key: 'cdmonboarding', label: 'CDM Onboarding' },
 ];
 
-const STATUS_COLORS: Record<ServiceStatus, string> = {
+const STATUS_BADGE: Record<ServiceStatus, 'default' | 'processing' | 'success' | 'error'> = {
   idle: 'default',
   running: 'processing',
   done: 'success',
   error: 'error',
+};
+
+const STATUS_TAG_COLOR: Record<ServiceStatus, 'orange' | 'green' | 'red' | 'default'> = {
+  idle: 'default',
+  running: 'orange',
+  done: 'green',
+  error: 'red',
 };
 
 function formatSize(bytes: number | null): string {
@@ -69,6 +58,7 @@ function formatSize(bytes: number | null): string {
 
 export default function OhdsiPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
+  const toast = useToast();
 
   // Config form
   const [resultsSchema, setResultsSchema] = useState('omop_cdm');
@@ -232,7 +222,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
 
   const handleRun = async (service: string) => {
     if (!selectedCdm) {
-      message.warning(t('ohdsi.select_cdm'));
+      toast.warning(t('ohdsi.select_cdm'));
       return;
     }
 
@@ -257,7 +247,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
       startSSE(service);
     } catch (err: any) {
       const detail = err.response?.data?.detail || err.message;
-      message.error(detail);
+      toast.error(detail);
       setServices((prev) => ({
         ...prev,
         [service]: { status: 'error', logs: [detail] },
@@ -268,9 +258,9 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   const handleStop = async (service: string) => {
     try {
       await ohdsiApi.stop(service);
-      message.success(t('ohdsi.stopped'));
+      toast.success(t('ohdsi.stopped'));
     } catch (err: any) {
-      message.error(err.response?.data?.detail || err.message);
+      toast.error(err.response?.data?.detail || err.message);
     }
   };
 
@@ -285,215 +275,197 @@ export default function OhdsiPage({ selectedCdm }: Props) {
 
   if (!selectedCdm) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <Title level={4} type="secondary">{t('ohdsi.select_cdm')}</Title>
+      <div className="py-10 text-center">
+        <h4 className="text-lg font-semibold text-text-dim">{t('ohdsi.select_cdm')}</h4>
       </div>
     );
   }
 
+  const logTabItems: TabItem[] = SERVICES.map(({ key, label }) => {
+    const status = getStatus(key);
+    return {
+      key,
+      label: (
+        <span className="inline-flex items-center gap-1.5">
+          <Badge status={STATUS_BADGE[status]} />
+          {label}
+        </span>
+      ),
+      children: (
+        <div className="h-[300px] overflow-auto bg-deep-base text-text-bright font-mono text-xs p-3 rounded mb-3">
+          {getLogs(key).length === 0 ? (
+            <span className="text-text-dim">{t('ohdsi.no_logs')}</span>
+          ) : (
+            getLogs(key).map((line, i) => (
+              <div key={i} className="whitespace-pre-wrap break-all">
+                {line}
+              </div>
+            ))
+          )}
+          <div ref={logEndRef} />
+        </div>
+      ),
+    };
+  });
+
   return (
     <div>
-      <Title level={3} style={{ marginBottom: 16 }}>{t('ohdsi.title')}</Title>
+      <h3 className="text-xl font-semibold text-text-bright mb-4">{t('ohdsi.title')}</h3>
 
-      <Row gutter={16}>
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,2.5fr)] gap-4">
         {/* Configuration panel */}
-        <Col xs={24} md={8} lg={6}>
-          <Card title={t('ohdsi.configuration')} size="small" style={{ marginBottom: 16 }}>
-            <Space direction="vertical" style={{ width: '100%' }} size="small">
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>{t('ohdsi.results_schema')}</Text>
-                <Input size="small" value={resultsSchema} onChange={(e) => setResultsSchema(e.target.value)} />
-              </div>
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>{t('ohdsi.vocab_schema')}</Text>
-                <Input size="small" value={vocabSchema} onChange={(e) => setVocabSchema(e.target.value)} />
-              </div>
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>{t('ohdsi.cdm_version')}</Text>
-                <Input size="small" value={cdmVersion} onChange={(e) => setCdmVersion(e.target.value)} />
-              </div>
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>{t('ohdsi.source_name')}</Text>
-                <Input size="small" value={cdmSourceName} onChange={(e) => setCdmSourceName(e.target.value)} />
-              </div>
-            </Space>
-          </Card>
-        </Col>
+        <Card title={t('ohdsi.configuration')} size="small" className="mb-4 md:mb-0">
+          <div className="flex flex-col gap-3">
+            <div>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.results_schema')}</span>
+              <Input value={resultsSchema} onChange={(e) => setResultsSchema(e.target.value)} />
+            </div>
+            <div>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.vocab_schema')}</span>
+              <Input value={vocabSchema} onChange={(e) => setVocabSchema(e.target.value)} />
+            </div>
+            <div>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.cdm_version')}</span>
+              <Input value={cdmVersion} onChange={(e) => setCdmVersion(e.target.value)} />
+            </div>
+            <div>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.source_name')}</span>
+              <Input value={cdmSourceName} onChange={(e) => setCdmSourceName(e.target.value)} />
+            </div>
+          </div>
+        </Card>
 
         {/* Services grid */}
-        <Col xs={24} md={16} lg={18}>
-          <Row gutter={[12, 12]}>
-            {SERVICES.map(({ key, label }) => {
-              const status = getStatus(key);
-              const isRunning = status === 'running';
-              return (
-                <Col xs={12} sm={12} md={6} key={key}>
-                  <Card
-                    size="small"
-                    style={{ textAlign: 'center' }}
-                    styles={{ body: { padding: '16px 12px' } }}
-                  >
-                    <Badge status={STATUS_COLORS[status] as any} />
-                    <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>{label}</div>
-                    <Tag color={
-                      status === 'running' ? 'orange' :
-                      status === 'done' ? 'green' :
-                      status === 'error' ? 'red' : 'default'
-                    } style={{ marginBottom: 8 }}>
-                      {t(`ohdsi.status_${status}`)}
-                    </Tag>
-                    <div>
-                      {isRunning ? (
-                        <Button
-                          danger
-                          size="small"
-                          icon={<StopOutlined />}
-                          onClick={() => handleStop(key)}
-                        >
-                          Stop
-                        </Button>
-                      ) : (
-                        <Button
-                          type="primary"
-                          size="small"
-                          icon={<PlayCircleOutlined />}
-                          onClick={() => handleRun(key)}
-                        >
-                          {t('ohdsi.run')}
-                        </Button>
-                      )}
-                    </div>
-                  </Card>
-                </Col>
-              );
-            })}
-          </Row>
-        </Col>
-      </Row>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {SERVICES.map(({ key, label }) => {
+            const status = getStatus(key);
+            const isRunning = status === 'running';
+            return (
+              <Card key={key} size="small" className="text-center">
+                <div className="flex flex-col items-center gap-2">
+                  <Badge status={STATUS_BADGE[status]} />
+                  <div className="font-semibold text-text-bright text-[13px]">{label}</div>
+                  <Tag color={STATUS_TAG_COLOR[status]}>
+                    {t(`ohdsi.status_${status}`)}
+                  </Tag>
+                  <div>
+                    {isRunning ? (
+                      <Button
+                        variant="danger"
+                        size="small"
+                        icon={<StopCircle className="h-3.5 w-3.5" />}
+                        onClick={() => handleStop(key)}
+                      >
+                        Stop
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="primary"
+                        size="small"
+                        icon={<Play className="h-3.5 w-3.5" />}
+                        onClick={() => handleRun(key)}
+                      >
+                        {t('ohdsi.run')}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Logs section */}
       <Card
         title={t('ohdsi.logs')}
         size="small"
-        style={{ marginTop: 16 }}
-        styles={{ body: { padding: 0 } }}
+        className="mt-4"
       >
         <Tabs
+          items={logTabItems}
           activeKey={activeLogTab}
           onChange={setActiveLogTab}
-          size="small"
-          style={{ padding: '0 12px' }}
-          items={SERVICES.map(({ key, label }) => {
-            const status = getStatus(key);
-            return {
-              key,
-              label: (
-                <span>
-                  <Badge
-                    status={STATUS_COLORS[status] as any}
-                    style={{ marginRight: 4 }}
-                  />
-                  {label}
-                </span>
-              ),
-              children: (
-                <div
-                  style={{
-                    height: 300,
-                    overflow: 'auto',
-                    background: '#0B0F1A',
-                    color: '#F8FAFC',
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    padding: 12,
-                    borderRadius: 4,
-                    marginBottom: 12,
-                  }}
-                >
-                  {getLogs(key).length === 0 ? (
-                    <Text type="secondary" style={{ color: '#666' }}>
-                      {t('ohdsi.no_logs')}
-                    </Text>
-                  ) : (
-                    getLogs(key).map((line, i) => (
-                      <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                        {line}
-                      </div>
-                    ))
-                  )}
-                  <div ref={logEndRef} />
-                </div>
-              ),
-            };
-          })}
         />
       </Card>
 
       {/* File browser */}
       <Card
         title={
-          <Space>
+          <div className="flex items-center gap-2">
             <span>{t('ohdsi.results')}</span>
             <Button
               size="small"
-              icon={<ReloadOutlined />}
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
               onClick={() => loadFiles(currentPath)}
             />
-          </Space>
+          </div>
         }
         size="small"
-        style={{ marginTop: 16 }}
+        className="mt-4"
       >
-        <Breadcrumb style={{ marginBottom: 12 }}>
-          <Breadcrumb.Item>
-            <a onClick={() => loadFiles('')}>
-              <HomeOutlined /> output
-            </a>
-          </Breadcrumb.Item>
+        {/* Breadcrumb */}
+        <nav className="flex items-center gap-1 text-sm mb-3 flex-wrap">
+          <a
+            className="inline-flex items-center gap-1 text-emerald-accent hover:underline cursor-pointer"
+            onClick={() => loadFiles('')}
+          >
+            <Home className="h-3.5 w-3.5" /> output
+          </a>
           {pathParts.map((part, idx) => {
             const subPath = pathParts.slice(0, idx + 1).join('/');
             return (
-              <Breadcrumb.Item key={subPath}>
-                <a onClick={() => loadFiles(subPath)}>{part}</a>
-              </Breadcrumb.Item>
+              <span key={subPath} className="inline-flex items-center gap-1">
+                <span className="text-text-dim">/</span>
+                <a
+                  className="text-emerald-accent hover:underline cursor-pointer"
+                  onClick={() => loadFiles(subPath)}
+                >
+                  {part}
+                </a>
+              </span>
             );
           })}
-        </Breadcrumb>
+        </nav>
 
-        <List
-          loading={loadingFiles}
-          size="small"
-          dataSource={files}
-          locale={{ emptyText: t('ohdsi.no_files') }}
-          renderItem={(file) => (
-            <List.Item
-              style={{ cursor: 'pointer', padding: '4px 8px' }}
-              onClick={() => {
-                if (file.is_dir) {
-                  loadFiles(file.path);
-                }
-              }}
-              actions={
-                !file.is_dir
-                  ? [
-                      <a
-                        onClick={(e) => { e.stopPropagation(); authDownload(ohdsiApi.fileUrl(file.path)); }}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <DownloadOutlined />
-                      </a>,
-                    ]
-                  : undefined
-              }
-            >
-              <List.Item.Meta
-                avatar={file.is_dir ? <FolderOutlined style={{ color: '#faad14' }} /> : <FileOutlined />}
-                title={file.name}
-                description={file.is_dir ? null : formatSize(file.size)}
-              />
-            </List.Item>
-          )}
-        />
+        {/* File list */}
+        {loadingFiles ? (
+          <div className="flex justify-center py-6"><Spinner /></div>
+        ) : files.length === 0 ? (
+          <div className="text-center py-6 text-text-dim text-sm">{t('ohdsi.no_files')}</div>
+        ) : (
+          <ul className="divide-y divide-glass-border">
+            {files.map((file) => (
+              <li
+                key={file.path}
+                className="flex items-center justify-between py-2 px-2 hover:bg-surface-light/50 rounded cursor-pointer transition-colors"
+                onClick={() => { if (file.is_dir) loadFiles(file.path); }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  {file.is_dir ? (
+                    <Folder className="h-4 w-4 text-yellow-400 shrink-0" />
+                  ) : (
+                    <File className="h-4 w-4 text-text-dim shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-sm text-text-bright truncate">{file.name}</div>
+                    {!file.is_dir && file.size !== null && (
+                      <div className="text-xs text-text-dim">{formatSize(file.size)}</div>
+                    )}
+                  </div>
+                </div>
+                {!file.is_dir && (
+                  <a
+                    className="text-text-dim hover:text-emerald-accent cursor-pointer shrink-0 ml-2"
+                    onClick={(e) => { e.stopPropagation(); authDownload(ohdsiApi.fileUrl(file.path)); }}
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
     </div>
   );
