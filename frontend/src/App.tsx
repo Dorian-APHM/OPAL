@@ -6,6 +6,7 @@ import { useAuth } from './auth/KeycloakContext';
 import { colors, typography, radii } from './theme/tokens';
 
 // Lazy-loaded pages for code splitting
+const LandingPage = lazy(() => import('./pages/LandingPage'));
 const QualityPage = lazy(() => import('./pages/QualityPage'));
 const CohortPage = lazy(() => import('./pages/CohortPage'));
 const MappingPage = lazy(() => import('./pages/MappingPage'));
@@ -152,7 +153,11 @@ export default function App() {
   if (!authenticated) {
     return (
       <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}><Spin size="large" /></div>}>
-        <LoginPage onSignIn={login} />
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/landing" element={<LandingPage />} />
+          <Route path="*" element={<LoginPage onSignIn={login} />} />
+        </Routes>
       </Suspense>
     );
   }
