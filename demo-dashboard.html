@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OPAL — Dashboard Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --deep-base: #0B0F1A;
+    --surface: #121826;
+    --surface-light: #1c2539;
+    --surface-dark: #080b13;
+    --emerald: #10B981;
+    --emerald-light: #34D399;
+    --teal: #14b8a6;
+    --text-bright: #F8FAFC;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --border-subtle: rgba(255,255,255,0.03);
+    --border-glow: rgba(16,185,129,0.15);
+    --glass-bg: rgba(18,24,38,0.7);
+    --glass-border: rgba(255,255,255,0.06);
+    --emerald-glow: rgba(16,185,129,0.2);
+    --emerald-glow-strong: rgba(16,185,129,0.6);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--deep-base);
+    color: var(--text-bright);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Glass Nav ── */
+  .glass-nav {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--glass-border);
+    padding: 0 32px;
+    height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 20px; font-weight: 700;
+  }
+  .nav-brand .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--emerald), var(--teal));
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 16px; color: var(--deep-base);
+    box-shadow: 0 0 20px var(--emerald-glow);
+    animation: opal-pulse 2.5s ease-in-out infinite;
+  }
+  .nav-links { display: flex; gap: 8px; }
+  .nav-link {
+    padding: 8px 16px; border-radius: 10px;
+    color: var(--text-dim); font-size: 14px; font-weight: 500;
+    text-decoration: none; transition: all 0.2s;
+    cursor: pointer;
+  }
+  .nav-link:hover { color: var(--emerald); background: rgba(16,185,129,0.08); }
+  .nav-link.active {
+    color: var(--emerald);
+    background: rgba(16,185,129,0.12);
+    border: 1px solid rgba(16,185,129,0.2);
+  }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+  .nav-cdm {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 10px;
+    background: var(--surface-light); border: 1px solid var(--glass-border);
+    font-size: 13px; color: var(--text-muted);
+  }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--emerald);
+    box-shadow: 0 0 8px var(--emerald-glow-strong);
+    animation: live-pulse 1.5s ease-in-out infinite;
+  }
+
+  /* ── Layout ── */
+  .layout { display: flex; min-height: calc(100vh - 64px); }
+  .sidebar {
+    width: 240px; padding: 24px 16px;
+    background: var(--surface);
+    border-right: 1px solid var(--border-subtle);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .sidebar-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-radius: 12px;
+    color: var(--text-dim); font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .sidebar-item:hover { color: var(--text-muted); background: var(--surface-light); }
+  .sidebar-item.active {
+    color: var(--emerald);
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.15);
+  }
+  .sidebar-item svg { width: 18px; height: 18px; }
+  .sidebar-section {
+    font-size: 11px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 20px 14px 8px;
+  }
+  .main { flex: 1; padding: 32px; overflow-y: auto; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border-radius: 24px;
+    border: 1px solid var(--border-subtle);
+    box-shadow: 10px 10px 20px var(--surface-dark), -5px -5px 15px var(--surface-light);
+    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    padding: 24px;
+  }
+  .card:hover {
+    box-shadow: 12px 12px 24px var(--surface-dark), -6px -6px 18px var(--surface-light), 0 0 30px var(--emerald-glow);
+    border-color: var(--border-glow);
+  }
+  .card.accent-top { border-top: 2px solid var(--emerald); }
+  .card.accent-left { border-left: 3px solid var(--emerald); }
+  .card-title {
+    font-size: 16px; font-weight: 600; color: var(--text-bright);
+    margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+  }
+
+  /* ── Stats Grid ── */
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 28px; }
+  .stat-card { text-align: center; }
+  .stat-value {
+    font-size: 28px; font-weight: 700; color: var(--text-bright);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-value.emerald {
+    background: linear-gradient(135deg, #10B981, #14b8a6);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .stat-label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .stat-change {
+    font-size: 12px; margin-top: 6px;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 20px;
+  }
+  .stat-change.up { background: rgba(16,185,129,0.12); color: var(--emerald-light); }
+  .stat-change.down { background: rgba(239,68,68,0.12); color: #f87171; }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 18px; border-radius: 12px; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--emerald), var(--teal));
+    color: var(--deep-base);
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+  }
+  .btn-primary:hover {
+    box-shadow: 0 6px 20px rgba(16,185,129,0.4);
+    transform: translateY(-1px);
+  }
+  .btn-ghost {
+    background: rgba(16,185,129,0.1);
+    color: var(--emerald);
+    border: 1px solid rgba(16,185,129,0.3);
+  }
+  .btn-ghost:hover { background: rgba(16,185,129,0.2); }
+  .btn-default {
+    background: var(--surface-light);
+    color: var(--text-muted);
+    border: 1px solid var(--glass-border);
+  }
+  .btn-default:hover { color: var(--emerald); border-color: var(--border-glow); }
+
+  /* ── Tags ── */
+  .tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 12px; font-weight: 500;
+  }
+  .tag-emerald { background: rgba(16,185,129,0.12); color: #34D399; border: 1px solid rgba(16,185,129,0.25); }
+  .tag-blue { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
+  .tag-orange { background: rgba(251,146,60,0.12); color: #fb923c; border: 1px solid rgba(251,146,60,0.25); }
+  .tag-purple { background: rgba(168,85,247,0.12); color: #c084fc; border: 1px solid rgba(168,85,247,0.25); }
+  .tag-red { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+
+  /* ── Table ── */
+  .table { width: 100%; border-collapse: collapse; }
+  .table th {
+    text-align: left; padding: 10px 16px;
+    font-size: 12px; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--glass-border);
+  }
+  .table td {
+    padding: 12px 16px; font-size: 14px; color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .table tr:hover td { background: rgba(16,185,129,0.03); color: var(--text-bright); }
+
+  /* ── Chart placeholder ── */
+  .chart-area {
+    height: 200px; border-radius: 16px;
+    background: linear-gradient(180deg, rgba(16,185,129,0.08) 0%, transparent 100%);
+    border: 1px dashed rgba(16,185,129,0.15);
+    display: flex; align-items: flex-end; justify-content: center;
+    gap: 6px; padding: 20px;
+  }
+  .chart-bar {
+    width: 32px; border-radius: 6px 6px 0 0;
+    background: linear-gradient(180deg, var(--emerald), rgba(16,185,129,0.3));
+    transition: all 0.3s;
+  }
+  .chart-bar:hover {
+    background: linear-gradient(180deg, var(--emerald-light), var(--emerald));
+    box-shadow: 0 0 16px var(--emerald-glow);
+  }
+
+  /* ── Progress ── */
+  .progress-bar {
+    height: 6px; border-radius: 3px;
+    background: var(--surface-light); overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; border-radius: 3px;
+    background: linear-gradient(90deg, var(--emerald), var(--teal));
+    box-shadow: 0 0 8px var(--emerald-glow);
+    transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* ── Input ── */
+  .input {
+    padding: 8px 14px; border-radius: 10px;
+    background: var(--deep-base); border: 1px solid var(--glass-border);
+    color: var(--text-bright); font-family: inherit; font-size: 14px;
+    outline: none; transition: all 0.2s; width: 100%;
+  }
+  .input::placeholder { color: var(--text-dim); }
+  .input:focus {
+    border-color: rgba(16,185,129,0.4);
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
+  }
+
+  /* ── Alert ── */
+  .alert {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 14px 18px; border-radius: 12px;
+  }
+  .alert-success {
+    background: rgba(16,185,129,0.08);
+    border: 1px solid rgba(16,185,129,0.2);
+    color: var(--emerald-light);
+  }
+  .alert-info {
+    background: rgba(59,130,246,0.08);
+    border: 1px solid rgba(59,130,246,0.2);
+    color: #60a5fa;
+  }
+
+  /* ── Section Header ── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .section-title { font-size: 22px; font-weight: 700; }
+  .section-subtitle { font-size: 14px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── Grid layouts ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+
+  /* ── Animations ── */
+  @keyframes opal-pulse {
+    0%, 100% { box-shadow: 0 0 20px var(--emerald-glow); }
+    50% { box-shadow: 0 0 30px var(--emerald-glow-strong), 0 0 60px var(--emerald-glow); }
+  }
+  @keyframes live-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fadeInUp 0.5s ease-out both; }
+  .fade-in-d1 { animation-delay: 0.1s; }
+  .fade-in-d2 { animation-delay: 0.2s; }
+  .fade-in-d3 { animation-delay: 0.3s; }
+  .fade-in-d4 { animation-delay: 0.4s; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--surface-light); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* ── Tooltip ── */
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  /* ── Donut chart ── */
+  .donut-container { display: flex; align-items: center; justify-content: center; gap: 24px; }
+  .donut { position: relative; width: 140px; height: 140px; }
+  .donut svg { transform: rotate(-90deg); }
+  .donut-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .donut-value { font-size: 24px; font-weight: 700; color: var(--text-bright); }
+  .donut-label { font-size: 11px; color: var(--text-dim); }
+  .legend { display: flex; flex-direction: column; gap: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+
+<!-- ── Navigation ── -->
+<nav class="glass-nav">
+  <div class="nav-brand">
+    <div class="logo">O</div>
+    <span>OPAL</span>
+  </div>
+  <div class="nav-links">
+    <a class="nav-link active">Dashboard</a>
+    <a class="nav-link">Quality</a>
+    <a class="nav-link">Cohorts</a>
+    <a class="nav-link">Mapping</a>
+    <a class="nav-link">Concepts</a>
+  </div>
+  <div class="nav-right">
+    <div class="nav-cdm">
+      <div class="live-dot"></div>
+      <span>SYNTHEA_CDM</span>
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l3 3 3-3"/></svg>
+    </div>
+    <div style="width:32px;height:32px;border-radius:10px;background:var(--surface-light);border:1px solid var(--glass-border);display:flex;align-items:center;justify-content:center;">
+      <svg width="16" height="16" fill="none" stroke="var(--text-dim)" stroke-width="2">
+        <circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-6 6-6s6 2.7 6 6"/>
+      </svg>
+    </div>
+  </div>
+</nav>
+
+<div class="layout">
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-section">Analytics</div>
+    <div class="sidebar-item active">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Dashboard
+    </div>
+    <div class="sidebar-item">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      Data Quality
+    </div>
+    <div class="sidebar-item">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Cohort Builder
+    </div>
+    <div class="sidebar-item">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+      Mapping
+    </div>
+    <div class="sidebar-section">Explore</div>
+    <div class="sidebar-item">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      Concept Explorer
+    </div>
+    <div class="sidebar-section">Configuration</div>
+    <div class="sidebar-item">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+      CDM Sources
+    </div>
+    <div class="sidebar-item">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+      Settings
+    </div>
+  </aside>
+
+  <!-- ── Main Content ── -->
+  <main class="main">
+    <!-- Header -->
+    <div class="section-header fade-in">
+      <div>
+        <div class="section-title">Dashboard Overview</div>
+        <div class="section-subtitle">SYNTHEA_CDM &mdash; Last refreshed 2 hours ago</div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-default">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5"/><path d="M20 12a8 8 0 01-14.93 4"/></svg>
+          Refresh
+        </button>
+        <button class="btn btn-primary">
+          <svg width="16" height="16" fill="none" stroke="var(--deep-base)" stroke-width="2"><path d="M12 5v14m-7-7h14"/></svg>
+          New Analysis
+        </button>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="card stat-card fade-in fade-in-d1">
+        <div class="stat-value emerald">2.4M</div>
+        <div class="stat-label">Total Patients</div>
+        <div class="stat-change up">&uarr; 12.5%</div>
+      </div>
+      <div class="card stat-card fade-in fade-in-d2">
+        <div class="stat-value">18.7M</div>
+        <div class="stat-label">Observations</div>
+        <div class="stat-change up">&uarr; 8.3%</div>
+      </div>
+      <div class="card stat-card fade-in fade-in-d3">
+        <div class="stat-value">94.2%</div>
+        <div class="stat-label">Data Quality Score</div>
+        <div class="stat-change up">&uarr; 2.1%</div>
+      </div>
+      <div class="card stat-card fade-in fade-in-d4">
+        <div class="stat-value">7</div>
+        <div class="stat-label">Active Cohorts</div>
+        <div class="stat-change down">&darr; 1</div>
+      </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="grid-2" style="margin-bottom:24px;">
+      <div class="card accent-top fade-in fade-in-d2">
+        <div class="card-title">
+          <svg width="18" height="18" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M3 17l4-4 4 4 4-8 4 4"/></svg>
+          Domain Record Distribution
+        </div>
+        <div class="chart-area">
+          <div class="chart-bar" style="height:85%"></div>
+          <div class="chart-bar" style="height:65%"></div>
+          <div class="chart-bar" style="height:90%"></div>
+          <div class="chart-bar" style="height:45%"></div>
+          <div class="chart-bar" style="height:70%"></div>
+          <div class="chart-bar" style="height:55%"></div>
+          <div class="chart-bar" style="height:80%"></div>
+          <div class="chart-bar" style="height:35%"></div>
+          <div class="chart-bar" style="height:60%"></div>
+          <div class="chart-bar" style="height:75%"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:11px;color:var(--text-dim)">
+          <span>Condition</span><span>Drug</span><span>Procedure</span><span>Measure</span><span>Observ.</span>
+          <span>Visit</span><span>Device</span><span>Specimen</span><span>Death</span><span>Note</span>
+        </div>
+      </div>
+
+      <div class="card accent-top fade-in fade-in-d3">
+        <div class="card-title">
+          <svg width="18" height="18" fill="none" stroke="var(--emerald)" stroke-width="2"><circle cx="9" cy="9" r="7"/><path d="M9 2v7l5 3"/></svg>
+          Quality Score Breakdown
+        </div>
+        <div class="donut-container" style="margin-top:16px;">
+          <div class="donut">
+            <svg width="140" height="140" viewBox="0 0 140 140">
+              <circle cx="70" cy="70" r="56" fill="none" stroke="var(--surface-light)" stroke-width="14"/>
+              <circle cx="70" cy="70" r="56" fill="none" stroke="#10B981" stroke-width="14"
+                stroke-dasharray="264 88" stroke-linecap="round"/>
+              <circle cx="70" cy="70" r="56" fill="none" stroke="#3b82f6" stroke-width="14"
+                stroke-dasharray="60 292" stroke-dashoffset="-264" stroke-linecap="round"/>
+              <circle cx="70" cy="70" r="56" fill="none" stroke="#f59e0b" stroke-width="14"
+                stroke-dasharray="28 324" stroke-dashoffset="-324" stroke-linecap="round"/>
+            </svg>
+            <div class="donut-center">
+              <div class="donut-value">94.2</div>
+              <div class="donut-label">Overall</div>
+            </div>
+          </div>
+          <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#10B981"></div>Completeness — 96.1%</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>Conformance — 91.8%</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Plausibility — 89.4%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert -->
+    <div class="alert alert-success fade-in fade-in-d3" style="margin-bottom:24px;">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        <div style="font-weight:600;margin-bottom:2px;">Analysis Complete</div>
+        <div style="font-size:13px;opacity:0.8;">Latest quality snapshot captured successfully on March 10, 2026 at 14:32 UTC.</div>
+      </div>
+    </div>
+
+    <!-- Recent Activity Table -->
+    <div class="card fade-in fade-in-d4">
+      <div class="card-title" style="justify-content:space-between;">
+        <span style="display:flex;align-items:center;gap:8px;">
+          <svg width="18" height="18" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          Recent Activity
+        </span>
+        <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;">View All</button>
+      </div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Type</th>
+            <th>Details</th>
+            <th>Status</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color:var(--text-bright)">Quality Snapshot</td>
+            <td><span class="tag tag-emerald">Analysis</span></td>
+            <td>Full CDM quality analysis — v12</td>
+            <td><span class="tag tag-emerald">&#x2713; Complete</span></td>
+            <td class="mono" style="font-size:12px;">2h ago</td>
+          </tr>
+          <tr>
+            <td style="color:var(--text-bright)">Cohort Created</td>
+            <td><span class="tag tag-blue">Cohort</span></td>
+            <td>T2DM Patients with HbA1c &gt; 9%</td>
+            <td><span class="tag tag-emerald">&#x2713; Active</span></td>
+            <td class="mono" style="font-size:12px;">5h ago</td>
+          </tr>
+          <tr>
+            <td style="color:var(--text-bright)">Mapping Applied</td>
+            <td><span class="tag tag-purple">Mapping</span></td>
+            <td>24 source concepts &rarr; standard vocabulary</td>
+            <td><span class="tag tag-emerald">&#x2713; Applied</span></td>
+            <td class="mono" style="font-size:12px;">1d ago</td>
+          </tr>
+          <tr>
+            <td style="color:var(--text-bright)">CDM Connected</td>
+            <td><span class="tag tag-orange">Config</span></td>
+            <td>SYNTHEA_CDM — PostgreSQL 15</td>
+            <td><span class="tag tag-emerald">&#x2713; Connected</span></td>
+            <td class="mono" style="font-size:12px;">3d ago</td>
+          </tr>
+          <tr>
+            <td style="color:var(--text-bright)">Comparison Report</td>
+            <td><span class="tag tag-blue">Analysis</span></td>
+            <td>v11 vs v12 quality delta</td>
+            <td><span class="tag tag-orange">Pending</span></td>
+            <td class="mono" style="font-size:12px;">3d ago</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Bottom row -->
+    <div class="grid-3" style="margin-top:24px;">
+      <div class="card accent-left fade-in fade-in-d3">
+        <div class="card-title">Top Domains</div>
+        <div style="display:flex;flex-direction:column;gap:14px;">
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+              <span style="color:var(--text-muted)">Condition</span>
+              <span class="mono" style="color:var(--emerald);font-size:12px;">4.2M</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" style="width:92%"></div></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+              <span style="color:var(--text-muted)">Drug Exposure</span>
+              <span class="mono" style="color:var(--emerald);font-size:12px;">3.8M</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" style="width:83%"></div></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+              <span style="color:var(--text-muted)">Procedure</span>
+              <span class="mono" style="color:var(--emerald);font-size:12px;">2.1M</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" style="width:58%"></div></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+              <span style="color:var(--text-muted)">Measurement</span>
+              <span class="mono" style="color:var(--emerald);font-size:12px;">1.9M</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" style="width:52%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card accent-left fade-in fade-in-d3">
+        <div class="card-title">Active Cohorts</div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:14px;color:var(--text-bright)">T2DM + HbA1c &gt; 9%</div>
+              <div style="font-size:12px;color:var(--text-dim)">1,247 patients</div>
+            </div>
+            <span class="tag tag-emerald">Active</span>
+          </div>
+          <div style="border-top:1px solid var(--border-subtle);padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:14px;color:var(--text-bright)">Heart Failure + Age &gt; 65</div>
+              <div style="font-size:12px;color:var(--text-dim)">892 patients</div>
+            </div>
+            <span class="tag tag-emerald">Active</span>
+          </div>
+          <div style="border-top:1px solid var(--border-subtle);padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:14px;color:var(--text-bright)">CKD Stage 3+</div>
+              <div style="font-size:12px;color:var(--text-dim)">634 patients</div>
+            </div>
+            <span class="tag tag-blue">Draft</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card accent-left fade-in fade-in-d4">
+        <div class="card-title">Quick Actions</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <button class="btn btn-primary" style="width:100%;justify-content:center;">
+            <svg width="16" height="16" fill="none" stroke="var(--deep-base)" stroke-width="2"><path d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Run Quality Check
+          </button>
+          <button class="btn btn-ghost" style="width:100%;justify-content:center;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0"/></svg>
+            New Cohort
+          </button>
+          <button class="btn btn-default" style="width:100%;justify-content:center;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+            Start Mapping
+          </button>
+          <button class="btn btn-default" style="width:100%;justify-content:center;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+            Add CDM Source
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>
