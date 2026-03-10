@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Select, Switch, Tooltip, Tag } from 'antd';
+import { Layout, Menu, Select, Tooltip, Tag } from 'antd';
 import {
   DashboardOutlined,
   TeamOutlined,
@@ -8,12 +8,10 @@ import {
   DatabaseOutlined,
   SettingOutlined,
   GlobalOutlined,
-  BulbOutlined,
   BookOutlined,
   ExperimentOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  UserOutlined,
   LogoutOutlined,
   AuditOutlined,
   TeamOutlined as UsersOutlined,
@@ -22,7 +20,6 @@ import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
-import opalLogo from '../../assets/opal-logo.svg';
 import { colors, spacing, transitions } from '../../theme/tokens';
 
 const { Sider } = Layout;
@@ -31,8 +28,6 @@ const { Sider } = Layout;
 interface SidebarProps {
   selectedCdm: string | null;
   onCdmChange: (cdm: string) => void;
-  darkMode: boolean;
-  onDarkModeToggle: () => void;
   collapsed: boolean;
   onCollapse: (collapsed: boolean) => void;
 }
@@ -40,8 +35,6 @@ interface SidebarProps {
 export default function Sidebar({
   selectedCdm,
   onCdmChange,
-  darkMode,
-  onDarkModeToggle,
   collapsed,
   onCollapse,
 }: SidebarProps) {
@@ -107,7 +100,7 @@ export default function Sidebar({
         overflow: 'hidden',
       }}
     >
-      {/* Logo with glow effect */}
+      {/* Logo with emerald glow */}
       <div
         className="opal-sidebar-logo"
         style={{
@@ -115,17 +108,52 @@ export default function Sidebar({
           textAlign: 'center',
         }}
       >
-        <img
-          src={opalLogo}
-          alt="OPAL"
-          style={{
-            width: collapsed ? 48 : 180,
-            height: 'auto',
-            marginBottom: spacing.sm,
-            transition: `width ${transitions.normal}`,
-            filter: 'drop-shadow(0 0 12px rgba(43, 196, 89, 0.2))',
-          }}
-        />
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          gap: 10,
+          padding: collapsed ? 0 : '0 4px',
+        }}>
+          {/* Emerald ring logo */}
+          <div style={{
+            position: 'relative',
+            width: 36,
+            height: 36,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            <div style={{
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              border: `2px solid ${colors.accent}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <div style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: colors.accent,
+                boxShadow: `0 0 12px ${colors.accentGlow}`,
+              }} />
+            </div>
+          </div>
+          {!collapsed && (
+            <span style={{
+              fontSize: 20,
+              fontWeight: 700,
+              color: colors.textPrimary,
+              letterSpacing: '-0.02em',
+            }}>
+              OPAL
+            </span>
+          )}
+        </div>
       </div>
 
       {/* User info + collapse toggle */}
@@ -140,14 +168,14 @@ export default function Sidebar({
                 width: 28,
                 height: 28,
                 borderRadius: '50%',
-                background: `linear-gradient(135deg, ${colors.primary}, ${colors.accent})`,
+                background: `linear-gradient(135deg, ${colors.accent}, ${colors.teal})`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
                 fontSize: 12,
                 fontWeight: 600,
-                color: '#fff',
+                color: colors.deepBase,
               }}>
                 {username.charAt(0).toUpperCase()}
               </div>
@@ -158,6 +186,7 @@ export default function Sidebar({
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
                 letterSpacing: '0.01em',
+                color: colors.textPrimary,
               }}>
                 {username}
               </span>
@@ -220,14 +249,14 @@ export default function Sidebar({
                 width: 28,
                 height: 28,
                 borderRadius: '50%',
-                background: `linear-gradient(135deg, ${colors.primary}, ${colors.accent})`,
+                background: `linear-gradient(135deg, ${colors.accent}, ${colors.teal})`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 margin: '0 auto 6px',
                 fontSize: 12,
                 fontWeight: 600,
-                color: '#fff',
+                color: colors.deepBase,
                 cursor: 'pointer',
               }}>
                 {username.charAt(0).toUpperCase()}
@@ -303,74 +332,36 @@ export default function Sidebar({
         borderTop: `1px solid ${colors.sidebarBorder}`,
       }}>
         {collapsed ? (
-          <>
-            <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="right">
-              <div
-                style={{
-                  cursor: 'pointer',
-                  textAlign: 'center',
-                  color: colors.sidebarText,
-                  marginBottom: 8,
-                  fontSize: 16,
-                  transition: `color ${transitions.fast}`,
-                }}
-                onClick={toggleLang}
-              >
-                <GlobalOutlined />
-              </div>
-            </Tooltip>
-            <Tooltip title={darkMode ? 'Dark' : 'Light'} placement="right">
-              <div
-                style={{
-                  textAlign: 'center',
-                  color: colors.sidebarText,
-                  fontSize: 16,
-                  cursor: 'pointer',
-                  transition: `color ${transitions.fast}`,
-                }}
-                onClick={onDarkModeToggle}
-              >
-                <BulbOutlined />
-              </div>
-            </Tooltip>
-          </>
-        ) : (
-          <>
+          <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="right">
             <div
               style={{
                 cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
+                textAlign: 'center',
                 color: colors.sidebarText,
-                marginBottom: 8,
-                fontSize: 13,
+                fontSize: 16,
                 transition: `color ${transitions.fast}`,
               }}
               onClick={toggleLang}
             >
               <GlobalOutlined />
-              <span>{i18n.language === 'fr' ? 'Français' : 'English'}</span>
             </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                color: colors.sidebarText,
-                fontSize: 13,
-              }}
-            >
-              <BulbOutlined />
-              <Switch
-                size="small"
-                checked={darkMode}
-                onChange={onDarkModeToggle}
-                checkedChildren="Dark"
-                unCheckedChildren="Light"
-              />
-            </div>
-          </>
+          </Tooltip>
+        ) : (
+          <div
+            style={{
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              color: colors.sidebarText,
+              fontSize: 13,
+              transition: `color ${transitions.fast}`,
+            }}
+            onClick={toggleLang}
+          >
+            <GlobalOutlined />
+            <span>{i18n.language === 'fr' ? 'Français' : 'English'}</span>
+          </div>
         )}
       </div>
     </Sider>

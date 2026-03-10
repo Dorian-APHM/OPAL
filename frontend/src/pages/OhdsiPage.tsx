@@ -401,8 +401,8 @@ export default function OhdsiPage({ selectedCdm }: Props) {
                   style={{
                     height: 300,
                     overflow: 'auto',
-                    background: '#1e1e1e',
-                    color: '#d4d4d4',
+                    background: '#0B0F1A',
+                    color: '#F8FAFC',
                     fontFamily: 'monospace',
                     fontSize: 12,
                     padding: 12,

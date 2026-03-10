@@ -15,7 +15,7 @@ import type { CohortSummary, KaplanMeierResult, KMPoint } from '../types';
 const { Title, Text } = Typography;
 const { Option } = Select;
 
-const STRATA_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'];
+const STRATA_COLORS = ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444'];
 
 export default function EstimationPage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
@@ -175,7 +175,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
                   <Tooltip formatter={(value: number) => value.toFixed(4)} />
                   <Legend />
                   {result.median_survival != null && (
-                    <ReferenceLine y={0.5} stroke="#999" strokeDasharray="5 5" label="Median" />
+                    <ReferenceLine y={0.5} stroke="#64748B" strokeDasharray="5 5" label="Median" />
                   )}
                   {strataNames.map((name, i) => (
                     <Line
@@ -196,13 +196,13 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
                   <YAxis domain={[0, 1]} label={{ value: 'Survival', angle: -90, position: 'insideLeft' }} />
                   <Tooltip formatter={(value: number) => value.toFixed(4)} />
                   {result.median_survival != null && (
-                    <ReferenceLine y={0.5} stroke="#999" strokeDasharray="5 5" label="Median" />
+                    <ReferenceLine y={0.5} stroke="#64748B" strokeDasharray="5 5" label="Median" />
                   )}
                   <Area
                     type="stepAfter"
                     dataKey="ci_upper"
                     stroke="none"
-                    fill="#1f77b4"
+                    fill="#3B82F6"
                     fillOpacity={0.1}
                   />
                   <Area
@@ -212,7 +212,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
                     fill="#ffffff"
                     fillOpacity={1}
                   />
-                  <Line type="stepAfter" dataKey="survival" stroke="#1f77b4" dot={false} strokeWidth={2} />
+                  <Line type="stepAfter" dataKey="survival" stroke="#3B82F6" dot={false} strokeWidth={2} />
                 </AreaChart>
               )}
             </ResponsiveContainer>
