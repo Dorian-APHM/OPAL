@@ -1,12 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Card, Select, Typography, Empty, Spin, Row, Col, Statistic, Tag } from 'antd';
-import { LineChartOutlined, RiseOutlined, FallOutlined } from '@ant-design/icons';
+import { BarChart3, TrendingUp, TrendingDown } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { qualityApi } from '../../api/client';
 import useIsMobile from '../../hooks/useIsMobile';
-
-const { Text, Title } = Typography;
+import { Card, Select, Empty, Spinner, Statistic, Tag } from '../ui';
 
 interface TimelinePoint {
   snapshot_id: number;
@@ -49,13 +47,13 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
   }, [selectedCdm]);
 
   if (loading) {
-    return <Card><div style={{ textAlign: 'center', padding: 40 }}><Spin /></div></Card>;
+    return <Card><div className="text-center py-10"><Spinner /></div></Card>;
   }
 
   const domainKeys = Object.keys(timelines);
   if (domainKeys.length === 0) {
     return (
-      <Card title={<><LineChartOutlined /> {t('quality.timeline_title')}</>}>
+      <Card title={<span className="flex items-center gap-2"><BarChart3 className="h-4 w-4" /> {t('quality.timeline_title')}</span>}>
         <Empty description={t('quality.timeline_empty')} />
       </Card>
     );
@@ -85,68 +83,55 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
 
   return (
     <Card
-      title={<><LineChartOutlined /> {t('quality.timeline_title')}</>}
+      title={<span className="flex items-center gap-2"><BarChart3 className="h-4 w-4" /> {t('quality.timeline_title')}</span>}
       extra={
         <Select
           value={selectedDomain}
-          onChange={setSelectedDomain}
-          style={{ width: 200 }}
+          onChange={(val) => setSelectedDomain(val)}
+          className="w-52"
           options={domainKeys.map((d) => ({ value: d, label: t(`domains.${d}`, d) }))}
         />
       }
     >
       {/* KPI delta cards */}
       {latest && (
-        <Row gutter={[16, 12]} style={{ marginBottom: 16 }}>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
           {latest.total_persons != null && (
-            <Col xs={12} sm={12} md={6}>
-              <Statistic
-                title={t('quality.total_persons')}
-                value={latest.total_persons}
-                suffix={previous ? <DeltaTag value={delta(latest.total_persons, previous.total_persons)} /> : null}
-              />
-            </Col>
+            <Statistic
+              title={t('quality.total_persons')}
+              value={latest.total_persons.toLocaleString()}
+              suffix={previous ? <DeltaTag value={delta(latest.total_persons, previous.total_persons)} /> : undefined}
+            />
           )}
           {latest.total_records != null && (
-            <Col xs={12} sm={12} md={6}>
-              <Statistic
-                title={t('quality.total_records')}
-                value={latest.total_records}
-                suffix={previous ? <DeltaTag value={delta(latest.total_records, previous.total_records)} /> : null}
-              />
-            </Col>
+            <Statistic
+              title={t('quality.total_records')}
+              value={latest.total_records.toLocaleString()}
+              suffix={previous ? <DeltaTag value={delta(latest.total_records, previous.total_records)} /> : undefined}
+            />
           )}
           {isClinical && latest.pct_terms_mapped != null && (
-            <Col xs={12} sm={12} md={6}>
-              <Statistic
-                title={t('quality.pct_mapped')}
-                value={latest.pct_terms_mapped}
-                precision={1}
-                suffix={<>%{previous ? <DeltaTag value={delta(latest.pct_terms_mapped, previous?.pct_terms_mapped)} /> : null}</>}
-              />
-            </Col>
+            <Statistic
+              title={t('quality.pct_mapped')}
+              value={latest.pct_terms_mapped.toFixed(1)}
+              suffix={<>%{previous ? <DeltaTag value={delta(latest.pct_terms_mapped, previous?.pct_terms_mapped)} /> : null}</>}
+            />
           )}
           {isClinical && latest.pct_rows_mapped != null && (
-            <Col xs={12} sm={12} md={6}>
-              <Statistic
-                title={t('quality.rows') + ' ' + t('quality.pct_mapped')}
-                value={latest.pct_rows_mapped}
-                precision={1}
-                suffix={<>%{previous ? <DeltaTag value={delta(latest.pct_rows_mapped, previous?.pct_rows_mapped)} /> : null}</>}
-              />
-            </Col>
+            <Statistic
+              title={t('quality.rows') + ' ' + t('quality.pct_mapped')}
+              value={latest.pct_rows_mapped.toFixed(1)}
+              suffix={<>%{previous ? <DeltaTag value={delta(latest.pct_rows_mapped, previous?.pct_rows_mapped)} /> : null}</>}
+            />
           )}
           {isDashboard && latest.avg_pct_terms_mapped != null && (
-            <Col xs={12} sm={12} md={6}>
-              <Statistic
-                title={t('quality.pct_mapped') + ' (avg)'}
-                value={latest.avg_pct_terms_mapped}
-                precision={1}
-                suffix={<>%{previous ? <DeltaTag value={delta(latest.avg_pct_terms_mapped, previous?.avg_pct_terms_mapped)} /> : null}</>}
-              />
-            </Col>
+            <Statistic
+              title={t('quality.pct_mapped') + ' (avg)'}
+              value={latest.avg_pct_terms_mapped.toFixed(1)}
+              suffix={<>%{previous ? <DeltaTag value={delta(latest.avg_pct_terms_mapped, previous?.avg_pct_terms_mapped)} /> : null}</>}
+            />
           )}
-        </Row>
+        </div>
       )}
 
       {/* Chart */}
@@ -174,39 +159,38 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
           </LineChart>
         </ResponsiveContainer>
       ) : (
-        <div style={{ textAlign: 'center', padding: 20 }}>
-          <Text type="secondary">{t('quality.timeline_need_more')}</Text>
+        <div className="text-center py-5">
+          <span className="text-sm text-text-muted">{t('quality.timeline_need_more')}</span>
         </div>
       )}
 
       {/* Mini sparklines for all domains overview */}
       {domainKeys.length > 1 && (
         <>
-          <Title level={5} style={{ marginTop: 16 }}>{t('quality.timeline_overview')}</Title>
-          <Row gutter={[8, 8]}>
+          <h5 className="text-sm font-semibold text-text-bright mt-4 mb-2">{t('quality.timeline_overview')}</h5>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
             {domainKeys.map((dom) => {
               const data = timelines[dom];
               if (data.length < 2) return null;
               const mainMetric = dom === 'Dashboard' || dom === 'Person' ? 'total_persons' : 'total_records';
               return (
-                <Col xs={12} sm={8} md={6} key={dom}>
-                  <Card
-                    size="small"
-                    hoverable
-                    onClick={() => setSelectedDomain(dom)}
-                    style={{ borderColor: dom === selectedDomain ? '#10B981' : undefined }}
-                  >
-                    <Text strong style={{ fontSize: 12 }}>{t(`domains.${dom}`, dom)}</Text>
-                    <ResponsiveContainer width="100%" height={40}>
-                      <LineChart data={data}>
-                        <Line type="monotone" dataKey={mainMetric} stroke="#3B82F6" strokeWidth={1.5} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </Card>
-                </Col>
+                <Card
+                  size="small"
+                  key={dom}
+                  hoverable
+                  onClick={() => setSelectedDomain(dom)}
+                  className={`cursor-pointer ${dom === selectedDomain ? 'border-emerald-accent' : ''}`}
+                >
+                  <span className="font-semibold text-xs text-text-bright">{t(`domains.${dom}`, dom)}</span>
+                  <ResponsiveContainer width="100%" height={40}>
+                    <LineChart data={data}>
+                      <Line type="monotone" dataKey={mainMetric} stroke="#3B82F6" strokeWidth={1.5} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </Card>
               );
             })}
-          </Row>
+          </div>
         </>
       )}
     </Card>
@@ -216,10 +200,14 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
 function DeltaTag({ value }: { value: number | null }) {
   if (value == null) return null;
   const color = value > 0 ? 'green' : value < 0 ? 'red' : 'default';
-  const icon = value > 0 ? <RiseOutlined /> : value < 0 ? <FallOutlined /> : null;
+  const icon = value > 0
+    ? <TrendingUp className="h-3 w-3 inline mr-0.5" />
+    : value < 0
+      ? <TrendingDown className="h-3 w-3 inline mr-0.5" />
+      : null;
   return (
-    <Tag color={color} style={{ marginLeft: 4 }}>
-      {icon} {value > 0 ? '+' : ''}{value.toFixed(1)}%
+    <Tag color={color} className="ml-1">
+      {icon}{value > 0 ? '+' : ''}{value.toFixed(1)}%
     </Tag>
   );
 }

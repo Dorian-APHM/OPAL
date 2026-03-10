@@ -1,14 +1,7 @@
 import { useState } from 'react';
-import {
-  Card, Tabs, Button, Form, Input, Select, Result, Typography, Space, message,
-} from 'antd';
-import {
-  LoginOutlined, UserAddOutlined, IdcardOutlined,
-} from '@ant-design/icons';
+import { LogIn, UserPlus, IdCard, CheckCircle } from 'lucide-react';
 import { publicApi } from '../api/client';
-import { colors } from '../theme/tokens';
-
-const { Title, Text, Paragraph } = Typography;
+import { Card, Button, Input, Select, Tabs, useToast } from '../components/ui';
 
 interface LoginPageProps {
   onSignIn: () => void;
@@ -25,103 +18,57 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
   const [activeTab, setActiveTab] = useState('signin');
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
+  const [username, setUsername] = useState('');
+  const [role, setRole] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const toast = useToast();
 
-  const handleSignUp = async (values: any) => {
+  const handleSignUp = async () => {
+    const errs: Record<string, string> = {};
+    if (!username) errs.username = 'Matricule requis';
+    else if (!/^[a-zA-Z0-9._-]+$/.test(username)) errs.username = 'Lettres, chiffres, . - _ uniquement';
+    if (!role) errs.role = 'Choisissez un rôle';
+    setErrors(errs);
+    if (Object.keys(errs).length) return;
+
     setLoading(true);
     try {
-      await publicApi.submitAccessRequest({
-        username: values.username,
-        requested_role: values.requested_role,
-      });
+      await publicApi.submitAccessRequest({ username, requested_role: role! });
       setSubmitted(true);
     } catch (err: any) {
-      const detail = err?.response?.data?.detail || 'Failed to submit request';
-      message.error(detail);
+      toast.error(err?.response?.data?.detail || 'Failed to submit request');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh',
-      background: colors.deepBase,
-    }}>
+    <div className="flex items-center justify-center min-h-screen bg-deep-base relative">
       {/* Background glow */}
-      <div style={{
-        position: 'fixed',
-        top: '30%',
-        left: '50%',
-        width: 600,
-        height: 400,
-        transform: 'translate(-50%, -50%)',
-        background: 'radial-gradient(ellipse, rgba(16,185,129,0.12) 0%, transparent 70%)',
-        pointerEvents: 'none',
-      }} />
+      <div className="fixed top-[30%] left-1/2 w-[600px] h-[400px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(16,185,129,0.12)_0%,transparent_70%)] pointer-events-none" />
 
-      <Card
-        style={{
-          width: 460,
-          borderRadius: 24,
-          background: colors.surface,
-          border: `1px solid ${colors.border}`,
-          boxShadow: '10px 10px 20px #080b13, -5px -5px 15px #1c2539',
-        }}
-        styles={{ body: { padding: '32px 32px 24px' } }}
-      >
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          {/* Emerald ring logo */}
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginBottom: 12,
-          }}>
-            <div style={{
-              width: 48,
-              height: 48,
-              borderRadius: '50%',
-              border: `2.5px solid ${colors.accent}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <div style={{
-                width: 14,
-                height: 14,
-                borderRadius: '50%',
-                background: colors.accent,
-                boxShadow: `0 0 16px ${colors.accentGlow}`,
-              }} />
+      <Card className="w-[460px]" hoverable={false}>
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center mb-3">
+            <div className="w-12 h-12 rounded-full border-[2.5px] border-emerald-accent flex items-center justify-center">
+              <div className="w-3.5 h-3.5 rounded-full bg-emerald-accent shadow-[0_0_16px_rgba(16,185,129,0.4)]" />
             </div>
           </div>
-          <Title level={3} style={{ margin: 0 }}>OPAL</Title>
-          <Text style={{ color: colors.textSecondary }}>OMOP Platform for Analytics & Lineage</Text>
+          <h2 className="text-2xl font-bold text-text-bright mb-1">OPAL</h2>
+          <p className="text-sm text-text-muted">OMOP Platform for Analytics & Lineage</p>
         </div>
 
         <Tabs
           activeKey={activeTab}
           onChange={setActiveTab}
-          centered
           items={[
             {
               key: 'signin',
-              label: <span><LoginOutlined /> Sign In</span>,
+              label: <span className="flex items-center gap-1.5"><LogIn className="h-4 w-4" /> Sign In</span>,
               children: (
-                <div style={{ textAlign: 'center', padding: '24px 0' }}>
-                  <Paragraph style={{ marginBottom: 24, color: colors.textSecondary }}>
-                    Connectez-vous avec votre compte OPAL
-                  </Paragraph>
-                  <Button
-                    type="primary"
-                    size="large"
-                    icon={<LoginOutlined />}
-                    onClick={onSignIn}
-                    block
-                    style={{ height: 48 }}
-                  >
+                <div className="text-center py-6">
+                  <p className="text-sm text-text-muted mb-6">Connectez-vous avec votre compte OPAL</p>
+                  <Button variant="primary" size="large" icon={<LogIn className="h-5 w-5" />} onClick={onSignIn} block>
                     Se connecter via Keycloak
                   </Button>
                 </div>
@@ -129,67 +76,42 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
             },
             {
               key: 'signup',
-              label: <span><UserAddOutlined /> Sign Up</span>,
+              label: <span className="flex items-center gap-1.5"><UserPlus className="h-4 w-4" /> Sign Up</span>,
               children: submitted ? (
-                <Result
-                  status="success"
-                  title="Demande envoyee"
-                  subTitle="Votre demande d'acces a ete soumise. Un administrateur va la valider. Vous recevrez vos identifiants une fois approuve."
-                />
+                <div className="text-center py-8">
+                  <CheckCircle className="h-12 w-12 text-emerald-accent mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold text-text-bright mb-2">Demande envoyée</h3>
+                  <p className="text-sm text-text-muted">
+                    Votre demande d'accès a été soumise. Un administrateur va la valider.
+                  </p>
+                </div>
               ) : (
-                <Form
-                  form={form}
-                  layout="vertical"
-                  onFinish={handleSignUp}
-                  size="middle"
-                  requiredMark={false}
-                >
-                  <Form.Item
-                    name="username"
+                <div className="space-y-4">
+                  <Input
                     label="Matricule APHM"
-                    rules={[
-                      { required: true, message: 'Matricule requis' },
-                      { pattern: /^[a-zA-Z0-9._-]+$/, message: 'Lettres, chiffres, . - _ uniquement' },
-                    ]}
-                  >
-                    <Input prefix={<IdcardOutlined />} placeholder="ex: a159230" />
-                  </Form.Item>
-
-                  <Form.Item
-                    name="requested_role"
-                    label="Role demande"
-                    rules={[{ required: true, message: 'Choisissez un role' }]}
-                  >
-                    <Select placeholder="Choisir un role">
-                      {ROLES.map(r => (
-                        <Select.Option key={r.value} value={r.value}>
-                          <Space>
-                            <strong>{r.label}</strong>
-                            <Text style={{ fontSize: 12, color: colors.textSecondary }}>— {r.description}</Text>
-                          </Space>
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item style={{ marginBottom: 0, marginTop: 8 }}>
-                    <Button
-                      type="primary"
-                      htmlType="submit"
-                      loading={loading}
-                      block
-                      size="large"
-                      icon={<UserAddOutlined />}
-                      style={{ height: 48 }}
-                    >
-                      Demander l'acces
-                    </Button>
-                  </Form.Item>
-
-                  <Paragraph style={{ fontSize: 12, marginTop: 12, textAlign: 'center', color: colors.textDim }}>
-                    Utilisez votre matricule APHM. Vous vous connecterez avec vos identifiants APHM une fois approuve.
-                  </Paragraph>
-                </Form>
+                    prefix={<IdCard className="h-4 w-4" />}
+                    placeholder="ex: a159230"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    error={errors.username}
+                  />
+                  <div>
+                    <Select
+                      label="Rôle demandé"
+                      placeholder="Choisir un rôle"
+                      value={role}
+                      onChange={setRole}
+                      options={ROLES}
+                    />
+                    {errors.role && <p className="text-xs text-red-400 mt-1">{errors.role}</p>}
+                  </div>
+                  <Button variant="primary" size="large" icon={<UserPlus className="h-5 w-5" />} onClick={handleSignUp} loading={loading} block>
+                    Demander l'accès
+                  </Button>
+                  <p className="text-xs text-text-dim text-center">
+                    Utilisez votre matricule APHM. Vous vous connecterez avec vos identifiants APHM une fois approuvé.
+                  </p>
+                </div>
               ),
             },
           ]}

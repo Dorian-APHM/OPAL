@@ -1,29 +1,17 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Select, Tooltip, Tag } from 'antd';
 import {
-  DashboardOutlined,
-  TeamOutlined,
-  NodeIndexOutlined,
-  DatabaseOutlined,
-  SettingOutlined,
-  GlobalOutlined,
-  BookOutlined,
-  ExperimentOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  LogoutOutlined,
-  AuditOutlined,
-  TeamOutlined as UsersOutlined,
-} from '@ant-design/icons';
+  LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
+  Database, Settings, Globe, LogOut, ChevronLeft, ChevronRight,
+  Shield, ClipboardList,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
-import { colors, spacing, transitions } from '../../theme/tokens';
-
-const { Sider } = Layout;
-
+import { Select } from '../ui/Select';
+import { Tooltip } from '../ui/Tooltip';
+import { Tag } from '../ui/Tag';
 
 interface SidebarProps {
   selectedCdm: string | null;
@@ -32,12 +20,26 @@ interface SidebarProps {
   onCollapse: (collapsed: boolean) => void;
 }
 
-export default function Sidebar({
-  selectedCdm,
-  onCdmChange,
-  collapsed,
-  onCollapse,
-}: SidebarProps) {
+const menuConfig = [
+  { key: '/quality', icon: LayoutDashboard, labelKey: 'app.quality' },
+  { key: '/cohorts', icon: Users, labelKey: 'app.cohorts' },
+  { key: '/mapping', icon: GitCompareArrows, labelKey: 'app.mapping' },
+  { key: '/concepts', icon: BookOpen, labelKey: 'app.concepts' },
+  { key: '/ohdsi', icon: FlaskConical, labelKey: 'app.ohdsi', labelDefault: 'OHDSI Tools' },
+  { key: '/cdm', icon: Database, labelKey: 'cdm.title' },
+  { key: '/settings', icon: Settings, labelKey: 'app.settings' },
+  { key: '/audit', icon: ClipboardList, labelKey: 'app.audit' },
+  { key: '/users', icon: Shield, labelKey: 'app.users' },
+];
+
+const roleColors: Record<string, 'red' | 'purple' | 'blue' | 'green' | 'default'> = {
+  admin: 'red',
+  'omop-dim': 'purple',
+  chercheur: 'blue',
+  medecin: 'green',
+};
+
+export default function Sidebar({ selectedCdm, onCdmChange, collapsed, onCollapse }: SidebarProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
@@ -50,21 +52,8 @@ export default function Sidebar({
     }
   }, [authenticated, token]);
 
-  const allMenuItems = [
-    { key: '/quality', icon: <DashboardOutlined />, label: t('app.quality') },
-    { key: '/cohorts', icon: <TeamOutlined />, label: t('app.cohorts') },
-    { key: '/mapping', icon: <NodeIndexOutlined />, label: t('app.mapping') },
-    { key: '/concepts', icon: <BookOutlined />, label: t('app.concepts') },
-    { key: '/ohdsi', icon: <ExperimentOutlined />, label: t('app.ohdsi', 'OHDSI Tools') },
-    { key: '/cdm', icon: <DatabaseOutlined />, label: t('cdm.title') },
-    { key: '/settings', icon: <SettingOutlined />, label: t('app.settings') },
-    { key: '/audit', icon: <AuditOutlined />, label: t('app.audit') },
-    { key: '/users', icon: <UsersOutlined />, label: t('app.users') },
-  ];
-
-  // Filter menu items based on user's role access
   const menuItems = useMemo(
-    () => allMenuItems.filter((item) => hasPageAccess(item.key)),
+    () => menuConfig.filter((item) => hasPageAccess(item.key)),
     [roles, hasPageAccess, i18n.language]
   );
 
@@ -74,241 +63,90 @@ export default function Sidebar({
     localStorage.setItem('opal-lang', newLang);
   };
 
-  const roleColor = (role: string) => {
-    switch (role) {
-      case 'admin': return 'red';
-      case 'omop-dim': return 'purple';
-      case 'chercheur': return 'blue';
-      case 'medecin': return 'green';
-      default: return 'default';
-    }
-  };
-
   return (
-    <Sider
-      collapsible
-      collapsed={collapsed}
-      onCollapse={onCollapse}
-      trigger={null}
-      width={240}
-      collapsedWidth={64}
-      className="opal-sidebar"
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}
+    <aside
+      className={`
+        flex flex-col h-screen shrink-0 overflow-hidden
+        bg-gradient-to-b from-deep-base to-[#0e1324]
+        border-r border-glass-border
+        shadow-[2px_0_12px_rgba(0,0,0,0.3)]
+        transition-all duration-300
+        ${collapsed ? 'w-16' : 'w-60'}
+      `}
     >
-      {/* Logo with emerald glow */}
-      <div
-        className="opal-sidebar-logo"
-        style={{
-          padding: collapsed ? `${spacing.lg}px ${spacing.sm}px ${spacing.md}px` : `${spacing.xl}px ${spacing.lg}px ${spacing.lg}px`,
-          textAlign: 'center',
-        }}
-      >
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: collapsed ? 'center' : 'flex-start',
-          gap: 10,
-          padding: collapsed ? 0 : '0 4px',
-        }}>
-          {/* Emerald ring logo */}
-          <div style={{
-            position: 'relative',
-            width: 36,
-            height: 36,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-          }}>
-            <div style={{
-              width: 28,
-              height: 28,
-              borderRadius: '50%',
-              border: `2px solid ${colors.accent}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <div style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: colors.accent,
-                boxShadow: `0 0 12px ${colors.accentGlow}`,
-              }} />
+      {/* Logo */}
+      <div className={`relative ${collapsed ? 'px-2 py-4' : 'px-4 py-5'}`}>
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-2.5 px-1'}`}>
+          <div className="relative w-9 h-9 flex items-center justify-center shrink-0">
+            <div className="w-7 h-7 rounded-full border-2 border-emerald-accent flex items-center justify-center">
+              <div className="w-2 h-2 rounded-full bg-emerald-accent shadow-[0_0_12px_rgba(16,185,129,0.4)]" />
             </div>
           </div>
           {!collapsed && (
-            <span style={{
-              fontSize: 20,
-              fontWeight: 700,
-              color: colors.textPrimary,
-              letterSpacing: '-0.02em',
-            }}>
-              OPAL
-            </span>
+            <span className="text-xl font-bold text-text-bright tracking-tight">OPAL</span>
           )}
         </div>
+        {/* Glow separator */}
+        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[60%] h-px bg-gradient-to-r from-transparent via-emerald-accent/30 to-transparent" />
       </div>
 
-      {/* User info + collapse toggle */}
-      {!collapsed && username ? (
-        <div style={{
-          padding: `${spacing.xs}px ${spacing.lg}px ${spacing.sm}px`,
-          borderBottom: `1px solid ${colors.sidebarBorder}`,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: colors.sidebarTextBright, minWidth: 0, flex: 1 }}>
-              <div style={{
-                width: 28,
-                height: 28,
-                borderRadius: '50%',
-                background: `linear-gradient(135deg, ${colors.accent}, ${colors.teal})`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                fontSize: 12,
-                fontWeight: 600,
-                color: colors.deepBase,
-              }}>
-                {username.charAt(0).toUpperCase()}
+      {/* User info */}
+      <div className={`border-b border-glass-border ${collapsed ? 'py-2 px-1' : 'px-4 py-2'}`}>
+        {!collapsed && username ? (
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-accent to-teal-accent flex items-center justify-center shrink-0 text-xs font-semibold text-deep-base">
+                  {username.charAt(0).toUpperCase()}
+                </div>
+                <span className="text-sm font-medium text-text-bright truncate">{username}</span>
               </div>
-              <span style={{
-                fontSize: 13,
-                fontWeight: 500,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                letterSpacing: '0.01em',
-                color: colors.textPrimary,
-              }}>
-                {username}
-              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <button onClick={logout} className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none p-1">
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => onCollapse(true)} className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none p-1">
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-              <Tooltip title={t('auth.logout', 'Logout')}>
-                <LogoutOutlined
-                  style={{
-                    color: colors.sidebarText,
-                    fontSize: 14,
-                    cursor: 'pointer',
-                    transition: `color ${transitions.fast}`,
-                  }}
-                  onClick={logout}
-                />
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {roles.map((r) => (
+                <Tag key={r} color={roleColors[r] || 'default'} style={{ fontSize: 10 }}>{r}</Tag>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-1.5">
+            {username && (
+              <Tooltip title={`${username} (${roles.join(', ')})`} placement="right">
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-accent to-teal-accent flex items-center justify-center text-xs font-semibold text-deep-base cursor-pointer">
+                  {username.charAt(0).toUpperCase()}
+                </div>
               </Tooltip>
-              <div
-                style={{
-                  cursor: 'pointer',
-                  color: colors.sidebarText,
-                  fontSize: 16,
-                  marginLeft: 4,
-                  transition: `color ${transitions.fast}`,
-                }}
-                onClick={() => onCollapse(true)}
-              >
-                <MenuFoldOutlined />
-              </div>
-            </div>
+            )}
+            {username && (
+              <Tooltip title="Logout" placement="right">
+                <button onClick={logout} className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none p-1">
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            )}
+            <button onClick={() => onCollapse(!collapsed)} className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none p-1">
+              {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            </button>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 6 }}>
-            {roles.map((r) => (
-              <Tag
-                key={r}
-                color={roleColor(r)}
-                style={{
-                  fontSize: 10,
-                  margin: 0,
-                  lineHeight: '18px',
-                  borderRadius: 4,
-                  fontWeight: 500,
-                }}
-              >
-                {r}
-              </Tag>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div
-          style={{
-            padding: `${spacing.xs}px 0 ${spacing.sm}px`,
-            textAlign: 'center',
-            borderBottom: `1px solid ${colors.sidebarBorder}`,
-          }}
-        >
-          {collapsed && username && (
-            <Tooltip title={`${username} (${roles.join(', ')})`} placement="right">
-              <div style={{
-                width: 28,
-                height: 28,
-                borderRadius: '50%',
-                background: `linear-gradient(135deg, ${colors.accent}, ${colors.teal})`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 6px',
-                fontSize: 12,
-                fontWeight: 600,
-                color: colors.deepBase,
-                cursor: 'pointer',
-              }}>
-                {username.charAt(0).toUpperCase()}
-              </div>
-            </Tooltip>
-          )}
-          {collapsed && username && (
-            <Tooltip title={t('auth.logout', 'Logout')} placement="right">
-              <LogoutOutlined
-                style={{
-                  color: colors.sidebarText,
-                  fontSize: 14,
-                  cursor: 'pointer',
-                  display: 'block',
-                  marginBottom: 6,
-                }}
-                onClick={logout}
-              />
-            </Tooltip>
-          )}
-          <div
-            style={{
-              cursor: 'pointer',
-              color: colors.sidebarText,
-              fontSize: 16,
-              transition: `color ${transitions.fast}`,
-            }}
-            onClick={() => onCollapse(!collapsed)}
-          >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* CDM selector */}
       {!collapsed && (
-        <div style={{ padding: `${spacing.sm}px ${spacing.lg}px` }}>
-          <div style={{
-            fontSize: 10,
-            fontWeight: 600,
-            textTransform: 'uppercase' as const,
-            letterSpacing: '0.08em',
-            color: colors.sidebarText,
-            marginBottom: 4,
-          }}>
-            Database
-          </div>
+        <div className="px-4 py-2">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-text-dim mb-1">Database</div>
           <Select
             placeholder={t('cdm.select_cdm')}
-            value={selectedCdm || undefined}
+            value={selectedCdm}
             onChange={onCdmChange}
-            style={{ width: '100%' }}
             options={cdms.map((c) => ({ value: c.name, label: c.name }))}
             allowClear
             size="small"
@@ -316,54 +154,58 @@ export default function Sidebar({
         </div>
       )}
 
-      <Menu
-        theme="dark"
-        mode="inline"
-        selectedKeys={[location.pathname]}
-        onClick={({ key }) => navigate(key)}
-        items={menuItems}
-        style={{ flex: 1, background: 'transparent', borderRight: 'none' }}
-        inlineCollapsed={collapsed}
-      />
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto py-2 px-2">
+        {menuItems.map((item) => {
+          const Icon = item.icon;
+          const active = location.pathname === item.key;
+          const label = t(item.labelKey, item.labelDefault ?? '');
 
-      {/* Footer controls */}
-      <div style={{
-        padding: collapsed ? `${spacing.sm}px ${spacing.xs}px` : `${spacing.sm}px ${spacing.lg}px`,
-        borderTop: `1px solid ${colors.sidebarBorder}`,
-      }}>
+          const btn = (
+            <button
+              key={item.key}
+              onClick={() => navigate(item.key)}
+              className={`
+                relative w-full flex items-center gap-3 rounded-[10px] transition-all duration-200
+                cursor-pointer bg-transparent border-none text-left
+                ${collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5'}
+                ${active
+                  ? 'bg-emerald-accent/12 text-emerald-accent'
+                  : 'text-text-dim hover:bg-emerald-accent/6 hover:text-emerald-accent'
+                }
+              `}
+            >
+              {active && (
+                <span className="absolute left-0 top-[20%] h-[60%] w-[3px] rounded-r bg-emerald-accent shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
+              )}
+              <Icon className={`h-[18px] w-[18px] shrink-0 ${active ? 'drop-shadow-[0_0_8px_rgba(16,185,129,0.6)]' : ''}`} />
+              {!collapsed && <span className="text-sm font-medium truncate">{label}</span>}
+            </button>
+          );
+
+          return collapsed ? (
+            <Tooltip key={item.key} title={label} placement="right">
+              {btn}
+            </Tooltip>
+          ) : btn;
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className={`border-t border-glass-border ${collapsed ? 'py-2 px-1' : 'px-4 py-2'}`}>
         {collapsed ? (
           <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="right">
-            <div
-              style={{
-                cursor: 'pointer',
-                textAlign: 'center',
-                color: colors.sidebarText,
-                fontSize: 16,
-                transition: `color ${transitions.fast}`,
-              }}
-              onClick={toggleLang}
-            >
-              <GlobalOutlined />
-            </div>
+            <button onClick={toggleLang} className="w-full flex justify-center text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none py-1">
+              <Globe className="h-4 w-4" />
+            </button>
           </Tooltip>
         ) : (
-          <div
-            style={{
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              color: colors.sidebarText,
-              fontSize: 13,
-              transition: `color ${transitions.fast}`,
-            }}
-            onClick={toggleLang}
-          >
-            <GlobalOutlined />
+          <button onClick={toggleLang} className="flex items-center gap-2 text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none text-sm py-1">
+            <Globe className="h-4 w-4" />
             <span>{i18n.language === 'fr' ? 'Français' : 'English'}</span>
-          </div>
+          </button>
         )}
       </div>
-    </Sider>
+    </aside>
   );
 }
