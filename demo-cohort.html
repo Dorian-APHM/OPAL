@@ -27,132 +27,254 @@
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background: var(--deep-base); color: var(--text-bright);
-    min-height: 100vh; overflow-x: hidden;
+    background: var(--deep-base);
+    color: var(--text-bright);
+    min-height: 100vh;
+    overflow-x: hidden;
   }
+
+  /* ── Glass Nav ── */
   .glass-nav {
     position: sticky; top: 0; z-index: 50;
-    background: var(--glass-bg); backdrop-filter: blur(16px);
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px);
     border-bottom: 1px solid var(--glass-border);
     padding: 0 32px; height: 64px;
     display: flex; align-items: center; justify-content: space-between;
   }
-  .nav-brand { display: flex; align-items: center; gap: 12px; font-size: 20px; font-weight: 700; }
+  .nav-brand {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 20px; font-weight: 700;
+  }
   .nav-brand .logo {
     width: 36px; height: 36px;
     background: linear-gradient(135deg, var(--emerald), var(--teal));
-    border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
     font-weight: 800; font-size: 16px; color: var(--deep-base);
     box-shadow: 0 0 20px var(--emerald-glow);
     animation: opal-pulse 2.5s ease-in-out infinite;
   }
   .nav-links { display: flex; gap: 8px; }
   .nav-link {
-    padding: 8px 16px; border-radius: 10px; color: var(--text-dim);
-    font-size: 14px; font-weight: 500; text-decoration: none;
-    transition: all 0.2s; cursor: pointer;
+    padding: 8px 16px; border-radius: 10px;
+    color: var(--text-dim); font-size: 14px; font-weight: 500;
+    text-decoration: none; transition: all 0.2s; cursor: pointer;
   }
   .nav-link:hover { color: var(--emerald); background: rgba(16,185,129,0.08); }
-  .nav-link.active { color: var(--emerald); background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.2); }
+  .nav-link.active {
+    color: var(--emerald);
+    background: rgba(16,185,129,0.12);
+    border: 1px solid rgba(16,185,129,0.2);
+  }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
   .nav-cdm {
-    display: flex; align-items: center; gap: 8px; padding: 6px 14px;
-    border-radius: 10px; background: var(--surface-light);
-    border: 1px solid var(--glass-border); font-size: 13px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 10px;
+    background: var(--surface-light); border: 1px solid var(--glass-border);
+    font-size: 13px; color: var(--text-muted);
   }
   .live-dot {
-    width: 8px; height: 8px; border-radius: 50%; background: var(--emerald);
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--emerald);
     box-shadow: 0 0 8px var(--emerald-glow-strong);
     animation: live-pulse 1.5s ease-in-out infinite;
   }
+
+  /* ── Layout ── */
   .layout { display: flex; min-height: calc(100vh - 64px); }
   .sidebar {
-    width: 240px; padding: 24px 16px; background: var(--surface);
+    width: 240px; padding: 24px 16px;
+    background: var(--surface);
     border-right: 1px solid var(--border-subtle);
     display: flex; flex-direction: column; gap: 4px;
   }
   .sidebar-item {
-    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
-    border-radius: 12px; color: var(--text-dim); font-size: 14px;
-    font-weight: 500; cursor: pointer; transition: all 0.2s;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-radius: 12px;
+    color: var(--text-dim); font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: all 0.2s;
   }
   .sidebar-item:hover { color: var(--text-muted); background: var(--surface-light); }
-  .sidebar-item.active { color: var(--emerald); background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.15); }
+  .sidebar-item.active {
+    color: var(--emerald);
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.15);
+  }
   .sidebar-item svg { width: 18px; height: 18px; }
   .sidebar-section {
     font-size: 11px; font-weight: 600; color: var(--text-dim);
-    text-transform: uppercase; letter-spacing: 0.05em; padding: 20px 14px 8px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 20px 14px 8px;
   }
   .main { flex: 1; padding: 32px; overflow-y: auto; }
+
+  /* ── Cards ── */
   .card {
-    background: var(--surface); border-radius: 24px;
+    background: var(--surface);
+    border-radius: 24px;
     border: 1px solid var(--border-subtle);
     box-shadow: 10px 10px 20px var(--surface-dark), -5px -5px 15px var(--surface-light);
-    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); padding: 24px;
+    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    padding: 24px;
   }
   .card:hover {
     box-shadow: 12px 12px 24px var(--surface-dark), -6px -6px 18px var(--surface-light), 0 0 30px var(--emerald-glow);
     border-color: var(--border-glow);
   }
   .card.accent-top { border-top: 2px solid var(--emerald); }
+  .card.accent-left { border-left: 3px solid var(--emerald); }
   .card-small { padding: 16px; border-radius: 16px; }
   .card-title {
     font-size: 16px; font-weight: 600; color: var(--text-bright);
     margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
   }
+
+  /* ── Buttons ── */
   .btn {
-    display: inline-flex; align-items: center; gap: 8px; padding: 8px 18px;
-    border-radius: 12px; border: none; font-family: inherit;
-    font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 18px; border-radius: 12px; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: all 0.2s;
   }
   .btn-primary {
     background: linear-gradient(135deg, var(--emerald), var(--teal));
-    color: var(--deep-base); box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+    color: var(--deep-base);
+    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
   }
-  .btn-primary:hover { box-shadow: 0 6px 20px rgba(16,185,129,0.4); transform: translateY(-1px); }
-  .btn-ghost { background: rgba(16,185,129,0.1); color: var(--emerald); border: 1px solid rgba(16,185,129,0.3); }
+  .btn-primary:hover {
+    box-shadow: 0 6px 20px rgba(16,185,129,0.4);
+    transform: translateY(-1px);
+  }
+  .btn-ghost {
+    background: rgba(16,185,129,0.1);
+    color: var(--emerald);
+    border: 1px solid rgba(16,185,129,0.3);
+  }
   .btn-ghost:hover { background: rgba(16,185,129,0.2); }
-  .btn-default { background: var(--surface-light); color: var(--text-muted); border: 1px solid var(--glass-border); }
+  .btn-default {
+    background: var(--surface-light);
+    color: var(--text-muted);
+    border: 1px solid var(--glass-border);
+  }
   .btn-default:hover { color: var(--emerald); border-color: var(--border-glow); }
-  .btn-danger { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+  .btn-danger {
+    background: rgba(239,68,68,0.12);
+    color: #f87171;
+    border: 1px solid rgba(239,68,68,0.25);
+  }
   .btn-sm { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
+
+  /* ── Tags ── */
   .tag {
-    display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
-    border-radius: 20px; font-size: 12px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 12px; font-weight: 500;
   }
   .tag-emerald { background: rgba(16,185,129,0.12); color: #34D399; border: 1px solid rgba(16,185,129,0.25); }
   .tag-blue { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
   .tag-orange { background: rgba(251,146,60,0.12); color: #fb923c; border: 1px solid rgba(251,146,60,0.25); }
   .tag-purple { background: rgba(168,85,247,0.12); color: #c084fc; border: 1px solid rgba(168,85,247,0.25); }
+  .tag-red { background: rgba(239,68,68,0.12); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
   .tag-cyan { background: rgba(6,182,212,0.12); color: #22d3ee; border: 1px solid rgba(6,182,212,0.25); }
-  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--glass-border); margin-bottom: 24px; }
+
+  /* ── Input / Select ── */
+  .input {
+    padding: 8px 14px; border-radius: 10px;
+    background: var(--deep-base); border: 1px solid var(--glass-border);
+    color: var(--text-bright); font-family: inherit; font-size: 14px;
+    outline: none; transition: all 0.2s; width: 100%;
+  }
+  .input::placeholder { color: var(--text-dim); }
+  .input:focus {
+    border-color: rgba(16,185,129,0.4);
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
+  }
+  .select {
+    padding: 8px 14px; border-radius: 10px;
+    background: var(--deep-base); border: 1px solid var(--glass-border);
+    color: var(--text-bright); font-family: inherit; font-size: 14px;
+    outline: none; transition: all 0.2s; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%2364748B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+  }
+  .select:focus {
+    border-color: rgba(16,185,129,0.4);
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
+  }
+
+  /* ── Tabs ── */
+  .tabs {
+    display: flex; gap: 0; border-bottom: 1px solid var(--glass-border);
+    margin-bottom: 24px;
+  }
   .tab {
-    padding: 12px 20px; font-size: 14px; font-weight: 500; color: var(--text-dim);
-    cursor: pointer; transition: all 0.2s; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 12px 20px; font-size: 14px; font-weight: 500;
+    color: var(--text-dim); cursor: pointer; transition: all 0.2s;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
   .tab:hover { color: var(--emerald-light); }
-  .tab.active { color: var(--emerald); border-bottom: 2px solid var(--emerald); box-shadow: 0 2px 8px rgba(16,185,129,0.15); }
-  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .tab.active {
+    color: var(--emerald);
+    border-bottom: 2px solid var(--emerald);
+    box-shadow: 0 2px 8px rgba(16,185,129,0.15);
+  }
+
+  /* ── Section ── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px;
+  }
   .section-title { font-size: 22px; font-weight: 700; }
   .section-subtitle { font-size: 14px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── Grid ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
-  .grid-sidebar { display: grid; grid-template-columns: 340px 1fr; gap: 24px; }
+  .grid-sidebar { display: grid; grid-template-columns: 320px 1fr; gap: 24px; }
+
+  /* ── Criteria Group ── */
   .criteria-group {
-    border: 1px solid var(--glass-border); border-radius: 16px;
-    padding: 16px; background: rgba(18,24,38,0.5);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 16px;
+    background: rgba(18,24,38,0.5);
+    position: relative;
   }
-  .criteria-group.inclusion { border-left: 3px solid var(--emerald); }
-  .criteria-group.exclusion { border-left: 3px solid #f87171; }
-  .group-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-  .group-label { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .criteria-group.inclusion {
+    border-left: 3px solid var(--emerald);
+  }
+  .criteria-group.exclusion {
+    border-left: 3px solid #f87171;
+  }
+  .group-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .group-label {
+    font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
   .criteria-item {
-    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
-    background: var(--deep-base); border: 1px solid var(--border-subtle);
-    border-radius: 12px; margin-bottom: 8px; transition: all 0.2s;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    background: var(--deep-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    transition: all 0.2s;
   }
-  .criteria-item:hover { border-color: var(--border-glow); box-shadow: 0 0 12px var(--emerald-glow); }
+  .criteria-item:hover {
+    border-color: var(--border-glow);
+    box-shadow: 0 0 12px var(--emerald-glow);
+  }
   .criteria-icon {
     width: 32px; height: 32px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
   }
   .criteria-icon.condition { background: rgba(16,185,129,0.15); color: var(--emerald); }
   .criteria-icon.drug { background: rgba(59,130,246,0.15); color: #60a5fa; }
@@ -163,20 +285,29 @@
   .criteria-name .name { font-size: 14px; color: var(--text-bright); }
   .criteria-name .detail { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
   .criteria-remove {
-    width: 24px; height: 24px; border-radius: 6px; background: transparent;
-    border: none; color: var(--text-dim); cursor: pointer; transition: all 0.2s;
-    display: flex; align-items: center; justify-content: center; font-size: 16px;
+    width: 24px; height: 24px; border-radius: 6px;
+    background: transparent; border: none; color: var(--text-dim);
+    cursor: pointer; transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
   }
   .criteria-remove:hover { background: rgba(239,68,68,0.15); color: #f87171; }
+
+  /* ── Operator Badge ── */
   .operator {
     display: flex; align-items: center; justify-content: center;
-    padding: 4px 14px; border-radius: 20px; font-size: 11px;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 4px 14px; border-radius: 20px;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
     margin: -4px 0 4px 40px; width: fit-content;
   }
   .operator.and { background: rgba(16,185,129,0.1); color: var(--emerald); border: 1px solid rgba(16,185,129,0.2); }
   .operator.or { background: rgba(59,130,246,0.1); color: #60a5fa; border: 1px solid rgba(59,130,246,0.2); }
-  .progress-bar { height: 8px; border-radius: 4px; background: var(--surface-light); overflow: hidden; }
+
+  /* ── Progress / Attrition ── */
+  .progress-bar {
+    height: 8px; border-radius: 4px;
+    background: var(--surface-light); overflow: hidden;
+  }
   .progress-fill {
     height: 100%; border-radius: 4px;
     background: linear-gradient(90deg, var(--emerald), var(--teal));
@@ -184,7 +315,8 @@
     transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .attrition-step {
-    display: flex; align-items: center; gap: 16px; padding: 12px 0;
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 0;
     border-bottom: 1px solid var(--border-subtle);
   }
   .attrition-step:last-child { border-bottom: none; }
@@ -192,7 +324,8 @@
     width: 32px; height: 32px; border-radius: 50%;
     background: rgba(16,185,129,0.12); color: var(--emerald);
     display: flex; align-items: center; justify-content: center;
-    font-size: 13px; font-weight: 700; flex-shrink: 0;
+    font-size: 13px; font-weight: 700;
+    flex-shrink: 0;
   }
   .attrition-info { flex: 1; }
   .attrition-label { font-size: 14px; color: var(--text-bright); }
@@ -204,40 +337,86 @@
   }
   .attrition-pct.green { color: var(--emerald); }
   .attrition-pct.amber { color: #fb923c; }
-  .stat-mini { text-align: center; padding: 14px; }
+  .attrition-pct.red { color: #f87171; }
+
+  /* ── Stat inline ── */
+  .stat-mini {
+    text-align: center; padding: 14px;
+  }
   .stat-mini-value {
     font-size: 24px; font-weight: 700;
     background: linear-gradient(135deg, #10B981, #14b8a6);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
   .stat-mini-label { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── Switch ── */
   .switch-group { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); }
   .switch {
-    width: 40px; height: 22px; border-radius: 11px; background: var(--surface-light);
-    position: relative; cursor: pointer; transition: all 0.2s;
+    width: 40px; height: 22px; border-radius: 11px;
+    background: var(--surface-light); position: relative;
+    cursor: pointer; transition: all 0.2s;
   }
   .switch.on { background: var(--emerald); }
   .switch .knob {
-    width: 18px; height: 18px; border-radius: 50%; background: white;
-    position: absolute; top: 2px; left: 2px; transition: all 0.2s;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    width: 18px; height: 18px; border-radius: 50%;
+    background: white; position: absolute; top: 2px; left: 2px;
+    transition: all 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   }
   .switch.on .knob { left: 20px; }
-  .radio-group { display: flex; gap: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--glass-border); }
-  .radio-option {
-    padding: 7px 16px; font-size: 13px; font-weight: 500; color: var(--text-dim);
-    background: var(--surface-light); cursor: pointer; transition: all 0.2s;
-    border-right: 1px solid var(--glass-border);
+
+  /* ── Tooltip ── */
+  .tooltip-text {
+    font-size: 11px; color: var(--text-dim);
+    font-style: italic;
   }
-  .radio-option:last-child { border-right: none; }
-  .radio-option.active { background: rgba(16,185,129,0.15); color: var(--emerald); }
+
+  /* ── Connector line ── */
+  .connector {
+    width: 2px; height: 24px;
+    background: var(--glass-border);
+    margin: 0 auto;
+  }
+
+  /* ── Alert ── */
+  .alert {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 14px 18px; border-radius: 12px;
+  }
+  .alert-info {
+    background: rgba(59,130,246,0.08);
+    border: 1px solid rgba(59,130,246,0.2);
+    color: #60a5fa;
+  }
+
+  /* ── Number Input ── */
   .number-input {
-    width: 110px; padding: 6px 10px; border-radius: 8px;
+    width: 80px; padding: 6px 10px; border-radius: 8px;
     background: var(--deep-base); border: 1px solid var(--glass-border);
     color: var(--text-bright); font-family: 'JetBrains Mono', monospace;
     font-size: 13px; text-align: center; outline: none;
   }
-  .mono { font-family: 'JetBrains Mono', monospace; }
+  .number-input:focus {
+    border-color: rgba(16,185,129,0.4);
+    box-shadow: 0 0 0 3px rgba(16,185,129,0.1);
+  }
+
+  /* ── Radio group ── */
+  .radio-group { display: flex; gap: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--glass-border); }
+  .radio-option {
+    padding: 7px 16px; font-size: 13px; font-weight: 500;
+    color: var(--text-dim); background: var(--surface-light);
+    cursor: pointer; transition: all 0.2s;
+    border-right: 1px solid var(--glass-border);
+  }
+  .radio-option:last-child { border-right: none; }
+  .radio-option:hover { color: var(--text-muted); }
+  .radio-option.active {
+    background: rgba(16,185,129,0.15);
+    color: var(--emerald);
+  }
+
+  /* ── Animations ── */
   @keyframes opal-pulse {
     0%, 100% { box-shadow: 0 0 20px var(--emerald-glow); }
     50% { box-shadow: 0 0 30px var(--emerald-glow-strong), 0 0 60px var(--emerald-glow); }
@@ -246,20 +425,30 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.5; transform: scale(0.8); }
   }
-  @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
   .fade-in { animation: fadeInUp 0.5s ease-out both; }
   .fade-in-d1 { animation-delay: 0.1s; }
   .fade-in-d2 { animation-delay: 0.2s; }
+  .fade-in-d3 { animation-delay: 0.3s; }
+
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--surface-light); border-radius: 3px; }
+
+  .mono { font-family: 'JetBrains Mono', monospace; }
 </style>
 </head>
 <body>
 
-<!-- Nav -->
+<!-- ── Nav ── -->
 <nav class="glass-nav">
-  <div class="nav-brand"><div class="logo">O</div><span>OPAL</span></div>
+  <div class="nav-brand">
+    <div class="logo">O</div>
+    <span>OPAL</span>
+  </div>
   <div class="nav-links">
     <a class="nav-link">Dashboard</a>
     <a class="nav-link">Quality</a>
@@ -267,7 +456,12 @@
     <a class="nav-link">Mapping</a>
     <a class="nav-link">Concepts</a>
   </div>
-  <div class="nav-cdm"><div class="live-dot"></div><span>SYNTHEA_CDM</span></div>
+  <div class="nav-right">
+    <div class="nav-cdm">
+      <div class="live-dot"></div>
+      <span>SYNTHEA_CDM</span>
+    </div>
+  </div>
 </nav>
 
 <div class="layout">
@@ -306,7 +500,7 @@
     </div>
   </aside>
 
-  <!-- Main Content -->
+  <!-- ── Main ── -->
   <main class="main">
     <!-- Header -->
     <div class="section-header fade-in">
@@ -315,9 +509,12 @@
         <div class="section-subtitle">Build patient cohorts with visual criteria</div>
       </div>
       <div style="display:flex;gap:10px;">
-        <button class="btn btn-default">Export SQL</button>
+        <button class="btn btn-default">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+          Export SQL
+        </button>
         <button class="btn btn-primary">
-          <svg width="14" height="14" fill="none" stroke="var(--deep-base)" stroke-width="2.5"><path d="M5 3l10 6-10 6V3z"/></svg>
+          <svg width="16" height="16" fill="none" stroke="var(--deep-base)" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
           Execute Cohort
         </button>
       </div>
@@ -332,15 +529,17 @@
       <div class="tab">Comparison</div>
     </div>
 
+    <!-- Two-column layout: Criteria Canvas + Side Panel -->
     <div class="grid-sidebar fade-in fade-in-d2">
-      <!-- LEFT: Criteria -->
+
+      <!-- ── LEFT: Criteria Canvas ── -->
       <div>
-        <!-- Cohort info bar -->
+        <!-- Cohort info -->
         <div class="card card-small" style="margin-bottom:16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
             <div style="display:flex;align-items:center;gap:8px;">
               <span class="tag tag-emerald">Active</span>
-              <span style="font-size:15px;font-weight:600;">T2DM + HbA1c &gt; 9%</span>
+              <span style="font-size:15px;font-weight:600;">T2DM Patients with HbA1c &gt; 9%</span>
             </div>
             <button class="btn btn-default btn-sm">Edit</button>
           </div>
@@ -348,123 +547,140 @@
             <span>Version <span class="mono" style="color:var(--text-muted)">v3</span></span>
             <span>&bull;</span>
             <span>Created <span style="color:var(--text-muted)">Mar 8, 2026</span></span>
+            <span>&bull;</span>
+            <span>By <span style="color:var(--text-muted)">admin</span></span>
           </div>
         </div>
 
-        <!-- Canvas controls -->
+        <!-- Canvas Controls -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
           <div class="radio-group">
             <div class="radio-option active">All (AND)</div>
             <div class="radio-option">Any (OR)</div>
           </div>
-          <div class="switch-group">
-            <div class="switch on"><div class="knob"></div></div>
-            Descendants
+          <div style="display:flex;gap:8px;">
+            <div class="switch-group">
+              <div class="switch on"><div class="knob"></div></div>
+              Include descendants
+            </div>
           </div>
         </div>
 
-        <!-- Inclusion Group -->
+        <!-- ── Inclusion Group ── -->
         <div class="criteria-group inclusion" style="margin-bottom:16px;">
           <div class="group-header">
             <div class="group-label" style="color:var(--emerald);">
               <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14m-7-7h14"/></svg>
               Inclusion Criteria
             </div>
-            <button class="btn btn-ghost btn-sm">+ Add</button>
+            <button class="btn btn-ghost btn-sm">+ Add Criterion</button>
           </div>
+
+          <!-- Criterion 1 -->
           <div class="criteria-item">
             <div class="criteria-icon condition">
               <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
             </div>
             <div class="criteria-name">
               <div class="name">Type 2 Diabetes Mellitus</div>
-              <div class="detail">Condition &bull; <span class="mono">201826</span> &bull; + desc.</div>
+              <div class="detail">Condition &bull; concept_id: <span class="mono">201826</span> &bull; + descendants</div>
             </div>
-            <span class="tag tag-emerald" style="font-size:10px;">SNOMED</span>
+            <span class="tag tag-emerald" style="font-size:11px;">SNOMED</span>
             <button class="criteria-remove">&times;</button>
           </div>
+
           <div class="operator and">AND</div>
+
+          <!-- Criterion 2 -->
           <div class="criteria-item">
             <div class="criteria-icon measurement">
-              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 4-6"/></svg>
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19V6l-6 7h12l-6-7"/></svg>
             </div>
             <div class="criteria-name">
               <div class="name">HbA1c &gt; 9%</div>
-              <div class="detail">Measurement &bull; <span class="mono">3004410</span> &bull; val &gt; 9.0</div>
+              <div class="detail">Measurement &bull; concept_id: <span class="mono">3004410</span> &bull; value &gt; 9.0</div>
             </div>
-            <span class="tag tag-orange" style="font-size:10px;">LOINC</span>
+            <span class="tag tag-orange" style="font-size:11px;">LOINC</span>
             <button class="criteria-remove">&times;</button>
           </div>
+
           <div class="operator and">AND</div>
+
+          <!-- Criterion 3 -->
           <div class="criteria-item">
             <div class="criteria-icon visit">
-              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0H5"/></svg>
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0H5m14 0h2m-16 0H3m2 0h14"/></svg>
             </div>
             <div class="criteria-name">
-              <div class="name">&ge; 2 Outpatient Visits</div>
-              <div class="detail">Visit &bull; <span class="mono">9202</span> &bull; count &ge; 2</div>
+              <div class="name">At least 2 Outpatient Visits</div>
+              <div class="detail">Visit &bull; concept_id: <span class="mono">9202</span> &bull; count &ge; 2</div>
             </div>
-            <span class="tag tag-cyan" style="font-size:10px;">Visit</span>
+            <span class="tag tag-cyan" style="font-size:11px;">Visit</span>
             <button class="criteria-remove">&times;</button>
           </div>
         </div>
 
-        <!-- Exclusion Group -->
+        <!-- ── Exclusion Group ── -->
         <div class="criteria-group exclusion">
           <div class="group-header">
             <div class="group-label" style="color:#f87171;">
               <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
               Exclusion Criteria
             </div>
-            <button class="btn btn-danger btn-sm">+ Exclude</button>
+            <button class="btn btn-danger btn-sm">+ Add Exclusion</button>
           </div>
+
+          <!-- Exclusion 1 -->
           <div class="criteria-item">
             <div class="criteria-icon drug">
-              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="14" height="8" rx="1"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
             </div>
             <div class="criteria-name">
               <div class="name">Insulin Therapy</div>
-              <div class="detail">Drug &bull; <span class="mono">21600712</span> &bull; + desc.</div>
+              <div class="detail">Drug &bull; concept_id: <span class="mono">21600712</span> &bull; + descendants</div>
             </div>
-            <span class="tag tag-blue" style="font-size:10px;">RxNorm</span>
+            <span class="tag tag-blue" style="font-size:11px;">RxNorm</span>
             <button class="criteria-remove">&times;</button>
           </div>
+
           <div class="operator or">OR</div>
+
+          <!-- Exclusion 2 -->
           <div class="criteria-item">
             <div class="criteria-icon procedure">
               <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
             </div>
             <div class="criteria-name">
               <div class="name">Bariatric Surgery</div>
-              <div class="detail">Procedure &bull; <span class="mono">4144111</span></div>
+              <div class="detail">Procedure &bull; concept_id: <span class="mono">4144111</span></div>
             </div>
-            <span class="tag tag-purple" style="font-size:10px;">SNOMED</span>
+            <span class="tag tag-purple" style="font-size:11px;">SNOMED</span>
             <button class="criteria-remove">&times;</button>
           </div>
         </div>
 
-        <!-- Time window -->
+        <!-- Time Window -->
         <div class="card card-small" style="margin-top:16px;">
           <div style="display:flex;align-items:center;justify-content:space-between;">
-            <span style="font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:6px;">
-              <svg width="14" height="14" fill="none" stroke="var(--emerald)" stroke-width="2"><circle cx="7" cy="7" r="6"/><path d="M7 4v3l2 2"/></svg>
+            <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);">
+              <svg width="16" height="16" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
               Observation Window
-            </span>
+            </div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <input type="text" class="number-input" value="2020-01-01" readonly>
+              <input type="text" class="number-input" value="2020-01-01" style="width:110px;" readonly>
               <span style="color:var(--text-dim);font-size:13px;">to</span>
-              <input type="text" class="number-input" value="2025-12-31" readonly>
+              <input type="text" class="number-input" value="2025-12-31" style="width:110px;" readonly>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- RIGHT: Results -->
+      <!-- ── RIGHT: Results / Attrition Panel ── -->
       <div>
-        <!-- Summary Stats -->
+        <!-- Result Summary -->
         <div class="card accent-top" style="margin-bottom:20px;">
           <div class="card-title">
-            <svg width="18" height="18" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+            <svg width="18" height="18" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M9 19V6l-6 7h12l-6-7"/></svg>
             Cohort Results
           </div>
           <div class="grid-3" style="margin-bottom:16px;">
@@ -496,73 +712,106 @@
             <svg width="18" height="18" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
             Attrition Funnel
           </div>
+
           <div class="attrition-step">
             <div class="attrition-num">1</div>
             <div class="attrition-info">
               <div class="attrition-label">Initial Population</div>
               <div class="attrition-count">All patients in CDM</div>
             </div>
-            <div class="attrition-bar"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div></div>
+            <div class="attrition-bar">
+              <div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div>
+            </div>
             <div class="attrition-pct green">2,400K</div>
           </div>
+
           <div class="attrition-step">
             <div class="attrition-num">2</div>
             <div class="attrition-info">
               <div class="attrition-label">+ Type 2 Diabetes</div>
               <div class="attrition-count">-2,397,606 excluded</div>
             </div>
-            <div class="attrition-bar"><div class="progress-bar"><div class="progress-fill" style="width:8%"></div></div></div>
+            <div class="attrition-bar">
+              <div class="progress-bar"><div class="progress-fill" style="width:8%"></div></div>
+            </div>
             <div class="attrition-pct amber">2,394</div>
           </div>
+
           <div class="attrition-step">
             <div class="attrition-num">3</div>
             <div class="attrition-info">
               <div class="attrition-label">+ HbA1c &gt; 9%</div>
               <div class="attrition-count">-812 excluded</div>
             </div>
-            <div class="attrition-bar"><div class="progress-bar"><div class="progress-fill" style="width:5.5%"></div></div></div>
+            <div class="attrition-bar">
+              <div class="progress-bar"><div class="progress-fill" style="width:5.5%"></div></div>
+            </div>
             <div class="attrition-pct amber">1,582</div>
           </div>
+
           <div class="attrition-step">
             <div class="attrition-num">4</div>
             <div class="attrition-info">
               <div class="attrition-label">+ 2 Outpatient Visits</div>
               <div class="attrition-count">-198 excluded</div>
             </div>
-            <div class="attrition-bar"><div class="progress-bar"><div class="progress-fill" style="width:4.8%"></div></div></div>
+            <div class="attrition-bar">
+              <div class="progress-bar"><div class="progress-fill" style="width:4.8%"></div></div>
+            </div>
             <div class="attrition-pct amber">1,384</div>
           </div>
+
           <div class="attrition-step">
             <div class="attrition-num">5</div>
             <div class="attrition-info">
               <div class="attrition-label">&minus; Insulin / Bariatric</div>
               <div class="attrition-count">-137 excluded</div>
             </div>
-            <div class="attrition-bar"><div class="progress-bar"><div class="progress-fill" style="width:4.5%"></div></div></div>
+            <div class="attrition-bar">
+              <div class="progress-bar"><div class="progress-fill" style="width:4.5%"></div></div>
+            </div>
             <div class="attrition-pct green">1,247</div>
           </div>
         </div>
 
-        <!-- Sample Patients -->
+        <!-- Patient Sample -->
         <div class="card card-small">
           <div class="card-title" style="margin-bottom:12px;">
-            <svg width="16" height="16" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7"/><circle cx="9" cy="7" r="4"/></svg>
+            <svg width="16" height="16" fill="none" stroke="var(--emerald)" stroke-width="2"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             Sample Patients
             <span style="flex:1"></span>
             <button class="btn btn-ghost btn-sm">Refresh</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--deep-base);border-radius:10px;border:1px solid var(--border-subtle);">
-              <div><span class="mono" style="font-size:12px;color:var(--emerald)">P-00421</span><span style="font-size:13px;color:var(--text-muted);margin-left:12px;">F, 58y</span></div>
-              <div style="display:flex;gap:6px;"><span class="tag tag-emerald" style="font-size:10px;">T2DM</span><span class="tag tag-orange" style="font-size:10px;">HbA1c: 10.2</span></div>
+              <div>
+                <span class="mono" style="font-size:12px;color:var(--emerald)">P-00421</span>
+                <span style="font-size:13px;color:var(--text-muted);margin-left:12px;">F, 58y</span>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <span class="tag tag-emerald" style="font-size:10px;">T2DM</span>
+                <span class="tag tag-orange" style="font-size:10px;">HbA1c: 10.2</span>
+              </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--deep-base);border-radius:10px;border:1px solid var(--border-subtle);">
-              <div><span class="mono" style="font-size:12px;color:var(--emerald)">P-01893</span><span style="font-size:13px;color:var(--text-muted);margin-left:12px;">M, 67y</span></div>
-              <div style="display:flex;gap:6px;"><span class="tag tag-emerald" style="font-size:10px;">T2DM</span><span class="tag tag-orange" style="font-size:10px;">HbA1c: 9.8</span></div>
+              <div>
+                <span class="mono" style="font-size:12px;color:var(--emerald)">P-01893</span>
+                <span style="font-size:13px;color:var(--text-muted);margin-left:12px;">M, 67y</span>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <span class="tag tag-emerald" style="font-size:10px;">T2DM</span>
+                <span class="tag tag-orange" style="font-size:10px;">HbA1c: 9.8</span>
+              </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--deep-base);border-radius:10px;border:1px solid var(--border-subtle);">
-              <div><span class="mono" style="font-size:12px;color:var(--emerald)">P-03247</span><span style="font-size:13px;color:var(--text-muted);margin-left:12px;">F, 44y</span></div>
-              <div style="display:flex;gap:6px;"><span class="tag tag-emerald" style="font-size:10px;">T2DM</span><span class="tag tag-orange" style="font-size:10px;">HbA1c: 11.1</span></div>
+              <div>
+                <span class="mono" style="font-size:12px;color:var(--emerald)">P-03247</span>
+                <span style="font-size:13px;color:var(--text-muted);margin-left:12px;">F, 44y</span>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <span class="tag tag-emerald" style="font-size:10px;">T2DM</span>
+                <span class="tag tag-orange" style="font-size:10px;">HbA1c: 11.1</span>
+              </div>
             </div>
           </div>
         </div>
@@ -570,5 +819,6 @@
     </div>
   </main>
 </div>
+
 </body>
 </html>
