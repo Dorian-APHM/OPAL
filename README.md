@@ -47,33 +47,24 @@ OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (op
 ## Architecture
 
 ```mermaid
-graph TB
-    User(("👤 Utilisateur"))
+flowchart LR
+    User(("Utilisateur")) --> Frontend
 
-    subgraph Docker["🐳 docker compose up"]
-        Frontend["<b>opal-frontend</b><br/>React + Nginx<br/>:3000"]
-        Backend["<b>opal-backend</b><br/>FastAPI / Uvicorn<br/>:8000"]
-        DB[("<b>opal-db</b><br/>PostgreSQL 16<br/>:5432")]
-        KC["<b>opal-keycloak</b><br/>Keycloak 24<br/>:8080"]
-        OHDSI["<b>OHDSI Tools</b><br/>Atlas / WebAPI<br/>(on-demand)"]
+    subgraph compose ["docker compose up"]
+        Frontend["opal-frontend\nReact + Nginx\n:3000"]
+        Backend["opal-backend\nFastAPI / Uvicorn\n:8000"]
+        DB[("opal-db\nPostgreSQL 16\n:5432")]
+        KC["opal-keycloak\nKeycloak 24\n:8080"]
+        OHDSI["OHDSI Tools\n(on-demand)"]
+
+        Frontend -- "/api/*" --> Backend
+        Backend --> DB
+        Backend -- "OIDC" --> KC
+        Backend -. "Docker Socket" .-> OHDSI
     end
 
-    CDM[("<b>CDM OMOP</b><br/>N bases externes<br/>PostgreSQL")]
-
-    User --> Frontend
-    Frontend -->|"/api/*"| Backend
-    Backend --> DB
-    Backend -->|"OIDC"| KC
-    Backend -.->|"Docker Socket"| OHDSI
-    Backend -->|"psycopg2 (lecture seule)"| CDM
-
-    style Docker fill:#0d1b2a,stroke:#2bc459,stroke-width:2px,color:#e0e0e0
-    style Frontend fill:#1b2838,stroke:#2bc459,color:#e0e0e0
-    style Backend fill:#1b2838,stroke:#2bc459,color:#e0e0e0
-    style DB fill:#1b2838,stroke:#1f77b4,color:#e0e0e0
-    style KC fill:#1b2838,stroke:#1f77b4,color:#e0e0e0
-    style OHDSI fill:#1b2838,stroke:#555,stroke-dasharray:5 5,color:#888
-    style CDM fill:#0a1628,stroke:#1f77b4,stroke-width:2px,color:#e0e0e0
+    CDM[("CDM OMOP\nN bases externes\nPostgreSQL")]
+    Backend -- "psycopg2\n(lecture seule)" --> CDM
 ```
 
 | Service | Role | Image |
