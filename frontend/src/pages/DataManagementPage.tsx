@@ -189,25 +189,60 @@ export default function DataManagementPage({ selectedCdm }: Props) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load cohorts and tables when CDM changes
-  const prevCdmRef = useRef<string | null>(null);
+  const prevCdmRef = useRef<string | null>(selectedCdm);
+  const mountedRef = useRef(false);
   useEffect(() => {
     if (!selectedCdm) return;
-    const cdmChanged = prevCdmRef.current !== selectedCdm;
+    const cdmChanged = prevCdmRef.current !== null && prevCdmRef.current !== selectedCdm;
     prevCdmRef.current = selectedCdm;
 
-    setLoadingCohorts(true);
+    // On first mount, only reload lists if not already cached
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      // Refresh cohort list silently (don't clear selections)
+      setLoadingCohorts(true);
+      dataManagementApi
+        .listCohorts(selectedCdm)
+        .then((res) => setCohorts(res.data.cohorts))
+        .catch(() => setCohorts([]))
+        .finally(() => setLoadingCohorts(false));
+      if (tables.length === 0) {
+        setLoadingTables(true);
+        dataManagementApi
+          .listTables(selectedCdm)
+          .then((res) => {
+            setTables(res.data.tables);
+            const initial: TableColumnState = {};
+            for (const tbl of res.data.tables) {
+              initial[tbl.table_name] = {
+                selected: false,
+                columns: [],
+                selectedColumns: new Set(),
+                loading: false,
+              };
+            }
+            setTableState(initial);
+          })
+          .catch(() => setTables([]))
+          .finally(() => setLoadingTables(false));
+      }
+      return;
+    }
+
+    // CDM actually changed by user — reset everything
     if (cdmChanged) {
       setSelectedCohortId(null);
       setPreviewData(null);
       setCompletedTaskId(null);
     }
+    setLoadingCohorts(true);
     dataManagementApi
       .listCohorts(selectedCdm)
       .then((res) => setCohorts(res.data.cohorts))
       .catch(() => setCohorts([]))
       .finally(() => setLoadingCohorts(false));
 
-    if (cdmChanged || tables.length === 0) {
+    if (cdmChanged) {
       setLoadingTables(true);
       dataManagementApi
         .listTables(selectedCdm)
@@ -229,8 +264,11 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     }
   }, [selectedCdm]);
 
-  // Reset sameVisitOnly when cohort changes
+  // Reset sameVisitOnly when cohort actually changes (not on remount)
+  const prevCohortRef = useRef<string | null>(selectedCohortId);
   useEffect(() => {
+    if (prevCohortRef.current === selectedCohortId) return; // skip remount
+    prevCohortRef.current = selectedCohortId;
     setSameVisitOnly(false);
     setPreviewData(null);
     setCompletedTaskId(null);
@@ -307,13 +345,58 @@ export default function DataManagementPage({ selectedCdm }: Props) {
 
   const canExtract = cohortIdNum !== null && getTableSelections().length > 0 && !loading;
   const selectedTableCount = Object.values(tableState).filter((s) => s.selected).length;
+  const [previewLoading, setPreviewLoading] = useSessionState('data:previewLoading', false);
+  const previewAbortRef = useRef<AbortController | null>(null);
 
-  // ── Launch extraction ──
+  // ── Quick preview (synchronous, no CSV build) ──
+  const runPreview = useCallback(async () => {
+    if (!cohortIdNum) return;
+    const sels = getTableSelections();
+    if (sels.length === 0) return;
+    // Cancel any in-flight preview
+    if (previewAbortRef.current) previewAbortRef.current.abort();
+    const ctrl = new AbortController();
+    previewAbortRef.current = ctrl;
+    setPreviewLoading(true);
+    setError('');
+    try {
+      const resp = await dataManagementApi.extractPreview({
+        cohort_id: cohortIdNum,
+        same_visit_only: sameVisitOnly,
+        table_selections: sels,
+        preview_limit: 50,
+      });
+      if (ctrl.signal.aborted) return;
+      setPreviewData({
+        columns: resp.data.columns,
+        rows: resp.data.rows,
+        total_count: resp.data.total_count,
+      });
+    } catch (err: any) {
+      if (ctrl.signal.aborted) return;
+      setError(err.response?.data?.detail || err.message || 'Preview failed');
+    } finally {
+      if (!ctrl.signal.aborted) setPreviewLoading(false);
+    }
+  }, [cohortIdNum, sameVisitOnly, tableState]);
+
+  const handlePreview = () => { runPreview(); };
+
+  // Re-launch preview on remount if it was in progress
+  const previewResumedRef = useRef(false);
+  useEffect(() => {
+    if (previewLoading && !previewResumedRef.current && cohortIdNum) {
+      previewResumedRef.current = true;
+      runPreview();
+    }
+    return () => { if (previewAbortRef.current) previewAbortRef.current.abort(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Launch full extraction (background, builds CSV for download) ──
   const handleExtract = async () => {
     if (!canExtract) return;
     setLoading(true);
     setError('');
-    setPreviewData(null);
     setCompletedTaskId(null);
     try {
       const resp = await dataManagementApi.extractStart({
@@ -628,18 +711,29 @@ export default function DataManagementPage({ selectedCdm }: Props) {
                 {t('common.cancel', 'Cancel')}
               </Button>
             ) : (
-              <Button
-                variant="primary"
-                onClick={handleExtract}
-                disabled={!canExtract}
-                icon={<Eye className="h-4 w-4" />}
-              >
-                {previewData
-                  ? t('datamanagement.re_extract', 'Re-extract')
-                  : t('datamanagement.extract_run', 'Extract Dataset')}
-              </Button>
+              <>
+                <Button
+                  variant="primary"
+                  onClick={handlePreview}
+                  disabled={!canExtract || previewLoading}
+                  loading={previewLoading}
+                  icon={<Eye className="h-4 w-4" />}
+                >
+                  {previewData
+                    ? t('datamanagement.re_preview', 'Re-preview')
+                    : t('datamanagement.preview', 'Preview')}
+                </Button>
+                <Button
+                  onClick={handleExtract}
+                  disabled={!canExtract}
+                  icon={<Download className="h-4 w-4" />}
+                  className="!bg-emerald-600 hover:!bg-emerald-500"
+                >
+                  {t('datamanagement.extract_csv', 'Extract CSV')}
+                </Button>
+              </>
             )}
-            {previewData && completedTaskId && !loading && (
+            {completedTaskId && !loading && (
               <Button
                 variant="primary"
                 onClick={handleDownload}
