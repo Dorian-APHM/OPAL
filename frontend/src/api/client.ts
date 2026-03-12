@@ -31,6 +31,9 @@ import type {
   IncidenceAnalysisSummary,
   KaplanMeierResult,
   EstimationAnalysisSummary,
+  GroupSummary,
+  GroupDetail,
+  CohortShareInfo,
 } from '../types';
 
 const api = axios.create({
@@ -181,6 +184,10 @@ export const qualityApi = {
       body: JSON.stringify({ cdm_name: cdmName, domains }),
     });
   },
+  cancelAnalysis: (analysisId: string) =>
+    api.post(`/quality/analyze/cancel/${analysisId}`),
+  activeAnalyses: () =>
+    api.get<{ active: { analysis_id: string; cancelled: boolean; cdm_name: string; type: string; domains: string[]; completed: number; total: number; domain_status: { domain: string; status: string }[] }[] }>('/quality/analyze/active'),
   timeline: (cdmName: string, domain?: string) =>
     api.get<{ cdm_name: string; timelines: Record<string, any[]> }>(
       `/quality/timeline/${cdmName}`, { params: domain ? { domain } : {} }
@@ -214,16 +221,22 @@ export const cohortApi = {
     api.post<{ patients: SamplePatient[]; count: number }>('/cohorts/sample', { cdm_name: cdmName, criteria, limit: limit || 10 }),
   sampleDetailed: (cdmName: string, criteria: CohortCriteria, limit?: number) =>
     api.post<{ patients: Record<string, any>[]; count: number; columns: { key: string; label: string; domain: string }[] }>('/cohorts/sample/detailed', { cdm_name: cdmName, criteria, limit: limit || 10 }),
-  searchConcepts: (cdmName: string, query: string, domain?: string, vocabularyId?: string) =>
+  searchConcepts: (cdmName: string, query: string, domain?: string, vocabularyId?: string, standardOnly?: boolean) =>
     api.post<{ concepts: OmopConcept[]; count: number }>('/cohorts/concepts/search', {
-      cdm_name: cdmName, query, domain: domain || null, vocabulary_id: vocabularyId || null,
+      cdm_name: cdmName, query, domain: domain || null, vocabulary_id: vocabularyId || null, standard_only: standardOnly || false,
     }),
   listVocabularies: (cdmName: string) =>
     api.get<{ vocabularies: { vocabulary_id: string; vocabulary_name: string }[] }>('/cohorts/concepts/vocabularies', { params: { cdm_name: cdmName } }),
   listDomains: () =>
     api.get<{ domains: { name: string; table: string }[] }>('/cohorts/domains'),
-  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, signal?: AbortSignal, visitLevel?: boolean) =>
-    api.post<CharacterizationResult>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25, visit_level: visitLevel || false }, { signal }),
+  characterize: (cdmName: string, criteria: CohortCriteria, topN?: number, _signal?: AbortSignal, visitLevel?: boolean) =>
+    api.post<{ task_id: string; status: string }>('/cohorts/characterize', { cdm_name: cdmName, criteria, top_n: topN || 25, visit_level: visitLevel || false }),
+  characterizeStatus: (taskId: string) =>
+    api.get<{ task_id: string; status: string; result?: CharacterizationResult; error?: string; completed?: number; total?: number; current_step?: string }>(`/cohorts/characterize/status/${taskId}`),
+  characterizeCancel: (taskId: string) =>
+    api.post(`/cohorts/characterize/cancel/${taskId}`),
+  characterizeActive: () =>
+    api.get<{ task_id: string | null; status: string }>('/cohorts/characterize/active'),
   saveCharacterization: (cohortId: number, characterization: CharacterizationResult) =>
     api.put(`/cohorts/${cohortId}/characterization`, { characterization }),
   getCharacterization: (cohortId: number) =>
@@ -235,6 +248,10 @@ export const cohortApi = {
       cohort_id_b: cohortIdB,
       visit_level: visitLevel || false,
     }),
+  sqlSchema: (cdmName: string) =>
+    api.get<{ schema: string; tables: Record<string, string[]> }>(
+      '/cohorts/sql/schema', { params: { cdm_name: cdmName } }
+    ),
   executeSql: (cdmName: string, sql: string, limit?: number) =>
     api.post<{ columns: string[]; rows: Record<string, any>[]; row_count: number; truncated: boolean }>(
       '/cohorts/sql/execute', { cdm_name: cdmName, sql, limit: limit || 1000 }
@@ -271,9 +288,15 @@ export const mappingApi = {
     enable_fuzzy?: boolean; enable_keyword?: boolean;
     enable_contextual?: boolean; enable_sapbert?: boolean;
   }) =>
-    api.post<{ domain: string; results: SuggestionResult[] }>('/mapping/suggest/batch', {
+    api.post<{ task_id: string; status: string }>('/mapping/suggest/batch', {
       cdm_name: cdmName, domain, limit: limit || 20, ...options,
     }),
+  suggestStatus: (taskId: string) =>
+    api.get<{ task_id: string; status: string; domain?: string; results?: SuggestionResult[]; error?: string }>(`/mapping/suggest/status/${taskId}`),
+  suggestCancel: (taskId: string) =>
+    api.post(`/mapping/suggest/cancel/${taskId}`),
+  suggestActive: () =>
+    api.get<{ active: { task_id: string; cdm_name: string; domain: string; status: string }[] }>('/mapping/suggest/active'),
   decide: (data: {
     cdm_name: string; domain: string; source_value: string; source_name?: string;
     action: string; target_concept_id?: number; target_concept_name?: string;
@@ -343,6 +366,11 @@ export const conceptApi = {
     api.post<{ counts: Record<number, { n_records: number; n_persons: number }> }>(
       `/concepts/counts?cdm_name=${encodeURIComponent(cdmName)}`,
       { concept_ids: conceptIds },
+    ),
+  sourceCounts: (cdmName: string, conceptIds: number[], domains?: string[]) =>
+    api.post<{ counts: Record<number, { n_source_records: number; n_source_persons: number }> }>(
+      `/concepts/counts/source?cdm_name=${encodeURIComponent(cdmName)}`,
+      { concept_ids: conceptIds, domains: domains || null },
     ),
 };
 
@@ -467,6 +495,185 @@ export const estimationApi = {
   list: (cdmName?: string) =>
     api.get<{ analyses: EstimationAnalysisSummary[] }>('/estimation/', { params: { cdm_name: cdmName } }),
   get: (id: number) => api.get('/estimation/' + id),
+};
+
+// Data Management endpoints
+export const dataManagementApi = {
+  listCohorts: (cdmName: string) =>
+    api.get<{ cohorts: any[] }>('/datamanagement/cohorts', { params: { cdm_name: cdmName } }),
+  listTables: (cdmName: string) =>
+    api.get<{ tables: { table_name: string; has_visit: boolean }[] }>('/datamanagement/tables', { params: { cdm_name: cdmName } }),
+  listColumns: (cdmName: string, tableName: string) =>
+    api.get<{ table: string; columns: { column_name: string; data_type: string }[] }>(
+      `/datamanagement/tables/${tableName}/columns`, { params: { cdm_name: cdmName } }
+    ),
+  extractStart: (data: {
+    cohort_id: number; same_visit_only: boolean;
+    table_selections: { table: string; columns: string[] }[];
+    preview_limit?: number;
+  }) => api.post<{ task_id: string; status: string }>('/datamanagement/extract/start', data),
+  extractStatus: (taskId: string) =>
+    api.get<{
+      task_id: string; status: string;
+      completed?: number; total?: number; current_step?: string;
+      cohort_name?: string;
+      result?: {
+        columns: string[]; rows: Record<string, any>[];
+        total_count: number; preview_limit: number;
+        cohort_name: string; sql: string;
+      };
+      error?: string;
+    }>(`/datamanagement/extract/status/${taskId}`),
+  extractDownloadUrl: (taskId: string) =>
+    `/api/datamanagement/extract/download/${taskId}`,
+  extractCancel: (taskId: string) =>
+    api.post(`/datamanagement/extract/cancel/${taskId}`),
+  extractActive: () =>
+    api.get<{
+      task_id: string | null; status: string;
+      cdm_name?: string; cohort_name?: string;
+      completed?: number; total?: number; current_step?: string;
+    }>('/datamanagement/extract/active'),
+  // Legacy synchronous endpoints (kept for backwards compat)
+  extractPreview: (data: {
+    cohort_id: number; same_visit_only: boolean;
+    table_selections: { table: string; columns: string[] }[];
+    preview_limit?: number;
+  }) => api.post<{
+    columns: string[]; rows: Record<string, any>[];
+    total_count: number; preview_limit: number;
+    cohort_name: string; sql: string;
+  }>('/datamanagement/extract/preview', data),
+  extractDownload: (data: {
+    cohort_id: number; same_visit_only: boolean;
+    table_selections: { table: string; columns: string[] }[];
+  }) => api.post('/datamanagement/extract/download', data, { responseType: 'blob' }),
+};
+
+// CDM Access Control endpoints
+export const cdmAccessApi = {
+  list: (cdmName?: string, username?: string) =>
+    api.get<{ grants: any[]; group_grants: any[] }>('/cdm-access/', { params: { cdm_name: cdmName, username } }),
+  getAccessibleCdms: () =>
+    api.get<{ cdms: string[] }>('/cdm-access/cdms-for-user'),
+  grant: (cdmName: string, username: string) =>
+    api.post('/cdm-access/grant', { cdm_name: cdmName, username }),
+  grantGroup: (cdmName: string, groupName: string) =>
+    api.post('/cdm-access/grant-group', { cdm_name: cdmName, group_name: groupName }),
+  revoke: (cdmName: string, username: string) =>
+    api.post('/cdm-access/revoke', { cdm_name: cdmName, username }),
+  revokeGroup: (cdmName: string, groupName: string) =>
+    api.post('/cdm-access/revoke-group', { cdm_name: cdmName, group_name: groupName }),
+  clearCdm: (cdmName: string) =>
+    api.delete(`/cdm-access/cdm/${cdmName}`),
+};
+
+// Notifications endpoints
+export const notificationsApi = {
+  list: (unreadOnly?: boolean, limit?: number, notifType?: string) =>
+    api.get<{ notifications: any[] }>('/notifications/', { params: { unread_only: unreadOnly, limit, notif_type: notifType } }),
+  badges: () =>
+    api.get<{ badges: Record<string, number>; total: number }>('/notifications/badges'),
+  items: (notifType?: string) =>
+    api.get<{ items: Record<string, { item_id: string; notif_id: number }[]> }>('/notifications/items', { params: { notif_type: notifType } }),
+  markRead: (id: number) =>
+    api.post(`/notifications/${id}/read`),
+  markItemRead: (notifType: string, itemId: string) =>
+    api.post('/notifications/read-item', null, { params: { notif_type: notifType, item_id: itemId } }),
+  markAllRead: (type?: string) =>
+    api.post('/notifications/read-all', null, { params: { notif_type: type } }),
+};
+
+// Favorites endpoints
+export const favoritesApi = {
+  list: (itemType?: string) =>
+    api.get<{ favorites: any[] }>('/favorites/', { params: { item_type: itemType } }),
+  add: (data: { item_type: string; item_id: string; item_label?: string; item_meta?: any }) =>
+    api.post('/favorites/', data),
+  remove: (id: number) =>
+    api.delete(`/favorites/${id}`),
+};
+
+// Saved Queries endpoints
+export const savedQueriesApi = {
+  list: (cdmName?: string) =>
+    api.get<{ queries: any[] }>('/saved-queries/', { params: { cdm_name: cdmName } }),
+  create: (data: { cdm_name: string; name: string; sql: string; description?: string }) =>
+    api.post('/saved-queries/', data),
+  update: (id: number, data: { name?: string; sql?: string; description?: string }) =>
+    api.put(`/saved-queries/${id}`, data),
+  delete: (id: number) =>
+    api.delete(`/saved-queries/${id}`),
+};
+
+// Cohort Templates endpoints
+export const cohortTemplatesApi = {
+  list: (category?: string) =>
+    api.get<{ templates: any[] }>('/cohort-templates/', { params: { category } }),
+  categories: () =>
+    api.get<{ categories: string[] }>('/cohort-templates/categories'),
+  get: (id: number) =>
+    api.get('/cohort-templates/' + id),
+  create: (data: { name: string; category?: string; description?: string; criteria_json: any }) =>
+    api.post('/cohort-templates/', data),
+  delete: (id: number) =>
+    api.delete(`/cohort-templates/${id}`),
+};
+
+// User Groups endpoints
+export const groupApi = {
+  list: () =>
+    api.get<{ groups: GroupSummary[] }>('/groups/'),
+  get: (groupName: string) =>
+    api.get<GroupDetail>(`/groups/${encodeURIComponent(groupName)}`),
+  create: (data: { name: string; description?: string; members?: string[] }) =>
+    api.post('/groups/', data),
+  update: (groupName: string, data: { description?: string; members?: string[] }) =>
+    api.put(`/groups/${encodeURIComponent(groupName)}`, data),
+  delete: (groupName: string) =>
+    api.delete(`/groups/${encodeURIComponent(groupName)}`),
+  addMember: (groupName: string, username: string) =>
+    api.post(`/groups/${encodeURIComponent(groupName)}/members`, { username }),
+  removeMember: (groupName: string, username: string) =>
+    api.delete(`/groups/${encodeURIComponent(groupName)}/members/${encodeURIComponent(username)}`),
+};
+
+// Cohort Sharing endpoints
+export const cohortSharingApi = {
+  listShares: (cohortId: number) =>
+    api.get<CohortShareInfo>(`/cohorts/${cohortId}/shares`),
+  share: (cohortId: number, shareType: string, shareTarget?: string) =>
+    api.post(`/cohorts/${cohortId}/share`, { share_type: shareType, share_target: shareTarget || '' }),
+  unshare: (cohortId: number, shareType: string, shareTarget?: string) =>
+    api.post(`/cohorts/${cohortId}/unshare`, { share_type: shareType, share_target: shareTarget || '' }),
+};
+
+// OPAL users (lightweight, for sharing dropdowns)
+export const usersApi = {
+  listOpalUsers: () =>
+    api.get<{ users: string[] }>('/users/list'),
+};
+
+// Global Search endpoint
+export const searchApi = {
+  search: (q: string, cdmName?: string, limit?: number) =>
+    api.get<{ query: string; total: number; results: Record<string, any[]> }>(
+      '/search/', { params: { q, cdm_name: cdmName, limit } }
+    ),
+};
+
+// Quality Conformity endpoints (background thread + persist)
+export const conformityApi = {
+  run: (cdmName: string) =>
+    api.post<{ cdm_name: string; analysis_id: string; status: string }>(
+      '/quality/conformity', { cdm_name: cdmName, domain: 'conformity' }
+    ),
+  cancel: (analysisId: string) =>
+    api.post(`/quality/conformity/cancel/${analysisId}`),
+  get: (cdmName: string) =>
+    api.get<{ cdm_name: string; snapshot_id?: number; version?: number; created_at?: string; result: any | null }>(
+      `/quality/conformity/${encodeURIComponent(cdmName)}`
+    ),
 };
 
 export default api;

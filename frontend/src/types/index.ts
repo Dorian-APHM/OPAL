@@ -206,7 +206,8 @@ export interface AnalysisSettingsType {
 
 /** SSE batch progress event */
 export interface BatchProgressEvent {
-  type: 'progress' | 'done' | 'error';
+  type: 'start' | 'progress' | 'done' | 'error' | 'cancelled';
+  analysis_id?: string;
   domain?: string;
   status?: 'running' | 'success' | 'error';
   error?: string;
@@ -322,6 +323,8 @@ export interface CohortSummary {
   cdm_name: string;
   name: string;
   description: string;
+  created_by?: string;
+  shared_with_all?: boolean;
   created_at: string | null;
   updated_at: string | null;
   latest_version: number;
@@ -468,12 +471,23 @@ export interface CharacterizationObsPeriod {
 }
 
 /** Full characterization result */
+export interface CharacterizationVisitDuration {
+  n_visits: number;
+  mean_days: number | null;
+  std_days: number | null;
+  min_days: number | null;
+  max_days: number | null;
+  median_days: number | null;
+  by_type?: { visit_type: string; n_visits: number; mean_days: number | null; std_days: number | null; median_days: number | null }[];
+}
+
 export interface CharacterizationResult {
   cohort_size: number;
   demographics: CharacterizationDemographics;
   domain_prevalence: CharacterizationDomainPrevalence[];
   measurement_stats: CharacterizationMeasurementStat[];
   visit_types: CharacterizationVisitType[];
+  visit_duration?: CharacterizationVisitDuration;
   observation_period: CharacterizationObsPeriod;
 }
 
@@ -785,6 +799,30 @@ export interface AdminUser {
   enabled: boolean;
   created_at: number | null;
   roles: string[];
+}
+
+/** User group summary (from /api/groups/) */
+export interface GroupSummary {
+  name: string;
+  description: string;
+  created_by: string;
+  member_count: number;
+  created_at: string | null;
+}
+
+/** User group detail (from /api/groups/:name) */
+export interface GroupDetail {
+  name: string;
+  description: string;
+  created_by: string;
+  members: { username: string; added_by: string }[];
+}
+
+/** Cohort sharing info (from /api/cohorts/:id/shares) */
+export interface CohortShareInfo {
+  cohort_id: number;
+  shared_with_all: boolean;
+  shares: { type: string; target: string; shared_by: string; created_at: string | null }[];
 }
 
 /** Access request */

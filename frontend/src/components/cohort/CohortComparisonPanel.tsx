@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSessionState } from '../../hooks/useSessionState';
 import {
   Card, Button, Select, Alert, Empty, Tooltip, Switch, Statistic,
   Collapse, Table, Tag, Spinner,
@@ -44,12 +45,12 @@ function SmdTag({ smd }: { smd: number | null }) {
 
 export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
   const { t } = useTranslation();
-  const [cohortIdA, setCohortIdA] = useState<string | undefined>();
-  const [cohortIdB, setCohortIdB] = useState<string | undefined>();
+  const [cohortIdA, setCohortIdA] = useSessionState<string | undefined>('cohort:cmp:idA', undefined);
+  const [cohortIdB, setCohortIdB] = useSessionState<string | undefined>('cohort:cmp:idB', undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<CohortComparisonResult | null>(null);
-  const [visitLevel, setVisitLevel] = useState(false);
+  const [result, setResult] = useSessionState<CohortComparisonResult | null>('cohort:cmp:result', null);
+  const [visitLevel, setVisitLevel] = useSessionState('cohort:cmp:visitLevel', false);
 
   const runCompare = async () => {
     if (!cdmName || !cohortIdA || !cohortIdB) return;
@@ -72,12 +73,10 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
     for (const v of result.all_variables) {
       lines.push(`"${v.category}","${v.variable}","","",${v.smd ?? ''}`);
     }
-    // Demographics details
     const d = result.demographics;
     lines.push(`Demographics,Age (mean),${d.age.mean_a ?? ''},${d.age.mean_b ?? ''},${d.age.smd ?? ''}`);
     for (const g of d.gender) lines.push(`Demographics,"Gender: ${g.label}",${g.pct_a}%,${g.pct_b}%,${g.smd ?? ''}`);
     for (const r of d.race) lines.push(`Demographics,"Race: ${r.label}",${r.pct_a}%,${r.pct_b}%,${r.smd ?? ''}`);
-    // Domain concepts
     for (const dp of result.domain_prevalence) {
       for (const c of dp.concepts) {
         lines.push(`"${dp.domain}","${c.concept_name}",${c.pct_persons_a}%,${c.pct_persons_b}%,${c.smd ?? ''}`);
@@ -318,7 +317,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                     key: dp.domain,
                     label: (
                       <div className="flex items-center gap-2">
-                        <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'}>{dp.domain}</Tag>
+                        <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'}>{t(`domains.${dp.domain}`, dp.domain)}</Tag>
                         <span className="text-text-muted text-[11px]">
                           {dp.concepts.length} concepts
                         </span>

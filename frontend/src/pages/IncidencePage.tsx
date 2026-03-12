@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSessionState } from '../hooks/useSessionState';
 import { BarChart3, Calculator } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -12,15 +13,15 @@ import type { Column } from '../components/ui';
 export default function IncidencePage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
-  const [targetId, setTargetId] = useState<number | null>(null);
-  const [outcomeId, setOutcomeId] = useState<number | null>(null);
-  const [tarStart, setTarStart] = useState(0);
-  const [tarEnd, setTarEnd] = useState<string | number>('observation_end');
-  const [tarEndDays, setTarEndDays] = useState(365);
-  const [strata, setStrata] = useState<string[]>([]);
+  const [cohorts, setCohorts] = useSessionState<CohortSummary[]>('incidence:cohorts', []);
+  const [targetId, setTargetId] = useSessionState<number | null>('incidence:targetId', null);
+  const [outcomeId, setOutcomeId] = useSessionState<number | null>('incidence:outcomeId', null);
+  const [tarStart, setTarStart] = useSessionState('incidence:tarStart', 0);
+  const [tarEnd, setTarEnd] = useSessionState<string | number>('incidence:tarEnd', 'observation_end');
+  const [tarEndDays, setTarEndDays] = useSessionState('incidence:tarEndDays', 365);
+  const [strata, setStrata] = useSessionState<string[]>('incidence:strata', []);
   const [computing, setComputing] = useState(false);
-  const [result, setResult] = useState<IncidenceResult | null>(null);
+  const [result, setResult] = useSessionState<IncidenceResult | null>('incidence:result', null);
 
   useEffect(() => {
     if (!selectedCdm) return;
@@ -201,10 +202,10 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
         <>
           <div className="grid grid-cols-4 gap-4 mb-4">
             <Card size="small">
-              <Statistic title={t('incidence.persons_at_risk', 'At Risk')} value={result.target_count} />
+              <Statistic title={t('incidence.persons_at_risk', 'At Risk')} value={result.target_count?.toLocaleString()} />
             </Card>
             <Card size="small">
-              <Statistic title={t('incidence.persons_with_outcome', 'With Outcome')} value={result.outcome_count} />
+              <Statistic title={t('incidence.persons_with_outcome', 'With Outcome')} value={result.outcome_count?.toLocaleString()} />
             </Card>
             <Card size="small">
               <Statistic title={t('incidence.person_years', 'Person-Years')} value={result.person_years.toFixed(1)} />

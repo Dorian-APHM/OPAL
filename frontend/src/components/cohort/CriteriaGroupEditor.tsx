@@ -218,15 +218,6 @@ export default function CriteriaGroupEditor({
               <span className="text-[11px]">{t('cohort.same_visit', 'Same visit')}</span>
             </Checkbox>
           )}
-          {depth < MAX_DEPTH && (
-            <Tooltip title={t('cohort.add_sub_group', 'Add sub-group')}>
-              <span>
-                <Button size="small" icon={<Layers className="h-3.5 w-3.5" />} onClick={addSubGroup}>
-                  {t('cohort.sub_group', 'Sub-group')}
-                </Button>
-              </span>
-            </Tooltip>
-          )}
           {!isRoot && onRemoveGroup && (
             <Button
               size="small"
@@ -379,7 +370,7 @@ function CriterionCard({
         <div className="flex-1">
           {/* Domain & concepts */}
           <div className="flex flex-wrap items-center gap-1 mb-1">
-            <Tag color={DOMAIN_TAG_COLORS[criterion.domain] || 'default'}>{criterion.domain}</Tag>
+            <Tag color={DOMAIN_TAG_COLORS[criterion.domain] || 'default'}>{t(`domains.${criterion.domain}`, criterion.domain)}</Tag>
             {isInitialEvent && (
               <Tag color="yellow" className="text-[10px]">
                 <Star className="h-2.5 w-2.5 fill-current inline" /> Index
@@ -695,7 +686,7 @@ function TemporalEditor({
                 className="w-[200px]"
                 options={allCriteria.filter(c => c.id !== criterionId).map(c => ({
                   value: c.id,
-                  label: `${c.domain}: ${c.concepts.length > 0 ? c.concepts[0].concept_name : (c.source_codes?.[0] || c.domain)}`,
+                  label: `${t(`domains.${c.domain}`, c.domain)}: ${c.concepts.length > 0 ? c.concepts[0].concept_name : (c.source_codes?.[0] || t(`domains.${c.domain}`, c.domain))}`,
                 }))}
               />
             </div>

@@ -2,6 +2,12 @@ import { Fragment, type ReactNode } from 'react';
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions, Transition } from '@headlessui/react';
 import { ChevronDown, Check, X } from 'lucide-react';
 
+function labelToString(label: ReactNode): string {
+  if (typeof label === 'string') return label;
+  if (typeof label === 'number') return String(label);
+  return '';
+}
+
 export interface SelectOption {
   value: string;
   label: ReactNode;
@@ -48,7 +54,7 @@ export function Select({
               disabled:opacity-40 disabled:cursor-not-allowed
             `}
           >
-            <span className={selected ? 'text-text-bright' : 'text-text-dim'}>
+            <span className={`block truncate ${selected ? 'text-text-bright' : 'text-text-dim'}`} title={selected ? labelToString(selected.label) : undefined}>
               {selected ? selected.label : placeholder}
             </span>
             <span className="absolute inset-y-0 right-0 flex items-center pr-2 gap-1">
@@ -70,7 +76,7 @@ export function Select({
             leaveFrom="opacity-100"
             leaveTo="opacity-0"
           >
-            <ListboxOptions className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)] py-1 text-sm focus:outline-none">
+            <ListboxOptions className="absolute z-50 mt-1 max-h-60 min-w-full w-max max-w-[320px] overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)] py-1 text-sm focus:outline-none">
               {options.map((option) => (
                 <ListboxOption
                   key={option.value}
@@ -86,7 +92,7 @@ export function Select({
                 >
                   {({ selected }) => (
                     <>
-                      <span className="block truncate">{option.label}</span>
+                      <span className="block truncate" title={labelToString(option.label)}>{option.label}</span>
                       {option.description && (
                         <span className="block text-xs text-text-dim mt-0.5">{option.description}</span>
                       )}

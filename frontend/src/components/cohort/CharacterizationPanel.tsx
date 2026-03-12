@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSessionState } from '../../hooks/useSessionState';
 import {
   Card, Button, Alert, Empty, Tooltip, Switch, Statistic, Progress,
   Collapse, Table, Tag, Spinner, useToast,
@@ -46,13 +47,17 @@ interface Props {
 export default function CharacterizationPanel({ cdmName, criteria, cohortId }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [result, setResult] = useState<CharacterizationResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useSessionState<CharacterizationResult | null>('cohort:char:result', null);
+  const [loading, setLoading] = useSessionState('cohort:char:loading', false);
+  const [taskId, setTaskId] = useSessionState<string | null>('cohort:char:taskId', null);
+  const [progressCompleted, setProgressCompleted] = useSessionState('cohort:char:progDone', 0);
+  const [progressTotal, setProgressTotal] = useSessionState('cohort:char:progTotal', 0);
+  const [currentStep, setCurrentStep] = useSessionState('cohort:char:step', '');
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [error, setError] = useState('');
-  const [characterizedAt, setCharacterizedAt] = useState<string | null>(null);
+  const [characterizedAt, setCharacterizedAt] = useSessionState<string | null>('cohort:char:at', null);
   const [visitLevel, setVisitLevel] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const hasCriteria =
     criteria.inclusion.criteria.length > 0 ||
@@ -64,20 +69,88 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
   // Stable key for criteria to avoid spurious resets on every render
   const criteriaKey = JSON.stringify(criteria);
 
-  // Clear results and cancel in-flight request when criteria or cohortId change
-  useEffect(() => {
-    // Abort any running characterization
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
     }
-    setResult(null);
-    setCharacterizedAt(null);
-    setError('');
-    setLoading(false);
+  }, []);
 
-    // Load saved characterization if we have a cohortId
-    if (!cohortId) return;
+  const startPolling = useCallback((tid: string) => {
+    stopPolling();
+    pollingRef.current = setInterval(async () => {
+      try {
+        const resp = await cohortApi.characterizeStatus(tid);
+        // Update progress
+        if (resp.data.completed != null) setProgressCompleted(resp.data.completed);
+        if (resp.data.total != null) setProgressTotal(resp.data.total);
+        if (resp.data.current_step) setCurrentStep(resp.data.current_step);
+
+        if (resp.data.status === 'completed' && resp.data.result) {
+          setResult(resp.data.result);
+          setCharacterizedAt(new Date().toISOString());
+          setLoading(false);
+          setTaskId(null);
+          setProgressCompleted(0);
+          setProgressTotal(0);
+          setCurrentStep('');
+          stopPolling();
+
+          // Auto-save if cohort is saved
+          if (cohortId) {
+            try {
+              await cohortApi.saveCharacterization(cohortId, resp.data.result);
+            } catch { /* non-blocking */ }
+          }
+        } else if (resp.data.status === 'error') {
+          setError(resp.data.error || 'Characterization failed');
+          setLoading(false);
+          setTaskId(null);
+          setProgressCompleted(0);
+          setProgressTotal(0);
+          setCurrentStep('');
+          stopPolling();
+        }
+      } catch {
+        // Network error — keep polling
+      }
+    }, 2000);
+  }, [stopPolling, cohortId]);
+
+  // On mount: reconnect to running task if any
+  useEffect(() => {
+    if (taskId && loading) {
+      startPolling(taskId);
+    } else if (!taskId && loading) {
+      // Check if there's a running task on the server
+      cohortApi.characterizeActive().then(resp => {
+        if (resp.data.task_id) {
+          setTaskId(resp.data.task_id);
+          startPolling(resp.data.task_id);
+        } else {
+          setLoading(false);
+        }
+      }).catch(() => setLoading(false));
+    }
+    return stopPolling;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear results when criteria change (but not on first mount if we have cached results)
+  const prevCriteriaRef = useRef(criteriaKey);
+  useEffect(() => {
+    if (prevCriteriaRef.current !== criteriaKey) {
+      prevCriteriaRef.current = criteriaKey;
+      // Criteria changed — clear cached results
+      if (!loading) {
+        setResult(null);
+        setCharacterizedAt(null);
+      }
+    }
+  }, [criteriaKey]);
+
+  // Load saved characterization if we have a cohortId and no result
+  useEffect(() => {
+    if (!cohortId || result || loading) return;
     let cancelled = false;
     setLoadingSaved(true);
     cohortApi.getCharacterization(cohortId).then(resp => {
@@ -86,53 +159,35 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
         setResult(resp.data.characterization);
         setCharacterizedAt(resp.data.characterized_at);
       }
-    }).catch(() => {
-      // no saved characterization, that's fine
-    }).finally(() => {
+    }).catch(() => {}).finally(() => {
       if (!cancelled) setLoadingSaved(false);
     });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cohortId, criteriaKey]);
+  }, [cohortId]);
 
   const runCharacterization = async () => {
     if (!cdmName || !hasCriteria) return;
-    // Abort previous request if any
-    if (abortRef.current) abortRef.current.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
 
     setLoading(true);
     setError('');
+    setResult(null);
     try {
-      const resp = await cohortApi.characterize(cdmName, criteria, 25, controller.signal, visitLevel);
-      if (controller.signal.aborted) return;
-      setResult(resp.data);
-      setCharacterizedAt(new Date().toISOString());
-
-      // Auto-save if cohort is saved
-      if (cohortId) {
-        try {
-          await cohortApi.saveCharacterization(cohortId, resp.data);
-          toast.success(t('cohort.characterization_saved', 'Characterization saved'));
-        } catch {
-          // non-blocking — results are still displayed
-        }
-      }
+      const resp = await cohortApi.characterize(cdmName, criteria, 25, undefined, visitLevel);
+      const tid = resp.data.task_id;
+      setTaskId(tid);
+      startPolling(tid);
     } catch (e: any) {
-      if (controller.signal.aborted) return;
       setError(e.response?.data?.detail || 'Characterization failed');
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      setLoading(false);
     }
   };
 
   const stopCharacterization = () => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
+    stopPolling();
+    if (taskId) {
+      cohortApi.characterizeCancel(taskId).catch(() => {});
     }
+    setTaskId(null);
     setLoading(false);
   };
 
@@ -156,6 +211,15 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
       lines.push(`${dp.domain},Patients with data,${dp.patients_with_data} (${dp.pct_with_data}%)`);
       for (const c of dp.top_concepts) {
         lines.push(`${dp.domain},"${c.concept_name} [${c.concept_id}]",${c.n_persons} (${c.pct_persons}%)`);
+      }
+    }
+
+    // Visit duration
+    if (result.visit_duration?.n_visits) {
+      const vd = result.visit_duration;
+      lines.push(`Visit Duration,Overall,"mean=${vd.mean_days ?? ''} median=${vd.median_days ?? ''} SD=${vd.std_days ?? ''} range=${vd.min_days ?? ''}-${vd.max_days ?? ''} (${vd.n_visits} visits)"`);
+      for (const bt of (vd.by_type || [])) {
+        lines.push(`Visit Duration,"${bt.visit_type}","mean=${bt.mean_days ?? ''} median=${bt.median_days ?? ''} SD=${bt.std_days ?? ''} (${bt.n_visits} visits)"`);
       }
     }
 
@@ -221,15 +285,25 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                 CSV
               </Button>
             )}
-            <Button
-              variant="primary"
-              size="small"
-              onClick={runCharacterization}
-              loading={loading}
-              disabled={!hasCriteria || !cdmName}
-            >
-              {result ? t('cohort.refresh', 'Refresh') : t('cohort.run_characterization', 'Run Characterization')}
-            </Button>
+            {loading ? (
+              <Button
+                variant="danger"
+                size="small"
+                icon={<X className="h-3.5 w-3.5" />}
+                onClick={stopCharacterization}
+              >
+                {t('common.stop', 'Stop')}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="small"
+                onClick={runCharacterization}
+                disabled={!hasCriteria || !cdmName}
+              >
+                {result ? t('cohort.refresh', 'Refresh') : t('cohort.run_characterization', 'Run Characterization')}
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -238,24 +312,25 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
 
       {(loading || loadingSaved) && (
         <Card size="small">
-          <div className="text-center py-10">
+          <div className="text-center py-8">
             <Spinner size="large" />
-            <div className="mt-4">
+            <div className="mt-4 space-y-2">
               <span className="text-text-muted text-sm">
                 {loadingSaved ? t('cohort.loading_saved', 'Loading saved results...') : 'Running characterization queries...'}
               </span>
+              {loading && progressTotal > 0 && (
+                <div className="max-w-xs mx-auto space-y-1">
+                  <Progress
+                    percent={Math.round((progressCompleted / progressTotal) * 100)}
+                    size="small"
+                    strokeColor="#10B981"
+                  />
+                  <div className="text-xs text-text-dim">
+                    {currentStep} ({progressCompleted}/{progressTotal})
+                  </div>
+                </div>
+              )}
             </div>
-            {loading && (
-              <Button
-                variant="danger"
-                size="small"
-                icon={<X className="h-3.5 w-3.5" />}
-                onClick={stopCharacterization}
-                className="mt-3"
-              >
-                {t('common.stop', 'Stop')}
-              </Button>
-            )}
           </div>
         </Card>
       )}
@@ -276,7 +351,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
           <Card size="small">
             <Statistic
               title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{t('cohort.cohort_size', 'Cohort Size')}</div>}
-              value={result.cohort_size}
+              value={result.cohort_size?.toLocaleString()}
               valueStyle={{ color: '#1890ff', fontSize: 28 }}
               suffix="patients"
             />
@@ -491,6 +566,49 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
             </Card>
           )}
 
+          {/* Visit Duration */}
+          {result.visit_duration && result.visit_duration.n_visits > 0 && (
+            <Card size="small" title={t('cohort.visit_duration', 'Visit Duration')}>
+              <div className="flex flex-wrap gap-4 mb-3">
+                <div className="text-center">
+                  <div className="text-lg font-bold text-text-bright">{result.visit_duration.mean_days ?? '—'}</div>
+                  <div className="text-[11px] text-text-muted">{t('cohort.mean_days', 'Mean (days)')}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-text-bright">{result.visit_duration.median_days ?? '—'}</div>
+                  <div className="text-[11px] text-text-muted">{t('cohort.median_days', 'Median (days)')}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-text-bright">{result.visit_duration.std_days ?? '—'}</div>
+                  <div className="text-[11px] text-text-muted">{t('cohort.std', 'SD')}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-text-bright">{result.visit_duration.min_days ?? '—'} — {result.visit_duration.max_days ?? '—'}</div>
+                  <div className="text-[11px] text-text-muted">{t('cohort.range_days', 'Range (days)')}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-bold text-text-bright">{result.visit_duration.n_visits?.toLocaleString() ?? '—'}</div>
+                  <div className="text-[11px] text-text-muted">{t('cohort.total_visits', 'Total visits')}</div>
+                </div>
+              </div>
+              {(result.visit_duration.by_type?.length ?? 0) > 0 && (
+                <Table
+                  size="small"
+                  dataSource={result.visit_duration.by_type!}
+                  rowKey="visit_type"
+                  pagination={false}
+                  columns={[
+                    { title: t('cohort.visit_type', 'Visit Type'), dataIndex: 'visit_type', key: 'type', ellipsis: true },
+                    { title: t('cohort.visits', 'Visits'), dataIndex: 'n_visits', key: 'nv', width: 90, align: 'right' as const, render: (v: number) => v?.toLocaleString() },
+                    { title: t('cohort.mean', 'Mean (d)'), dataIndex: 'mean_days', key: 'mean', width: 80, align: 'right' as const },
+                    { title: t('cohort.median', 'Median (d)'), dataIndex: 'median_days', key: 'med', width: 80, align: 'right' as const },
+                    { title: t('cohort.sd', 'SD'), dataIndex: 'std_days', key: 'sd', width: 70, align: 'right' as const },
+                  ]}
+                />
+              )}
+            </Card>
+          )}
+
           {/* Domain Prevalence */}
           <Card size="small" title={t('cohort.domain_prevalence', 'Clinical Domain Prevalence')}>
             {/* Domain summary bar */}
@@ -498,7 +616,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
               {result.domain_prevalence.map(dp => (
                 <div key={dp.domain} className="flex items-center gap-2 mb-1">
                   <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'} className="w-[100px] text-center justify-center">
-                    {dp.domain}
+                    {t(`domains.${dp.domain}`, dp.domain)}
                   </Tag>
                   <div className="flex-1 flex items-center gap-2">
                     <Progress
@@ -523,7 +641,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                   key: dp.domain,
                   label: (
                     <div className="flex items-center gap-2">
-                      <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'}>{dp.domain}</Tag>
+                      <Tag color={DOMAIN_TAG_COLORS[dp.domain] || 'default'}>{t(`domains.${dp.domain}`, dp.domain)}</Tag>
                       <span className="text-text-muted text-[11px]">
                         Top {dp.top_concepts.length} concepts
                       </span>

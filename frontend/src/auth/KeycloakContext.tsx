@@ -1,18 +1,18 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import Keycloak from 'keycloak-js';
 import { setTokenGetter } from '../api/client';
 
-// Role definitions matching backend ROLE_ROUTE_ACCESS
-export type OpalRole = 'admin' | 'omop-dim' | 'chercheur' | 'medecin';
+// Role definitions matching permissions.yaml
+export type OpalRole = 'admin' | 'data-manager' | 'chercheur' | 'medecin';
 
-// Route access per role (matches backend)
-const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
-  admin: null, // all pages
-  'omop-dim': null,
-  chercheur: ['/quality', '/cohorts', '/concepts'],
-  medecin: ['/mapping', '/cohorts', '/concepts'],
-};
-// /audit and /users are implicitly admin-only since they're not in chercheur/medecin lists
+/** Permissions fetched from /api/auth/permissions (driven by permissions.yaml) */
+interface Permissions {
+  roles: string[];
+  pages: string[] | 'all';
+  cdm_visibility: 'all' | 'acl_only';
+  can_manage_access: boolean;
+  can_clear_all_grants: boolean;
+}
 
 interface AuthContextType {
   authenticated: boolean;
@@ -20,6 +20,7 @@ interface AuthContextType {
   username: string;
   roles: OpalRole[];
   token: string | undefined;
+  permissions: Permissions | null;
   login: () => void;
   logout: () => void;
   hasPageAccess: (path: string) => boolean;
@@ -31,6 +32,7 @@ const AuthContext = createContext<AuthContextType>({
   username: '',
   roles: [],
   token: undefined,
+  permissions: null,
   login: () => {},
   logout: () => {},
   hasPageAccess: () => false,
@@ -40,7 +42,6 @@ export const useAuth = () => useContext(AuthContext);
 
 // Determine Keycloak URL based on browser location
 function getKeycloakUrl(): string {
-  // In production (Docker), Keycloak is on the same host at port 8080
   const hostname = window.location.hostname;
   return `http://${hostname}:8080`;
 }
@@ -57,7 +58,7 @@ function extractRoles(tokenParsed: any): OpalRole[] {
     tokenParsed?.realm_access?.roles ||
     [];
   return tokenRoles.filter((r): r is OpalRole =>
-    ['admin', 'omop-dim', 'chercheur', 'medecin'].includes(r)
+    ['admin', 'data-manager', 'chercheur', 'medecin'].includes(r)
   );
 }
 
@@ -67,6 +68,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [username, setUsername] = useState('');
   const [roles, setRoles] = useState<OpalRole[]>([]);
   const [token, setToken] = useState<string | undefined>();
+  const [permissions, setPermissions] = useState<Permissions | null>(null);
+  const permsFetched = useRef(false);
+
+  // Fetch permissions from backend (driven by permissions.yaml)
+  const fetchPermissions = useCallback(async (tkn: string) => {
+    if (permsFetched.current) return;
+    permsFetched.current = true;
+    try {
+      const res = await fetch('/api/auth/permissions', {
+        headers: { Authorization: `Bearer ${tkn}` },
+      });
+      if (res.ok) {
+        const data: Permissions = await res.json();
+        setPermissions(data);
+      }
+    } catch {
+      // Fallback: permissions will be null, hasPageAccess falls back to role-based
+    }
+  }, []);
 
   const applyAuth = useCallback(() => {
     setTokenGetter(() => keycloak.token);
@@ -74,12 +94,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthenticated(true);
     setUsername(keycloak.tokenParsed?.preferred_username || '');
     setRoles(extractRoles(keycloak.tokenParsed));
-  }, []);
+    if (keycloak.token) {
+      fetchPermissions(keycloak.token);
+    }
+  }, [fetchPermissions]);
 
   useEffect(() => {
     let cancelled = false;
 
-    // If already authenticated (StrictMode double-mount), just read state
     if (keycloak.authenticated) {
       applyAuth();
       setInitialized(true);
@@ -133,25 +155,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    import('../hooks/useSessionState').then(m => m.clearSessionState()).catch(() => {});
     keycloak.logout({ redirectUri: window.location.origin });
   }, []);
 
   const hasPageAccess = useCallback(
     (path: string): boolean => {
-      if (roles.length === 0) return false;
-      for (const role of roles) {
-        const allowed = ROLE_PAGE_ACCESS[role];
-        if (allowed === null) return true; // admin/omop-dim
-        if (allowed.some((p) => path.startsWith(p))) return true;
+      // Use permissions from API if available (single source of truth)
+      if (permissions) {
+        if (permissions.pages === 'all') return true;
+        return permissions.pages.some((p) =>
+          p === '/' ? path === '/' : path.startsWith(p)
+        );
       }
-      return false;
+      // Fallback: no access until permissions are loaded (brief moment)
+      return roles.length > 0 && roles.some(r => r === 'admin' || r === 'data-manager');
     },
-    [roles]
+    [permissions, roles]
   );
 
   return (
     <AuthContext.Provider
-      value={{ authenticated, initialized, username, roles, token, login, logout, hasPageAccess }}
+      value={{ authenticated, initialized, username, roles, token, permissions, login, logout, hasPageAccess }}
     >
       {children}
     </AuthContext.Provider>

@@ -77,31 +77,36 @@ Le fichier `main.py` configure l'application FastAPI :
 2. Enregistrement du middleware CORS
 3. Enregistrement conditionnel du middleware Keycloak (`AUTH_ENABLED`)
 4. Enregistrement du middleware d'audit
-5. Inclusion des 6 routers de modules
-6. Endpoints systeme directs (health, i18n, auth, audit, admin)
+5. Inclusion des 18 routers de modules
+6. Endpoints systeme directs (health, i18n, auth, audit, admin, access-requests)
 
 ### Organisation des modules
 
 ```
 backend/
-├── main.py                    # App FastAPI + endpoints systeme
+├── main.py                    # App FastAPI + endpoints systeme (18 routers)
 ├── config.py                  # Configuration (env vars + DOMAIN_CONFIG)
 ├── auth/
-│   └── keycloak.py            # Middleware OIDC + RBAC
+│   ├── keycloak.py            # Middleware OIDC + RBAC
+│   └── permissions.py         # Permissions YAML loader
+├── permissions.yaml           # Matrice RBAC declarative
 ├── audit/
 │   └── logger.py              # Middleware d'audit (trace requetes)
 ├── db/
 │   ├── app_db.py              # SQLAlchemy engine + session factory
-│   ├── models.py              # 8 modeles ORM
+│   ├── models.py              # 21 modeles ORM
 │   └── omop_connector.py      # Connexions psycopg2 aux CDM
 ├── utils/
-│   └── crypto.py              # Chiffrement/dechiffrement Fernet
+│   ├── crypto.py              # Chiffrement/dechiffrement Fernet
+│   └── notifications.py       # Systeme de notifications
 ├── modules/
 │   ├── cdm_router.py          # /api/cdm/
+│   ├── cdm_access_router.py   # /api/cdm-access/
 │   ├── quality/
 │   │   ├── router.py          # /api/quality/
 │   │   ├── engine.py          # Orchestration des analyses
 │   │   ├── comparator.py      # Comparaison inter-CDM
+│   │   ├── conformity.py      # Conformite des donnees
 │   │   └── domains/           # SQL par domaine
 │   ├── cohort/
 │   │   ├── router.py          # /api/cohorts/
@@ -113,12 +118,28 @@ backend/
 │   │   └── suggest.py         # 6 strategies de suggestion
 │   ├── concept/
 │   │   └── router.py          # /api/concepts/
-│   └── ohdsi/
-│       └── router.py          # /api/ohdsi/
+│   ├── concept_set/
+│   │   └── router.py          # /api/concept-sets/
+│   ├── ohdsi/
+│   │   └── router.py          # /api/ohdsi/
+│   ├── incidence/
+│   │   └── router.py          # /api/incidence/
+│   ├── estimation/
+│   │   └── router.py          # /api/estimation/
+│   ├── datamanagement/
+│   │   ├── router.py          # /api/datamanagement/
+│   │   └── extractor.py       # Extraction de donnees
+│   ├── notifications_router.py    # /api/notifications/
+│   ├── favorites_router.py        # /api/favorites/
+│   ├── saved_queries_router.py    # /api/saved-queries/
+│   ├── cohort_templates_router.py # /api/cohort-templates/
+│   ├── cohort_sharing_router.py   # /api/cohorts/ (partage)
+│   ├── search_router.py          # /api/search/
+│   └── groups_router.py          # /api/groups/
 ├── i18n/
 │   ├── en.json                # Traductions EN
 │   └── fr.json                # Traductions FR
-└── tests/                     # Tests unitaires
+└── tests/                     # 22 fichiers de tests
 ```
 
 ### Configuration (`config.py`)
@@ -187,7 +208,9 @@ def get_cdm_connection(cdm_name: str, db: Session):
 | React 18 | UI framework (hooks, context) |
 | TypeScript 5 | Typage statique |
 | Vite 5 | Build / dev server (HMR) |
-| Ant Design 5 | Composants UI (theme customise) |
+| Composants Neumorphic custom | Design system (Card, Select, Tabs, Checkbox) |
+| Lucide React | Icones |
+| CodeMirror 6 | Editeur SQL |
 | Recharts | Visualisations (Bar, Line, Pie, Area) |
 | Axios | Client HTTP |
 | React Router 6 | Routing SPA |
@@ -206,9 +229,10 @@ src/
 │   └── client.ts             # Client Axios organise par module
 ├── types/
 │   └── index.ts              # Interfaces TypeScript partagees
+├── hooks/                     # Hooks custom (useNotifDots, useSessionState, useIsMobile)
 ├── i18n/                      # Traductions
-├── pages/                     # 10 pages
-└── components/                # Composants reutilisables
+├── pages/                     # 16 pages
+└── components/                # Composants reutilisables (layout, ui, quality, cohort)
 ```
 
 ### Client API (`api/client.ts`)
@@ -241,7 +265,7 @@ La matrice des permissions frontend est synchronisee avec le backend :
 ```typescript
 const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
   admin: null,           // toutes les pages
-  'omop-dim': null,
+  'data-manager': null,
   chercheur: ['/quality', '/cohorts', '/concepts'],
   medecin: ['/mapping', '/cohorts', '/concepts'],
 };
@@ -249,8 +273,10 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
 
 ### Theme et style
 
-- Theme Ant Design 5 customise (couleur primaire : `#1f77b4`)
-- Mode sombre complet avec persistance `localStorage`
+- Design system **Neumorphic Emerald Night** entierement custom (pas de framework UI externe)
+- Composants UI dans `components/ui/` : Card, Select, Tabs, Checkbox avec effets neumorphiques
+- Theme CSS dans `opal-theme.css` (couleur primaire : `#2bc459`, fond sombre)
+- Mode sombre natif avec persistance `localStorage`
 - Design responsive (sidebar collapsible, drawers mobiles)
 
 ---
@@ -318,6 +344,87 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
                               │ target_vocabulary_id     │
                               │ similarity float         │
                               │ uploaded_at timestamp    │
+                              └─────────────────────────┘
+
+┌──────────────────────┐     ┌─────────────────────────┐
+│   concept_sets       │     │ incidence_analyses       │
+├──────────────────────┤     ├─────────────────────────┤
+│ id         PK serial │     │ id         PK serial     │
+│ cdm_name   idx       │     │ cdm_name   idx           │
+│ name       varchar   │     │ name       varchar       │
+│ description text     │     │ config_json JSON         │
+│ concept_ids JSON     │     │ results_json JSON        │
+│ created_by varchar   │     │ created_by varchar       │
+│ created_at timestamp │     │ created_at timestamp     │
+└──────────────────────┘     └─────────────────────────┘
+
+┌──────────────────────┐     ┌─────────────────────────┐
+│ estimation_analyses  │     │ cdm_access               │
+├──────────────────────┤     ├─────────────────────────┤
+│ id         PK serial │     │ id         PK serial     │
+│ cdm_name   idx       │     │ cdm_name   idx           │
+│ name       varchar   │     │ username   idx           │
+│ config_json JSON     │     │ can_read   boolean       │
+│ results_json JSON    │     │ can_write  boolean       │
+│ created_by varchar   │     │ granted_by varchar       │
+│ created_at timestamp │     │ created_at timestamp     │
+└──────────────────────┘     └─────────────────────────┘
+
+┌──────────────────────┐     ┌─────────────────────────┐
+│ cdm_group_access     │     │ user_favorites           │
+├──────────────────────┤     ├─────────────────────────┤
+│ id         PK serial │     │ id         PK serial     │
+│ cdm_name   idx       │     │ username   idx           │
+│ group_name idx       │     │ item_type  varchar       │
+│ can_read   boolean   │     │ item_id    varchar       │
+│ can_write  boolean   │     │ created_at timestamp     │
+│ granted_by varchar   │     └─────────────────────────┘
+│ created_at timestamp │
+└──────────────────────┘     ┌─────────────────────────┐
+                              │ saved_queries            │
+┌──────────────────────┐     ├─────────────────────────┤
+│ notifications        │     │ id         PK serial     │
+├──────────────────────┤     │ cdm_name   idx           │
+│ id         PK serial │     │ name       varchar       │
+│ username   idx       │     │ sql_text   text          │
+│ type       varchar   │     │ created_by varchar       │
+│ title      varchar   │     │ created_at timestamp     │
+│ message    text      │     └─────────────────────────┘
+│ link       varchar   │
+│ read       boolean   │     ┌─────────────────────────┐
+│ created_at timestamp │     │ cohort_templates         │
+└──────────────────────┘     ├─────────────────────────┤
+                              │ id         PK serial     │
+┌──────────────────────┐     │ name       varchar       │
+│ cohort_shares        │     │ description text         │
+├──────────────────────┤     │ criteria_json JSON       │
+│ id         PK serial │     │ created_by varchar       │
+│ cohort_id  FK        │     │ created_at timestamp     │
+│ shared_by  varchar   │     └─────────────────────────┘
+│ shared_with varchar  │
+│ permission varchar   │     ┌─────────────────────────┐
+│ created_at timestamp │     │ user_groups              │
+└──────────────────────┘     ├─────────────────────────┤
+                              │ id         PK serial     │
+┌──────────────────────┐     │ name       unique        │
+│ user_group_members   │     │ description text         │
+├──────────────────────┤     │ created_by varchar       │
+│ id         PK serial │     │ created_at timestamp     │
+│ group_id   FK        │     └─────────────────────────┘
+│ username   varchar   │
+│ added_by   varchar   │     ┌─────────────────────────┐
+│ created_at timestamp │     │ access_requests          │
+└──────────────────────┘     ├─────────────────────────┤
+                              │ id         PK serial     │
+                              │ username   varchar       │
+                              │ email      varchar       │
+                              │ first_name varchar       │
+                              │ last_name  varchar       │
+                              │ requested_role varchar   │
+                              │ status     varchar       │
+                              │ reviewed_by varchar      │
+                              │ reviewed_at timestamp    │
+                              │ created_at timestamp     │
                               └─────────────────────────┘
 ```
 
@@ -413,7 +520,7 @@ Le middleware intercepte chaque requete et applique la logique suivante :
 ```python
 ROLE_ROUTE_ACCESS = {
     "admin": None,       # None = acces a tout
-    "omop-dim": None,
+    "data-manager": None,
     "chercheur": ["/api/quality", "/api/cohorts", "/api/concepts", "/api/i18n", "/api/health"],
     "medecin": ["/api/mapping", "/api/cohorts", "/api/concepts", "/api/i18n", "/api/health"],
 }
@@ -821,7 +928,7 @@ Base.metadata.create_all(bind=engine)
 app.dependency_overrides[get_db] = override_get_db
 ```
 
-### Couverture de tests
+### Couverture de tests (22 fichiers)
 
 | Fichier | Couverture |
 |---------|-----------|
@@ -831,6 +938,22 @@ app.dependency_overrides[get_db] = override_get_db
 | `test_crypto.py` | Chiffrement/dechiffrement |
 | `test_cohort_api.py` | Cohort CRUD, SQL generation |
 | `test_mapping_api.py` | Mapping workflow, decisions |
+| `test_suggest.py` | Strategies de suggestion |
+| `test_sql_builder.py` | Generation SQL cohortes |
+| `test_cohort_comparison.py` | Comparaison de cohortes (SMD) |
+| `test_cohort_diff.py` | Diff de criteres |
+| `test_cohort_sharing.py` | Partage de cohortes |
+| `test_cohort_templates.py` | Templates de cohortes |
+| `test_admin_api.py` | Admin endpoints |
+| `test_audit_api.py` | Audit endpoints |
+| `test_access_requests.py` | Demandes d'acces |
+| `test_cdm_access.py` | Controle d'acces CDM |
+| `test_conformity.py` | Conformite des donnees |
+| `test_favorites.py` | Favoris |
+| `test_groups.py` | Groupes utilisateurs |
+| `test_notifications.py` | Notifications |
+| `test_saved_queries.py` | Requetes sauvegardees |
+| `test_search.py` | Recherche globale |
 
 ### Execution
 

@@ -221,6 +221,7 @@ export default function PatientJourney({ cdmName, personId, open, onClose }: Pro
 
 /** Single event row */
 function EventRow({ evt, formatDate }: { evt: PatientJourneyEvent; formatDate: (d: string | null) => string }) {
+  const { t } = useTranslation();
   const color = domainColor(evt.domain);
   const icon = DOMAIN_STYLE[evt.domain]?.icon;
 
@@ -246,7 +247,7 @@ function EventRow({ evt, formatDate }: { evt: PatientJourneyEvent; formatDate: (
     <Tooltip
       title={
         <div className="text-xs">
-          <div><strong>{evt.domain}</strong> — concept_id: {evt.concept_id}</div>
+          <div><strong>{t(`domains.${evt.domain}`, evt.domain)}</strong> — concept_id: {evt.concept_id}</div>
           {evt.concept_name && <div>Standard: {evt.concept_name}</div>}
           {evt.source_concept_name && <div>Source concept: {evt.source_concept_name}</div>}
           {evt.source_value && <div>Source value: {evt.source_value}</div>}

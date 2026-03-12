@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useSessionState } from '../hooks/useSessionState';
 import {
   Card, Input, Select, Button, Table, Tag, Switch, Tabs, Drawer, Alert, Empty, Spinner, Tooltip,
 } from '../components/ui';
@@ -66,25 +67,34 @@ interface SourceValueSearchResult {
   mapped_standard_concept: string | null;
 }
 
+const DOMAIN_NOMENCLATURE: Record<string, string> = {
+  Condition: 'CIM-10',
+  Procedure: 'CCAM',
+  Drug: 'ATC / UCD',
+  Measurement: 'NABM / LOINC',
+  Observation: 'Source',
+  Device: 'LPP',
+};
+
 export default function ConceptExplorerPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  const [query, setQuery] = useState('');
-  const [domainFilter, setDomainFilter] = useState<string | undefined>();
-  const [vocabFilter, setVocabFilter] = useState<string | undefined>();
-  const [standardOnly, setStandardOnly] = useState(false);
-  const [concepts, setConcepts] = useState<ConceptItem[]>([]);
-  const [total, setTotal] = useState(0);
+  const [query, setQuery] = useSessionState('concepts:query', '');
+  const [domainFilter, setDomainFilter] = useSessionState('concepts:domainFilter', undefined as string | undefined);
+  const [vocabFilter, setVocabFilter] = useSessionState('concepts:vocabFilter', undefined as string | undefined);
+  const [standardOnly, setStandardOnly] = useSessionState('concepts:standardOnly', false);
+  const [concepts, setConcepts] = useSessionState('concepts:results', [] as ConceptItem[]);
+  const [total, setTotal] = useSessionState('concepts:total', 0);
   const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const [domains, setDomains] = useState<{ domain_id: string; count: number }[]>([]);
-  const [vocabs, setVocabs] = useState<{ vocabulary_id: string; count: number }[]>([]);
-  const [searchMode, setSearchMode] = useState<'concept' | 'source'>('concept');
-  const [sourceResults, setSourceResults] = useState<SourceValueSearchResult[]>([]);
-  const [sourceTotal, setSourceTotal] = useState(0);
+  const [page, setPage] = useSessionState('concepts:page', 1);
+  const [domains, setDomains] = useSessionState<{ domain_id: string; count: number }[]>('concepts:domains', []);
+  const [vocabs, setVocabs] = useSessionState<{ vocabulary_id: string; count: number }[]>('concepts:vocabs', []);
+  const [searchMode, setSearchMode] = useSessionState('concepts:searchMode', 'concept' as 'concept' | 'source');
+  const [sourceResults, setSourceResults] = useSessionState('concepts:sourceResults', [] as SourceValueSearchResult[]);
+  const [sourceTotal, setSourceTotal] = useSessionState('concepts:sourceTotal', 0);
   const [sourceLoading, setSourceLoading] = useState(false);
-  const [sourcePage, setSourcePage] = useState(1);
-  const [conceptCounts, setConceptCounts] = useState<Record<number, { n_records: number; n_persons: number }>>({});
+  const [sourcePage, setSourcePage] = useSessionState('concepts:sourcePage', 1);
+  const [conceptCounts, setConceptCounts] = useSessionState<Record<number, { n_records: number; n_persons: number }>>('concepts:counts', {});
   const [countsLoading, setCountsLoading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -96,7 +106,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
   };
 
   // Detail panel
-  const [selectedConcept, setSelectedConcept] = useState<ConceptItem | null>(null);
+  const [selectedConcept, setSelectedConcept] = useSessionState('concepts:selectedConcept', null as ConceptItem | null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [relationships, setRelationships] = useState<RelationshipItem[]>([]);
   const [synonyms, setSynonyms] = useState<{ concept_synonym_name: string }[]>([]);
@@ -226,7 +236,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
     },
     { key: 'concept_name', title: t('concept.concept_name'), dataIndex: 'concept_name', ellipsis: true },
     { key: 'concept_code', title: 'Code', dataIndex: 'concept_code', width: 120 },
-    { key: 'domain_id', title: t('concept.domain'), dataIndex: 'domain_id', width: 120 },
+    { key: 'domain_id', title: t('concept.domain'), dataIndex: 'domain_id', width: 150, render: (v: string) => DOMAIN_NOMENCLATURE[v] ? `${t(`domains.${v}`, v)} (${DOMAIN_NOMENCLATURE[v]})` : t(`domains.${v}`, v) },
     { key: 'vocabulary_id', title: t('concept.vocabulary'), dataIndex: 'vocabulary_id', width: 120 },
     { key: 'concept_class_id', title: 'Class', dataIndex: 'concept_class_id', width: 120 },
     {
@@ -259,7 +269,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true,
       render: (_: string, r: SourceValueSearchResult) => r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value,
     },
-    { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 110 },
+    { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 150, render: (v: string) => DOMAIN_NOMENCLATURE[v] ? `${t(`domains.${v}`, v)} (${DOMAIN_NOMENCLATURE[v]})` : t(`domains.${v}`, v) },
     { key: 'n_records', title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v?.toLocaleString() },
     ...(!isMobile ? [{
       key: 'n_persons', title: t('quality.n_persons'), dataIndex: 'n_persons', width: 90,
@@ -323,7 +333,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
   ];
 
   const svColumns: Column<SourceValueItem>[] = [
-    { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 120 },
+    { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 150, render: (v: string) => DOMAIN_NOMENCLATURE[v] ? `${t(`domains.${v}`, v)} (${DOMAIN_NOMENCLATURE[v]})` : t(`domains.${v}`, v) },
     { key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true },
     { key: 'n_records', title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v.toLocaleString() },
     { key: 'n_persons', title: t('quality.n_persons'), dataIndex: 'n_persons', width: 90, render: (v: number) => v.toLocaleString() },
@@ -343,7 +353,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
             <dt className="text-text-muted font-medium">Code</dt>
             <dd className="text-text-bright font-mono">{selectedConcept.concept_code}</dd>
             <dt className="text-text-muted font-medium">{t('concept.domain')}</dt>
-            <dd className="text-text-bright">{selectedConcept.domain_id}</dd>
+            <dd className="text-text-bright">{t(`domains.${selectedConcept.domain_id}`, selectedConcept.domain_id)}</dd>
             <dt className="text-text-muted font-medium">{t('concept.vocabulary')}</dt>
             <dd className="text-text-bright">{selectedConcept.vocabulary_id}</dd>
             <dt className="text-text-muted font-medium">Class</dt>
@@ -519,7 +529,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
                   value={domainFilter}
                   onChange={(v) => setDomainFilter(v || undefined)}
                   allowClear
-                  options={domains.map((d) => ({ value: d.domain_id, label: `${d.domain_id} (${d.count.toLocaleString()})` }))}
+                  options={domains.map((d) => ({ value: d.domain_id, label: DOMAIN_NOMENCLATURE[d.domain_id] ? `${t(`domains.${d.domain_id}`, d.domain_id)} (${DOMAIN_NOMENCLATURE[d.domain_id]})` : t(`domains.${d.domain_id}`, d.domain_id) }))}
                 />
               </div>
               {searchMode === 'concept' && (
@@ -530,7 +540,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
                       value={vocabFilter}
                       onChange={(v) => setVocabFilter(v || undefined)}
                       allowClear
-                      options={vocabs.map((v) => ({ value: v.vocabulary_id, label: `${v.vocabulary_id} (${v.count.toLocaleString()})` }))}
+                      options={vocabs.map((v) => ({ value: v.vocabulary_id, label: v.vocabulary_id }))}
                     />
                   </div>
                   <Switch

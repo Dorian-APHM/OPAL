@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
+  Star, Share2, Globe, Users, UserPlus, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
 import {
   Card, Button, Input, TextArea, Table, Tabs, Tag, Modal, Confirm,
-  Empty, Alert, Spinner,
+  Empty, Alert, Spinner, Switch, Select,
 } from '../components/ui';
 import { useToast } from '../components/ui';
 import CriteriaPanel from '../components/cohort/CriteriaPanel';
@@ -19,10 +21,13 @@ import PatientJourney from '../components/cohort/PatientJourney';
 import ConceptSetPage from './ConceptSetPage';
 import IncidencePage from './IncidencePage';
 import EstimationPage from './EstimationPage';
-import { cohortApi } from '../api/client';
+import { cohortApi, cohortSharingApi, usersApi, groupApi, favoritesApi } from '../api/client';
+import SqlEditor from '../components/SqlEditor';
+import { useNotifDots } from '../hooks/useNotifDots';
+import { useSessionState } from '../hooks/useSessionState';
 import type {
   CohortCriterion,
-  CohortCriteria, CohortSummary,
+  CohortCriteria, CohortSummary, CohortShareInfo,
 } from '../types';
 
 function emptyCriteria(): CohortCriteria {
@@ -41,21 +46,38 @@ export default function CohortPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
   const { roles } = useAuth();
   const toast = useToast();
-  const canDelete = roles.includes('admin') || roles.includes('omop-dim');
+  const location = useLocation();
+  const canDelete = roles.includes('admin') || roles.includes('data-manager');
 
-  // Cohort state
-  const [cohortName, setCohortName] = useState('');
-  const [cohortDesc, setCohortDesc] = useState('');
-  const [criteria, setCriteria] = useState<CohortCriteria>(emptyCriteria());
-  const [savedCohortId, setSavedCohortId] = useState<number | undefined>();
+  // Cohort state (persisted across navigation)
+  const [cohortName, setCohortName] = useSessionState('cohort:name', '');
+  const [cohortDesc, setCohortDesc] = useSessionState('cohort:desc', '');
+  const [criteria, setCriteria] = useSessionState<CohortCriteria>('cohort:criteria', emptyCriteria());
+  const [savedCohortId, setSavedCohortId] = useSessionState<number | undefined>('cohort:savedId', undefined as number | undefined);
 
   // Saved cohorts list
   const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
-  const [showList, setShowList] = useState(false);
+  const [showList, setShowList] = useSessionState('cohort:showList', false);
   const [saving, setSaving] = useState(false);
 
   // Delete confirm state
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+
+  // Favorites state
+  const [favoriteCohortIds, setFavoriteCohortIds] = useState<Set<string>>(new Set());
+  const [favoritesMap, setFavoritesMap] = useState<Record<string, number>>({});
+
+  // Sharing state
+  const [shareModalCohortId, setShareModalCohortId] = useState<number | null>(null);
+  const [shareInfo, setShareInfo] = useState<CohortShareInfo | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [allUsers, setAllUsers] = useState<string[]>([]);
+  const [allGroups, setAllGroups] = useState<string[]>([]);
+  const [shareTarget, setShareTarget] = useState<string | null>(null);
+  const [shareType, setShareType] = useState<string | null>('user');
+
+  // Notification dots for shared cohorts — dot on Load button, cleared when opening list
+  const { markAllReadForType: markAllCohortRead, count: cohortNotifCount } = useNotifDots('cohort_shared');
 
   const loadCohorts = useCallback(async () => {
     if (!selectedCdm) return;
@@ -67,24 +89,59 @@ export default function CohortPage({ selectedCdm }: Props) {
     }
   }, [selectedCdm]);
 
+  // Load favorites on mount
+  const loadFavorites = useCallback(async () => {
+    try {
+      const resp = await favoritesApi.list('cohort');
+      const favIds = new Set<string>();
+      const favMap: Record<string, number> = {};
+      for (const fav of resp.data.favorites) {
+        favIds.add(fav.item_id);
+        favMap[fav.item_id] = fav.id;
+      }
+      setFavoriteCohortIds(favIds);
+      setFavoritesMap(favMap);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     loadCohorts();
-  }, [loadCohorts]);
+    loadFavorites();
+  }, [loadCohorts, loadFavorites]);
 
-  // Reset when CDM changes
+  // Auto-open cohort from dashboard navigation
   useEffect(() => {
-    setCriteria(emptyCriteria());
-    setSavedCohortId(undefined);
-    setCohortName('');
-    setCohortDesc('');
+    const state = location.state as { openCohortId?: number } | null;
+    if (state?.openCohortId) {
+      handleLoad(state.openCohortId);
+      // Clear the state so it doesn't re-trigger
+      window.history.replaceState({}, document.title);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
+
+  // Reset only when CDM actually changes (not on remount)
+  const prevCdmRef = useRef(selectedCdm);
+  useEffect(() => {
+    if (prevCdmRef.current !== selectedCdm) {
+      prevCdmRef.current = selectedCdm;
+      setCriteria(emptyCriteria());
+      setSavedCohortId(undefined);
+      setCohortName('');
+      setCohortDesc('');
+    }
   }, [selectedCdm]);
+
+  const [addMode, setAddMode] = useSessionState<'inclusion' | 'exclusion'>('cohort:addMode', 'inclusion');
 
   const handleAddCriterion = (criterion: CohortCriterion) => {
     setCriteria(prev => ({
       ...prev,
-      inclusion: {
-        ...prev.inclusion,
-        criteria: [...prev.inclusion.criteria, criterion],
+      [addMode]: {
+        ...prev[addMode],
+        criteria: [...prev[addMode].criteria, criterion],
       },
     }));
   };
@@ -167,6 +224,107 @@ export default function CohortPage({ selectedCdm }: Props) {
     setSampleColumns([]);
   };
 
+  // Toggle favorite
+  const toggleFavorite = async (cohortId: number, cohortName: string) => {
+    const key = String(cohortId);
+    if (favoriteCohortIds.has(key)) {
+      const favId = favoritesMap[key];
+      if (favId) {
+        try {
+          await favoritesApi.remove(favId);
+          setFavoriteCohortIds(prev => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          setFavoritesMap(prev => {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          });
+        } catch {
+          toast.error('Failed to remove favorite');
+        }
+      }
+    } else {
+      try {
+        const resp = await favoritesApi.add({
+          item_type: 'cohort',
+          item_id: key,
+          item_label: cohortName,
+        });
+        setFavoriteCohortIds(prev => new Set(prev).add(key));
+        setFavoritesMap(prev => ({ ...prev, [key]: resp.data.id }));
+      } catch {
+        toast.error('Failed to add favorite');
+      }
+    }
+  };
+
+  // Sharing helpers
+  const openShareModal = async (cohortId: number) => {
+    setShareModalCohortId(cohortId);
+    setShareLoading(true);
+    setShareTarget(null);
+    setShareType('user');
+    try {
+      const [sharesResp, usersResp, groupsResp] = await Promise.all([
+        cohortSharingApi.listShares(cohortId),
+        usersApi.listOpalUsers(),
+        groupApi.list(),
+      ]);
+      setShareInfo(sharesResp.data);
+      setAllUsers(usersResp.data.users);
+      setAllGroups(groupsResp.data.groups.map(g => g.name));
+    } catch {
+      toast.error('Failed to load sharing info');
+      setShareModalCohortId(null);
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleTogglePublic = async (checked: boolean) => {
+    if (!shareModalCohortId) return;
+    try {
+      if (checked) {
+        await cohortSharingApi.share(shareModalCohortId, 'all');
+      } else {
+        await cohortSharingApi.unshare(shareModalCohortId, 'all');
+      }
+      setShareInfo(prev => prev ? { ...prev, shared_with_all: checked } : prev);
+      loadCohorts();
+    } catch {
+      toast.error('Failed to update sharing');
+    }
+  };
+
+  const handleAddShare = async () => {
+    if (!shareModalCohortId || !shareTarget || !shareType) return;
+    try {
+      await cohortSharingApi.share(shareModalCohortId, shareType, shareTarget);
+      // Refresh shares
+      const resp = await cohortSharingApi.listShares(shareModalCohortId);
+      setShareInfo(resp.data);
+      setShareTarget(null);
+      toast.success(t('cohort.shared_success', 'Shared successfully'));
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to share');
+    }
+  };
+
+  const handleUnshare = async (type: string, target: string) => {
+    if (!shareModalCohortId) return;
+    try {
+      await cohortSharingApi.unshare(shareModalCohortId, type, target);
+      const resp = await cohortSharingApi.listShares(shareModalCohortId);
+      setShareInfo(resp.data);
+      toast.success(t('cohort.unshared', 'Share removed'));
+    } catch {
+      toast.error('Failed to remove share');
+    }
+  };
+
   // Active tab (builder vs characterization)
   const [activeTab, setActiveTab] = useState<string>('builder');
 
@@ -200,7 +358,7 @@ export default function CohortPage({ selectedCdm }: Props) {
   }
 
   return (
-    <div className="h-[calc(100vh-72px)] flex flex-col">
+    <div className="h-[calc(100vh-60px)] flex flex-col">
       {/* Header */}
       <Card size="small" className="mb-2" hoverable={false}>
         <div className="flex items-center gap-2">
@@ -228,8 +386,13 @@ export default function CohortPage({ selectedCdm }: Props) {
           >
             {t('common.save', 'Save')}
           </Button>
-          <Button icon={<FolderOpen className="h-3.5 w-3.5" />} size="small" onClick={() => setShowList(true)}>
-            {t('cohort.load', 'Load')} ({cohorts.length})
+          <Button icon={<FolderOpen className="h-3.5 w-3.5" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }}>
+            <span className="inline-flex items-center gap-1.5">
+              {t('cohort.load', 'Load')} ({cohorts.length})
+              {cohortNotifCount > 0 && (
+                <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
+              )}
+            </span>
           </Button>
         </div>
       </Card>
@@ -237,7 +400,30 @@ export default function CohortPage({ selectedCdm }: Props) {
       {/* Three-panel layout */}
       <div className="grid grid-cols-12 gap-2 flex-1 overflow-hidden">
         {/* Left: Criteria Panel */}
-        <div className="col-span-3 h-full overflow-auto">
+        <div className="col-span-2 h-full overflow-auto flex flex-col gap-1">
+          {/* Inclusion / Exclusion toggle */}
+          <div className="flex rounded-lg overflow-hidden border border-glass-border shrink-0">
+            <button
+              className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none cursor-pointer ${
+                addMode === 'inclusion'
+                  ? 'bg-emerald-accent/15 text-emerald-accent'
+                  : 'bg-surface-dark text-text-dim hover:text-text-muted'
+              }`}
+              onClick={() => setAddMode('inclusion')}
+            >
+              + {t('cohort.inclusion', 'Inclusion')}
+            </button>
+            <button
+              className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none border-l border-glass-border cursor-pointer ${
+                addMode === 'exclusion'
+                  ? 'bg-red-500/15 text-red-400'
+                  : 'bg-surface-dark text-text-dim hover:text-text-muted'
+              }`}
+              onClick={() => setAddMode('exclusion')}
+            >
+              - {t('cohort.exclusion', 'Exclusion')}
+            </button>
+          </div>
           <CriteriaPanel
             cdmName={selectedCdm}
             onAddCriterion={handleAddCriterion}
@@ -245,7 +431,7 @@ export default function CohortPage({ selectedCdm }: Props) {
         </div>
 
         {/* Center: Tabs — Builder / Characterization */}
-        <div className="col-span-6 h-full overflow-auto">
+        <div className="col-span-8 h-full overflow-auto">
           <Tabs
             activeKey={activeTab}
             onChange={setActiveTab}
@@ -410,7 +596,7 @@ export default function CohortPage({ selectedCdm }: Props) {
         </div>
 
         {/* Right: Results Panel */}
-        <div className="col-span-3 h-full overflow-auto">
+        <div className="col-span-2 h-full overflow-auto">
           <ResultsPanel
             cdmName={selectedCdm}
             criteria={toBackendCriteria(criteria)}
@@ -444,19 +630,46 @@ export default function CohortPage({ selectedCdm }: Props) {
               <li key={c.id} className="py-3 flex items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
+                    {/* Favorite star */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleFavorite(c.id, c.name); }}
+                      className="shrink-0 hover:scale-110 transition-transform"
+                      title={favoriteCohortIds.has(String(c.id)) ? t('cohort.unfavorite', 'Remove from favorites') : t('cohort.favorite', 'Add to favorites')}
+                    >
+                      <Star
+                        className={`h-4 w-4 ${favoriteCohortIds.has(String(c.id)) ? 'fill-yellow-400 text-yellow-400' : 'text-text-muted hover:text-yellow-400'}`}
+                      />
+                    </button>
                     <span className="text-sm font-medium text-text-bright">{c.name}</span>
                     <Tag>v{c.latest_version}</Tag>
                     {c.patient_count != null && (
                       <Tag color="green">{c.patient_count.toLocaleString()} patients</Tag>
                     )}
+                    {c.shared_with_all && (
+                      <Tag color="blue">
+                        <Globe className="h-3 w-3 inline mr-0.5" />
+                        {t('cohort.public', 'Public')}
+                      </Tag>
+                    )}
                   </div>
                   <span className="text-text-muted text-xs">
                     {c.description || '—'} · {c.updated_at?.substring(0, 10)}
+                    {c.created_by && (
+                      <> · <span className="text-text-dim">{t('cohort.by', 'by')} {c.created_by}</span></>
+                    )}
                   </span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <Button size="small" variant="link" onClick={() => handleLoad(c.id)}>
                     {t('cohort.load', 'Load')}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="link"
+                    onClick={() => openShareModal(c.id)}
+                    title={t('cohort.share', 'Share')}
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
                   </Button>
                   <Button size="small" variant="link" onClick={() => {
                     if (c.id) {
@@ -482,6 +695,108 @@ export default function CohortPage({ selectedCdm }: Props) {
             ))}
           </ul>
         )}
+      </Modal>
+
+      {/* Share modal */}
+      <Modal
+        title={
+          <div className="flex items-center gap-2">
+            <Share2 className="h-4 w-4" />
+            <span>{t('cohort.share_cohort', 'Share Cohort')}</span>
+          </div>
+        }
+        open={shareModalCohortId !== null}
+        onClose={() => setShareModalCohortId(null)}
+        width="max-w-md"
+      >
+        {shareLoading ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : shareInfo ? (
+          <div className="space-y-4">
+            {/* Public toggle */}
+            <div className="flex items-center justify-between p-3 rounded-lg bg-surface-raised">
+              <div className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-blue-400" />
+                <span className="text-sm text-text-bright">{t('cohort.public_access', 'Public (visible to all users)')}</span>
+              </div>
+              <Switch
+                checked={shareInfo.shared_with_all}
+                onChange={handleTogglePublic}
+                size="small"
+              />
+            </div>
+
+            {/* Add share */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-text-muted">{t('cohort.share_with', 'Share with...')}</label>
+              <div className="flex items-center gap-2">
+                <Select
+                  options={[
+                    { value: 'user', label: t('cohort.user', 'User') },
+                    { value: 'group', label: t('cohort.group', 'Group') },
+                  ]}
+                  value={shareType}
+                  onChange={v => { setShareType(v); setShareTarget(null); }}
+                  size="small"
+                  className="w-24"
+                />
+                <Select
+                  options={
+                    shareType === 'user'
+                      ? allUsers.map(u => ({ value: u, label: u }))
+                      : allGroups.map(g => ({ value: g, label: g }))
+                  }
+                  value={shareTarget}
+                  onChange={setShareTarget}
+                  placeholder={shareType === 'user' ? t('cohort.select_user', 'Select user...') : t('cohort.select_group', 'Select group...')}
+                  size="small"
+                  className="flex-1"
+                />
+                <Button
+                  size="small"
+                  variant="primary"
+                  icon={<UserPlus className="h-3.5 w-3.5" />}
+                  onClick={handleAddShare}
+                  disabled={!shareTarget}
+                >
+                  {t('cohort.add', 'Add')}
+                </Button>
+              </div>
+            </div>
+
+            {/* Current shares */}
+            {shareInfo.shares.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-text-muted">{t('cohort.current_shares', 'Current shares')}</label>
+                <ul className="divide-y divide-border-subtle">
+                  {shareInfo.shares.map((s, i) => (
+                    <li key={i} className="py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {s.type === 'user' ? (
+                          <User className="h-3.5 w-3.5 text-text-muted" />
+                        ) : (
+                          <Users className="h-3.5 w-3.5 text-text-muted" />
+                        )}
+                        <span className="text-sm text-text-bright">{s.target}</span>
+                        <Tag>{s.type}</Tag>
+                        <span className="text-xs text-text-dim">
+                          {t('cohort.shared_by', 'by')} {s.shared_by}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleUnshare(s.type, s.target)}
+                        className="text-red-400 hover:text-red-300 p-1"
+                        title={t('cohort.unshare', 'Remove share')}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : null}
       </Modal>
 
       {/* Delete confirmation */}
@@ -511,6 +826,17 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
   const [error, setError] = useState<string | null>(null);
   const [rowCount, setRowCount] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  const [schema, setSchema] = useState<Record<string, string[]> | undefined>();
+  const [schemaName, setSchemaName] = useState<string | undefined>();
+
+  // Load schema for autocomplete
+  useEffect(() => {
+    if (!cdmName) return;
+    cohortApi.sqlSchema(cdmName).then(res => {
+      setSchema(res.data.tables);
+      setSchemaName(res.data.schema);
+    }).catch(() => {});
+  }, [cdmName]);
 
   const handleExecute = async () => {
     if (!sql.trim()) return;
@@ -548,23 +874,17 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      handleExecute();
-    }
-  };
-
   return (
     <div>
       <Card size="small" className="mb-2">
-        <TextArea
+        <SqlEditor
           value={sql}
-          onChange={e => setSql(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onChange={setSql}
+          onExecute={handleExecute}
+          schema={schema}
+          schemaName={schemaName}
+          height="200px"
           placeholder="SELECT * FROM omop_cdm.person LIMIT 10"
-          rows={4}
-          className="font-mono text-[13px]"
         />
         <div className="mt-2 flex items-center gap-2">
           <Button
@@ -585,6 +905,11 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
           <span className="text-text-muted text-xs">
             {t('cohort.sql_readonly', 'Read-only queries only (SELECT/WITH)')}
           </span>
+          {schema && (
+            <Tag color="green" className="ml-auto" style={{ fontSize: 11 }}>
+              {Object.keys(schema).length} tables
+            </Tag>
+          )}
         </div>
       </Card>
 
@@ -595,7 +920,7 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
       {rows.length > 0 && (
         <Card size="small">
           <div className="mb-2 flex items-center gap-2">
-            <Tag color="blue">{rowCount} {t('cohort.sql_rows', 'rows')}</Tag>
+            <Tag color="blue">{rowCount?.toLocaleString()} {t('cohort.sql_rows', 'rows')}</Tag>
             {truncated && <Tag color="orange">{t('cohort.sql_truncated', 'Truncated (add LIMIT to control)')}</Tag>}
           </div>
           <Table

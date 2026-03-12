@@ -7,6 +7,8 @@ attrition, sampling), and CSV export.
 import csv
 import io
 import logging
+import threading
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -16,7 +18,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from db.app_db import get_db
-from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings, ReferenceCodebook
+from db.models import CdmConfig, Cohort, CohortVersion, CohortShare, UserGroupMember, AnalysisSettings, ReferenceCodebook
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
@@ -66,6 +68,7 @@ class ConceptSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
     domain: str | None = Field(default=None, max_length=100)
     vocabulary_id: str | None = Field(default=None, max_length=100)
+    standard_only: bool = False
     limit: int = Field(default=30, ge=1, le=200)
 
 
@@ -129,6 +132,9 @@ def search_concepts(req: ConceptSearchRequest, db: Session = Depends(get_db)):
                 wheres.append("c.vocabulary_id = %(vocab)s")
                 params["vocab"] = req.vocabulary_id
 
+            if req.standard_only:
+                wheres.append("c.standard_concept = 'S'")
+
             where_clause = " AND ".join(wheres)
             sql = f"""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
@@ -190,11 +196,47 @@ def list_cohort_domains():
 # ──── Cohort CRUD ────
 
 @router.get("/")
-def list_cohorts(cdm_name: str | None = None, db: Session = Depends(get_db)):
-    """List all cohorts, optionally filtered by CDM."""
+def list_cohorts(cdm_name: str | None = None, request: Request = None, db: Session = Depends(get_db)):
+    """List cohorts visible to the current user.
+
+    - admin / data-manager: see all cohorts.
+    - Others: see own cohorts + shared with them (by user, group, or public).
+    """
+    user = getattr(request.state, "user", {}) if request else {}
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    is_privileged = any(r in ("admin", "data-manager") for r in user_roles)
+
     query = db.query(Cohort)
     if cdm_name:
         query = query.filter(Cohort.cdm_name == cdm_name)
+
+    if not is_privileged and username:
+        # User's own groups
+        user_groups = [
+            row.group_name for row in
+            db.query(UserGroupMember.group_name).filter(UserGroupMember.username == username).all()
+        ]
+
+        # Cohort IDs shared with this user directly or via groups
+        share_q = db.query(CohortShare.cohort_id).filter(
+            ((CohortShare.share_type == "user") & (CohortShare.share_target == username))
+        )
+        if user_groups:
+            share_q = share_q.union(
+                db.query(CohortShare.cohort_id).filter(
+                    (CohortShare.share_type == "group") & (CohortShare.share_target.in_(user_groups))
+                )
+            )
+        shared_ids = [row[0] for row in share_q.all()]
+
+        # Own + shared + public
+        query = query.filter(
+            (Cohort.created_by == username)
+            | (Cohort.shared_with_all == 1)
+            | (Cohort.id.in_(shared_ids) if shared_ids else False)
+        )
+
     cohorts = query.order_by(Cohort.updated_at.desc()).all()
 
     result = []
@@ -210,6 +252,8 @@ def list_cohorts(cdm_name: str | None = None, db: Session = Depends(get_db)):
             "cdm_name": c.cdm_name,
             "name": c.name,
             "description": c.description,
+            "created_by": c.created_by,
+            "shared_with_all": bool(c.shared_with_all),
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
             "latest_version": latest.version if latest else 0,
@@ -219,7 +263,7 @@ def list_cohorts(cdm_name: str | None = None, db: Session = Depends(get_db)):
 
 
 @router.post("/")
-def create_cohort(req: CohortCreateRequest, db: Session = Depends(get_db)):
+def create_cohort(req: CohortCreateRequest, request: Request, db: Session = Depends(get_db)):
     """Create a new cohort with initial criteria."""
     # Verify CDM exists
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
@@ -234,10 +278,14 @@ def create_cohort(req: CohortCreateRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid criteria: {e}")
 
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
+
     cohort = Cohort(
         cdm_name=req.cdm_name,
         name=req.name,
         description=req.description,
+        created_by=username,
     )
     db.add(cohort)
     db.flush()  # Get the ID
@@ -261,12 +309,50 @@ def create_cohort(req: CohortCreateRequest, db: Session = Depends(get_db)):
     }
 
 
+def _can_access_cohort(db: Session, cohort: Cohort, username: str, user_roles: list) -> bool:
+    """Check if a user can access a cohort."""
+    if any(r in ("admin", "data-manager") for r in user_roles):
+        return True
+    if cohort.created_by == username:
+        return True
+    if cohort.shared_with_all:
+        return True
+    # Shared directly with user?
+    direct = db.query(CohortShare).filter(
+        CohortShare.cohort_id == cohort.id,
+        CohortShare.share_type == "user",
+        CohortShare.share_target == username,
+    ).first()
+    if direct:
+        return True
+    # Shared via group?
+    user_groups = [
+        row.group_name for row in
+        db.query(UserGroupMember.group_name).filter(UserGroupMember.username == username).all()
+    ]
+    if user_groups:
+        group_share = db.query(CohortShare).filter(
+            CohortShare.cohort_id == cohort.id,
+            CohortShare.share_type == "group",
+            CohortShare.share_target.in_(user_groups),
+        ).first()
+        if group_share:
+            return True
+    return False
+
+
 @router.get("/{cohort_id}")
-def get_cohort(cohort_id: int, db: Session = Depends(get_db)):
+def get_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db)):
     """Get cohort details with all versions."""
     cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
     if not cohort:
         raise HTTPException(status_code=404, detail="Cohort not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    if not _can_access_cohort(db, cohort, username, user_roles):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
 
     versions = (
         db.query(CohortVersion)
@@ -275,11 +361,19 @@ def get_cohort(cohort_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
+    shares = db.query(CohortShare).filter(CohortShare.cohort_id == cohort_id).all()
+
     return {
         "id": cohort.id,
         "cdm_name": cohort.cdm_name,
         "name": cohort.name,
         "description": cohort.description,
+        "created_by": cohort.created_by,
+        "shared_with_all": bool(cohort.shared_with_all),
+        "shares": [
+            {"type": s.share_type, "target": s.share_target, "shared_by": s.shared_by}
+            for s in shares
+        ],
         "created_at": cohort.created_at.isoformat() if cohort.created_at else None,
         "updated_at": cohort.updated_at.isoformat() if cohort.updated_at else None,
         "versions": [
@@ -342,15 +436,20 @@ def update_cohort(cohort_id: int, req: CohortUpdateRequest, db: Session = Depend
 
 @router.delete("/{cohort_id}")
 def delete_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db)):
-    """Delete a cohort and all its versions. Admin/omop-dim only."""
+    """Delete a cohort and all its versions. Owner, admin, or data-manager only."""
     user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
     user_roles = user.get("roles", [])
-    if not any(r in ("admin", "omop-dim") for r in user_roles):
-        raise HTTPException(status_code=403, detail="Only admin and omop-dim can delete cohorts")
     cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
     if not cohort:
         raise HTTPException(status_code=404, detail="Cohort not found")
 
+    is_privileged = any(r in ("admin", "data-manager") for r in user_roles)
+    is_owner = cohort.created_by == username
+    if not is_privileged and not is_owner:
+        raise HTTPException(status_code=403, detail="Only the owner, admin, or data-manager can delete cohorts")
+
+    db.query(CohortShare).filter(CohortShare.cohort_id == cohort_id).delete()
     db.query(CohortVersion).filter(CohortVersion.cohort_id == cohort_id).delete()
     db.delete(cohort)
     db.commit()
@@ -592,6 +691,35 @@ class RawSqlRequest(BaseModel):
     limit: int = Field(default=1000, ge=1, le=10000)
 
 
+@router.get("/sql/schema")
+def get_sql_schema(cdm_name: str, db: Session = Depends(get_db)):
+    """Return table and column names from the CDM schema for SQL autocompletion."""
+    cdm, conn = _get_cdm_conn(db, cdm_name)
+    schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    try:
+        from psycopg2.extras import RealDictCursor
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT table_name, column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                ORDER BY table_name, ordinal_position
+                """,
+                [schema],
+            )
+            rows = cur.fetchall()
+        tables: dict[str, list[str]] = {}
+        for r in rows:
+            tbl = r["table_name"]
+            if tbl not in tables:
+                tables[tbl] = []
+            tables[tbl].append(r["column_name"])
+        return {"schema": schema, "tables": tables}
+    finally:
+        conn.close()
+
+
 @router.post("/sql/execute")
 def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
     """
@@ -711,28 +839,100 @@ class CharacterizationRequest(BaseModel):
     visit_level: bool = False
 
 
+# ──── Background characterization task tracking ────
+_active_characterizations: dict[str, dict] = {}
+
+
 @router.post("/characterize")
 def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_db)):
     """
-    Run Table 1 characterization for a cohort definition.
-    Returns demographics, domain prevalence, measurement stats, visit types,
-    and observation period statistics.
+    Launch Table 1 characterization as a background task.
+    Returns a task_id for polling via /characterize/status/{task_id}.
     """
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
-    try:
-        result = run_characterization(
-            conn, req.criteria, schema, top_n=req.top_n,
-            visit_level=req.visit_level,
-        )
-    except Exception as e:
-        logger.exception("Characterization failed")
-        raise HTTPException(status_code=500, detail=f"Characterization error: {e}")
-    finally:
-        conn.close()
+    task_id = str(uuid.uuid4())
+    _active_characterizations[task_id] = {
+        "status": "running",
+        "cdm_name": req.cdm_name,
+        "cohort_id": None,
+        "result": None,
+        "error": None,
+        "completed": 0,
+        "total": 0,
+        "current_step": "",
+    }
 
-    return result
+    def _progress(completed: int, total: int, step_label: str):
+        task = _active_characterizations.get(task_id)
+        if task:
+            task["completed"] = completed
+            task["total"] = total
+            task["current_step"] = step_label
+
+    def _worker():
+        try:
+            result = run_characterization(
+                conn, req.criteria, schema, top_n=req.top_n,
+                visit_level=req.visit_level,
+                progress_callback=_progress,
+            )
+            _active_characterizations[task_id]["result"] = result
+            _active_characterizations[task_id]["status"] = "completed"
+        except Exception as e:
+            logger.exception("Characterization failed")
+            _active_characterizations[task_id]["error"] = str(e)
+            _active_characterizations[task_id]["status"] = "error"
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return {"task_id": task_id, "status": "running"}
+
+
+@router.get("/characterize/status/{task_id}")
+def characterize_status(task_id: str):
+    """Poll the status of a characterization task."""
+    task = _active_characterizations.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    resp: dict = {
+        "task_id": task_id,
+        "status": task["status"],
+        "completed": task.get("completed", 0),
+        "total": task.get("total", 0),
+        "current_step": task.get("current_step", ""),
+    }
+    if task["status"] == "completed":
+        resp["result"] = task["result"]
+        # Clean up after delivering results
+        _active_characterizations.pop(task_id, None)
+    elif task["status"] == "error":
+        resp["error"] = task["error"]
+        _active_characterizations.pop(task_id, None)
+    return resp
+
+
+@router.post("/characterize/cancel/{task_id}")
+def characterize_cancel(task_id: str):
+    """Cancel/clean up a characterization task."""
+    task = _active_characterizations.pop(task_id, None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "cancelled"}
+
+
+@router.get("/characterize/active")
+def characterize_active():
+    """Return any currently running characterization task."""
+    for tid, task in _active_characterizations.items():
+        if task["status"] == "running":
+            return {"task_id": tid, "status": "running", "cdm_name": task["cdm_name"]}
+    return {"task_id": None, "status": "none"}
 
 
 class CohortCompareRequest(BaseModel):
@@ -1115,3 +1315,151 @@ def patient_journey(
     events.sort(key=lambda e: e.get("start_date") or "9999")
 
     return {"person": person_info, "events": events}
+
+
+# ──── Cohort Version Diff ────
+
+@router.get("/{cohort_id}/diff")
+def diff_versions(
+    cohort_id: int,
+    version_a: int = Query(..., ge=1),
+    version_b: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+):
+    """
+    Compare two versions of a cohort.
+    Returns structural diff of criteria and patient count delta.
+    """
+    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
+    if not cohort:
+        raise HTTPException(status_code=404, detail="Cohort not found")
+
+    va = db.query(CohortVersion).filter(
+        CohortVersion.cohort_id == cohort_id,
+        CohortVersion.version == version_a,
+    ).first()
+    vb = db.query(CohortVersion).filter(
+        CohortVersion.cohort_id == cohort_id,
+        CohortVersion.version == version_b,
+    ).first()
+
+    if not va or not vb:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    criteria_a = va.criteria_json or {}
+    criteria_b = vb.criteria_json or {}
+
+    # Build structured diff
+    diffs = _diff_criteria(criteria_a, criteria_b)
+
+    count_a = va.patient_count
+    count_b = vb.patient_count
+    count_delta = None
+    count_pct_change = None
+    if count_a is not None and count_b is not None:
+        count_delta = count_b - count_a
+        if count_a > 0:
+            count_pct_change = round((count_delta / count_a) * 100, 2)
+
+    return {
+        "cohort_id": cohort_id,
+        "cohort_name": cohort.name,
+        "version_a": version_a,
+        "version_b": version_b,
+        "patient_count_a": count_a,
+        "patient_count_b": count_b,
+        "patient_count_delta": count_delta,
+        "patient_count_pct_change": count_pct_change,
+        "criteria_a": criteria_a,
+        "criteria_b": criteria_b,
+        "diffs": diffs,
+    }
+
+
+def _diff_criteria(a: dict, b: dict) -> list[dict]:
+    """Compute structural diff between two criteria JSON objects."""
+    diffs = []
+
+    # Compare inclusion criteria
+    inc_a = a.get("inclusion", {}).get("criteria", [])
+    inc_b = b.get("inclusion", {}).get("criteria", [])
+    _diff_criterion_lists(inc_a, inc_b, "inclusion", diffs)
+
+    # Compare exclusion criteria
+    exc_a = a.get("exclusion", {}).get("criteria", [])
+    exc_b = b.get("exclusion", {}).get("criteria", [])
+    _diff_criterion_lists(exc_a, exc_b, "exclusion", diffs)
+
+    # Compare demographics
+    demo_a = a.get("demographics", {})
+    demo_b = b.get("demographics", {})
+    if demo_a != demo_b:
+        diffs.append({
+            "type": "modified",
+            "section": "demographics",
+            "detail": f"Demographics changed",
+            "old": demo_a,
+            "new": demo_b,
+        })
+
+    # Compare sameVisit
+    sv_a = a.get("inclusion", {}).get("sameVisit", False)
+    sv_b = b.get("inclusion", {}).get("sameVisit", False)
+    if sv_a != sv_b:
+        diffs.append({
+            "type": "modified",
+            "section": "inclusion",
+            "detail": f"sameVisit changed: {sv_a} → {sv_b}",
+            "old": sv_a,
+            "new": sv_b,
+        })
+
+    return diffs
+
+
+def _diff_criterion_lists(list_a: list, list_b: list, section: str, diffs: list):
+    """Compare two lists of criteria, matching by 'id' field."""
+    ids_a = {c.get("id"): c for c in list_a}
+    ids_b = {c.get("id"): c for c in list_b}
+
+    all_ids = set(ids_a.keys()) | set(ids_b.keys())
+    for cid in all_ids:
+        ca = ids_a.get(cid)
+        cb = ids_b.get(cid)
+
+        if ca and not cb:
+            concepts = [c.get("concept_name", "") for c in ca.get("concepts", [])]
+            diffs.append({
+                "type": "removed",
+                "section": section,
+                "criterion_id": cid,
+                "detail": f"Removed: {ca.get('domain', '?')} criterion ({', '.join(concepts[:3])})",
+            })
+        elif cb and not ca:
+            concepts = [c.get("concept_name", "") for c in cb.get("concepts", [])]
+            diffs.append({
+                "type": "added",
+                "section": section,
+                "criterion_id": cid,
+                "detail": f"Added: {cb.get('domain', '?')} criterion ({', '.join(concepts[:3])})",
+            })
+        elif ca != cb:
+            changes = []
+            if ca.get("concepts") != cb.get("concepts"):
+                changes.append("concepts changed")
+            if ca.get("occurrence") != cb.get("occurrence"):
+                changes.append("occurrence changed")
+            if ca.get("temporal") != cb.get("temporal"):
+                changes.append("temporal changed")
+            if ca.get("include_descendants") != cb.get("include_descendants"):
+                changes.append("descendants changed")
+            if ca.get("value") != cb.get("value"):
+                changes.append("value constraint changed")
+            diffs.append({
+                "type": "modified",
+                "section": section,
+                "criterion_id": cid,
+                "detail": f"Modified: {cb.get('domain', '?')} criterion — {', '.join(changes)}",
+                "old": ca,
+                "new": cb,
+            })
