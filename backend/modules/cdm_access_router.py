@@ -1,0 +1,260 @@
+"""
+CDM Access Control endpoints.
+
+Manages per-user and per-group access to CDM databases.
+Admin assigns access; middleware filters CDM list.
+Visibility rules driven by permissions.yaml.
+"""
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from db.app_db import get_db
+from db.models import CdmAccess, CdmGroupAccess, CdmConfig, UserGroupMember
+from auth.permissions import has_any_full_visibility
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/cdm-access", tags=["cdm-access"])
+
+
+def _user_has_cdm_access(cdm_name: str, username: str, db: Session) -> bool:
+    """Check if a user has access to a CDM via direct grant or group membership."""
+    # Direct user grant
+    user_access = db.query(CdmAccess).filter(
+        CdmAccess.cdm_name == cdm_name,
+        CdmAccess.username == username,
+    ).first()
+    if user_access:
+        return True
+
+    # Group grant: check if user belongs to any group that has access
+    group_grants = db.query(CdmGroupAccess.group_name).filter(
+        CdmGroupAccess.cdm_name == cdm_name,
+    ).all()
+    if group_grants:
+        group_names = [g.group_name for g in group_grants]
+        member = db.query(UserGroupMember).filter(
+            UserGroupMember.group_name.in_(group_names),
+            UserGroupMember.username == username,
+        ).first()
+        if member:
+            return True
+
+    return False
+
+
+def _cdm_has_acl(cdm_name: str, db: Session) -> bool:
+    """Check if a CDM has any access control (user or group)."""
+    has_user_acl = db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).first()
+    if has_user_acl:
+        return True
+    has_group_acl = db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).first()
+    return bool(has_group_acl)
+
+
+def check_cdm_access(cdm_name: str, request: Request, db: Session) -> None:
+    """Raise 403 if the current user cannot access the given CDM.
+
+    Rules (driven by permissions.yaml cdm_visibility):
+    - Roles with cdm_visibility=all -> always allowed (admin, data-manager)
+    - Roles with cdm_visibility=acl_only -> must have explicit grant (user or group)
+    - If NO ACL exists for a CDM, only full-visibility roles can see it
+    """
+    user = getattr(request.state, "user", {})
+    roles = user.get("roles", [])
+    if has_any_full_visibility(roles):
+        return
+    username = user.get("preferred_username", "anonymous")
+    if not _user_has_cdm_access(cdm_name, username, db):
+        raise HTTPException(status_code=403, detail=f"Access denied to CDM '{cdm_name}'")
+
+
+class GrantAccessRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1)
+
+
+class GrantGroupAccessRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1)
+    group_name: str = Field(..., min_length=1)
+
+
+class RevokeAccessRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1)
+
+
+class RevokeGroupAccessRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1)
+    group_name: str = Field(..., min_length=1)
+
+
+@router.get("/")
+def list_access(
+    cdm_name: str | None = None,
+    username: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """List CDM access grants (user + group), optionally filtered."""
+    # User grants
+    q = db.query(CdmAccess)
+    if cdm_name:
+        q = q.filter(CdmAccess.cdm_name == cdm_name)
+    if username:
+        q = q.filter(CdmAccess.username == username)
+    user_rows = q.order_by(CdmAccess.created_at.desc()).all()
+
+    # Group grants
+    gq = db.query(CdmGroupAccess)
+    if cdm_name:
+        gq = gq.filter(CdmGroupAccess.cdm_name == cdm_name)
+    group_rows = gq.order_by(CdmGroupAccess.created_at.desc()).all()
+
+    return {
+        "grants": [
+            {
+                "id": r.id,
+                "cdm_name": r.cdm_name,
+                "username": r.username,
+                "grant_type": "user",
+                "granted_by": r.granted_by,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in user_rows
+        ],
+        "group_grants": [
+            {
+                "id": r.id,
+                "cdm_name": r.cdm_name,
+                "group_name": r.group_name,
+                "grant_type": "group",
+                "granted_by": r.granted_by,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in group_rows
+        ],
+    }
+
+
+@router.get("/cdms-for-user")
+def get_accessible_cdms(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Return list of CDM names the current user can access.
+
+    Visibility driven by permissions.yaml:
+    - cdm_visibility=all -> sees all CDMs (admin, data-manager)
+    - cdm_visibility=acl_only -> only CDMs with explicit grant (user or group)
+    """
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "anonymous")
+    roles = user.get("roles", [])
+
+    # Full-visibility roles see everything
+    if has_any_full_visibility(roles):
+        all_cdms = db.query(CdmConfig.name).all()
+        return {"cdms": [c.name for c in all_cdms]}
+
+    # acl_only roles: only CDMs with explicit grant
+    all_cdms = db.query(CdmConfig).all()
+    result = []
+    for cdm in all_cdms:
+        if _user_has_cdm_access(cdm.name, username, db):
+            result.append(cdm.name)
+    return {"cdms": result}
+
+
+@router.post("/grant")
+def grant_access(req: GrantAccessRequest, request: Request, db: Session = Depends(get_db)):
+    """Grant a user access to a CDM (admin only)."""
+    cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
+    if not cdm:
+        raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
+
+    existing = db.query(CdmAccess).filter(
+        CdmAccess.cdm_name == req.cdm_name,
+        CdmAccess.username == req.username,
+    ).first()
+    if existing:
+        return {"status": "already_granted", "id": existing.id}
+
+    user = getattr(request.state, "user", {})
+    access = CdmAccess(
+        cdm_name=req.cdm_name,
+        username=req.username,
+        granted_by=user.get("preferred_username", "admin"),
+    )
+    db.add(access)
+    db.commit()
+    return {"status": "ok", "id": access.id}
+
+
+@router.post("/grant-group")
+def grant_group_access(req: GrantGroupAccessRequest, request: Request, db: Session = Depends(get_db)):
+    """Grant a user group access to a CDM (admin only).
+    All members of the group will have access. Membership is resolved dynamically.
+    """
+    cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
+    if not cdm:
+        raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
+
+    from db.models import UserGroup
+    group = db.query(UserGroup).filter(UserGroup.name == req.group_name).first()
+    if not group:
+        raise HTTPException(status_code=404, detail=f"Group '{req.group_name}' not found")
+
+    existing = db.query(CdmGroupAccess).filter(
+        CdmGroupAccess.cdm_name == req.cdm_name,
+        CdmGroupAccess.group_name == req.group_name,
+    ).first()
+    if existing:
+        return {"status": "already_granted", "id": existing.id}
+
+    user = getattr(request.state, "user", {})
+    access = CdmGroupAccess(
+        cdm_name=req.cdm_name,
+        group_name=req.group_name,
+        granted_by=user.get("preferred_username", "admin"),
+    )
+    db.add(access)
+    db.commit()
+    return {"status": "ok", "id": access.id}
+
+
+@router.post("/revoke")
+def revoke_access(req: RevokeAccessRequest, db: Session = Depends(get_db)):
+    """Revoke a user's access to a CDM (admin only)."""
+    access = db.query(CdmAccess).filter(
+        CdmAccess.cdm_name == req.cdm_name,
+        CdmAccess.username == req.username,
+    ).first()
+    if not access:
+        raise HTTPException(status_code=404, detail="Access grant not found")
+    db.delete(access)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/revoke-group")
+def revoke_group_access(req: RevokeGroupAccessRequest, db: Session = Depends(get_db)):
+    """Revoke a group's access to a CDM (admin only)."""
+    access = db.query(CdmGroupAccess).filter(
+        CdmGroupAccess.cdm_name == req.cdm_name,
+        CdmGroupAccess.group_name == req.group_name,
+    ).first()
+    if not access:
+        raise HTTPException(status_code=404, detail="Group access grant not found")
+    db.delete(access)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/cdm/{cdm_name}")
+def clear_cdm_access(cdm_name: str, db: Session = Depends(get_db)):
+    """Remove all access controls for a CDM (makes it open to all)."""
+    deleted_users = db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete()
+    deleted_groups = db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete()
+    db.commit()
+    return {"status": "ok", "deleted_users": deleted_users, "deleted_groups": deleted_groups}

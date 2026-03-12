@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+/* ── Emerald Neumorphic Night Theme ─────────────────────── */
+@theme {
+  --color-deep-base: #0B0F1A;
+  --color-surface: #121826;
+  --color-surface-light: #1c2539;
+  --color-surface-dark: #080b13;
+  --color-emerald-accent: #10B981;
+  --color-emerald-light: #34D399;
+  --color-emerald-glow: rgba(16, 185, 129, 0.2);
+  --color-emerald-glow-strong: rgba(16, 185, 129, 0.6);
+  --color-teal-accent: #14b8a6;
+  --color-text-bright: #F8FAFC;
+  --color-text-muted: #94A3B8;
+  --color-text-dim: #64748B;
+  --color-border-subtle: rgba(255, 255, 255, 0.03);
+  --color-border-glow: rgba(16, 185, 129, 0.15);
+  --color-glass-bg: rgba(18, 24, 38, 0.7);
+  --color-glass-border: rgba(255, 255, 255, 0.06);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+
+/* ── Base Styles ───────────────────────────────────────────── */
+body {
+  background-color: var(--color-deep-base);
+  color: var(--color-text-bright);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Neumorphic Card ───────────────────────────────────────── */
+.neumorphic-card {
+  background: var(--color-surface);
+  box-shadow:
+    10px 10px 20px var(--color-surface-dark),
+    -5px -5px 15px var(--color-surface-light);
+  border-radius: 24px;
+  border: 1px solid var(--color-border-subtle);
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.neumorphic-card:hover {
+  box-shadow:
+    12px 12px 24px var(--color-surface-dark),
+    -6px -6px 18px var(--color-surface-light),
+    0 0 30px var(--color-emerald-glow);
+  border-color: var(--color-border-glow);
+}
+
+/* ── Glass Effect ──────────────────────────────────────────── */
+.glass-nav {
+  background: var(--color-glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--color-glass-border);
+}
+
+/* ── Cyber Glow ────────────────────────────────────────────── */
+.cyber-glow {
+  filter: drop-shadow(0 0 8px var(--color-emerald-glow-strong));
+}
+
+.cyber-glow-text {
+  text-shadow: 0 0 20px var(--color-emerald-glow);
+}
+
+/* ── Gradient Text ─────────────────────────────────────────── */
+.gradient-text {
+  background: linear-gradient(135deg, #F8FAFC 0%, #94A3B8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-emerald {
+  background: linear-gradient(135deg, #10B981 0%, #14b8a6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Emerald Button ────────────────────────────────────────── */
+.btn-emerald {
+  background: linear-gradient(135deg, #10B981 0%, #14b8a6 100%);
+  color: #0B0F1A;
+  font-weight: 600;
+  border-radius: 12px;
+  padding: 12px 28px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+}
+
+.btn-emerald:hover {
+  box-shadow: 0 6px 25px rgba(16, 185, 129, 0.5);
+  transform: translateY(-1px);
+}
+
+/* ── Dashboard Preview Glow ────────────────────────────────── */
+.dashboard-glow {
+  position: relative;
+}
+
+.dashboard-glow::before {
+  content: '';
+  position: absolute;
+  inset: -20px;
+  background: radial-gradient(ellipse at center, var(--color-emerald-glow) 0%, transparent 70%);
+  border-radius: 32px;
+  z-index: -1;
+  opacity: 0.6;
+}
+
+/* ── Icon Pulse Animation ──────────────────────────────────── */
+@keyframes emerald-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+.icon-halo {
+  position: relative;
+}
+
+.icon-halo::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: var(--color-emerald-glow);
+  animation: emerald-pulse 3s ease-in-out infinite;
+  z-index: -1;
+}
+
+/* ── Custom Scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-deep-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-surface-light);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-emerald-accent);
+}

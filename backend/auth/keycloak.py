@@ -1,18 +1,19 @@
 """
 Keycloak OIDC authentication middleware with role-based access control.
 Validates JWT tokens locally using JWKS keys (no issuer hostname dependency).
+Permissions are driven by permissions.yaml via auth.permissions module.
 """
 import logging
-import time
+import re
 
-import httpx
 import jwt
 from jwt import PyJWKClient
 from fastapi import Request, HTTPException, Depends
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from config import AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM, KEYCLOAK_CLIENT_ID
+from config import AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
+from auth.permissions import check_route_access, has_any_full_visibility, get_role_names
 
 logger = logging.getLogger(__name__)
 
@@ -21,53 +22,102 @@ _jwks_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/cer
 _jwks_client = PyJWKClient(_jwks_url, cache_keys=True, lifespan=3600)
 
 # Public endpoints that don't require authentication
-PUBLIC_PATHS = {"/api/health", "/api/i18n", "/docs", "/openapi.json", "/redoc", "/"}
+PUBLIC_PATHS = {"/api/health", "/api/i18n", "/api/access-requests", "/docs", "/openapi.json", "/redoc", "/"}
 
 # Authenticated endpoints accessible to any logged-in user (no role check)
 AUTH_NO_ROLE_CHECK_PATHS = {"/api/auth"}
-
-# Role-to-route access map
-# admin and omop-dim: access to everything (None = no restriction)
-# chercheur: Quality, Cohorting, Concept Explorer
-# medecin: Mapping, Cohorting, Concept Explorer
-# CDM Management, Settings, OHDSI: admin and omop-dim only
-ROLE_ROUTE_ACCESS = {
-    "admin": None,
-    "omop-dim": None,
-    "chercheur": ["/api/quality", "/api/cohorts", "/api/concepts", "/api/i18n", "/api/health"],
-    "medecin": ["/api/mapping", "/api/cohorts", "/api/concepts", "/api/i18n", "/api/health"],
-}
 
 # Endpoints accessible to any authenticated user regardless of role (read-only)
 # GET /api/cdm/ is needed by the sidebar CDM selector for all users
 AUTH_READ_PATHS = {"/api/cdm/"}
 
+# Path patterns where CDM name appears as a path segment
+_CDM_PATH_PATTERNS = [
+    re.compile(r"^/api/quality/(?:snapshots|conformity|timeline|report)/([^/]+)"),
+    re.compile(r"^/api/mapping/(?:dashboard|unmapped|strategies|concept-lookup|history|apply/export)/([^/]+)"),
+    re.compile(r"^/api/cdm/([^/]+)"),
+]
+
+# Paths to skip CDM access check (admin-only endpoints, access-control itself)
+_CDM_CHECK_SKIP_PREFIXES = {"/api/cdm-access"}
+
+
+def _extract_cdm_name(request: Request) -> str | None:
+    """Extract cdm_name from query params or known path patterns."""
+    path = request.url.path
+
+    for prefix in _CDM_CHECK_SKIP_PREFIXES:
+        if path.startswith(prefix):
+            return None
+
+    cdm = request.query_params.get("cdm_name")
+    if cdm:
+        return cdm
+    cdm_a = request.query_params.get("cdm_name_a")
+    if cdm_a:
+        return cdm_a
+
+    for pattern in _CDM_PATH_PATTERNS:
+        m = pattern.match(path)
+        if m:
+            return m.group(1)
+
+    return None
+
+
+def _check_cdm_access(cdm_name: str, user_info: dict) -> bool:
+    """Check if user can access the given CDM.
+
+    Uses permissions.yaml for role-based visibility:
+    - Roles with cdm_visibility=all see everything
+    - Roles with cdm_visibility=acl_only need explicit grant (user or group)
+    - If NO ACL exists for a CDM, only full-visibility roles can see it
+    """
+    roles = user_info.get("roles", [])
+    if has_any_full_visibility(roles):
+        return True
+
+    username = user_info.get("preferred_username", "anonymous")
+
+    from db.app_db import SessionLocal
+    from db.models import CdmAccess, CdmGroupAccess, UserGroupMember
+
+    db = SessionLocal()
+    try:
+        # For acl_only roles: must have explicit grant (user or group)
+        # Direct user grant
+        user_access = db.query(CdmAccess).filter(
+            CdmAccess.cdm_name == cdm_name,
+            CdmAccess.username == username,
+        ).first()
+        if user_access:
+            return True
+
+        # Group grant: check if user belongs to any group that has access
+        group_grants = db.query(CdmGroupAccess.group_name).filter(
+            CdmGroupAccess.cdm_name == cdm_name,
+        ).all()
+        if group_grants:
+            group_names = [g.group_name for g in group_grants]
+            member = db.query(UserGroupMember).filter(
+                UserGroupMember.group_name.in_(group_names),
+                UserGroupMember.username == username,
+            ).first()
+            if member:
+                return True
+
+        return False
+    finally:
+        db.close()
+
 
 def _extract_roles(token_payload: dict) -> list[str]:
-    """Extract realm roles from token payload.
-
-    Roles can be in:
-    - token_payload["roles"] (custom mapper we configured)
-    - token_payload["realm_access"]["roles"] (default Keycloak structure)
-    """
+    """Extract realm roles from token payload."""
     roles = token_payload.get("roles", [])
     if isinstance(roles, list) and roles:
         return roles
     realm_access = token_payload.get("realm_access", {})
     return realm_access.get("roles", [])
-
-
-def _check_route_access(roles: list[str], path: str) -> bool:
-    """Check if any of the user's roles allow access to the given path."""
-    for role in roles:
-        allowed = ROLE_ROUTE_ACCESS.get(role)
-        if allowed is None and role in ROLE_ROUTE_ACCESS:
-            return True  # admin/omop-dim: access to everything
-        if allowed:
-            for prefix in allowed:
-                if path.startswith(prefix):
-                    return True
-    return False
 
 
 class KeycloakMiddleware(BaseHTTPMiddleware):
@@ -111,23 +161,26 @@ class KeycloakMiddleware(BaseHTTPMiddleware):
         if request.method == "GET" and any(path.startswith(p) for p in AUTH_READ_PATHS):
             return await call_next(request)
 
-        # Check role-based route access
-        if not _check_route_access(roles, path):
+        # Check role-based route access (driven by permissions.yaml)
+        if not check_route_access(roles, path):
             return JSONResponse(
                 status_code=403,
                 content={"detail": "Forbidden: insufficient permissions for this resource"},
+            )
+
+        # Check per-CDM access control
+        cdm_name = _extract_cdm_name(request)
+        if cdm_name and not _check_cdm_access(cdm_name, user_info):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": f"Access denied to CDM '{cdm_name}'"},
             )
 
         return await call_next(request)
 
 
 async def _validate_token(token: str) -> dict:
-    """Validate a JWT token locally using Keycloak JWKS keys.
-
-    This avoids the issuer hostname mismatch problem when the backend
-    reaches Keycloak via Docker internal hostname (opal-keycloak:8080)
-    but tokens are issued with the browser-facing hostname (localhost:8080).
-    """
+    """Validate a JWT token locally using Keycloak JWKS keys."""
     try:
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(

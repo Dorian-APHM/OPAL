@@ -14,12 +14,17 @@ def get_or_create_key() -> bytes:
     """Retrieve or generate the Fernet encryption key."""
     SECRET_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
     if SECRET_KEY_FILE.exists():
-        with open(SECRET_KEY_FILE, "rb") as f:
-            return f.read()
+        try:
+            with open(SECRET_KEY_FILE, "rb") as f:
+                return f.read()
+        except PermissionError:
+            os.chmod(SECRET_KEY_FILE, 0o644)
+            with open(SECRET_KEY_FILE, "rb") as f:
+                return f.read()
     key = Fernet.generate_key()
-    with open(SECRET_KEY_FILE, "wb") as f:
+    fd = os.open(str(SECRET_KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    with os.fdopen(fd, "wb") as f:
         f.write(key)
-    os.chmod(SECRET_KEY_FILE, 0o600)
     return key
 
 
@@ -36,7 +41,17 @@ def encrypt_password(password: str) -> str:
 
 
 def decrypt_password(encrypted_password: str) -> str:
-    """Decrypt an encrypted password string."""
+    """Decrypt an encrypted password string.
+    Returns empty string if decryption fails (e.g. key mismatch after volume recreate).
+    """
     if not encrypted_password:
         return ""
-    return get_fernet().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+    try:
+        return get_fernet().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to decrypt password — encryption key may have changed. "
+            "Please re-enter the CDM password in Settings."
+        )
+        return ""

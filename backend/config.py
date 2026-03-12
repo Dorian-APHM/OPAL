@@ -3,8 +3,11 @@ OPAL — Configuration.
 
 All settings are loaded from environment variables with sensible defaults.
 """
+import logging
 import os
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -15,7 +18,15 @@ DATA_DIR.mkdir(exist_ok=True)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://opal:opal@opal-db:5432/opal")
 
 # Security
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY or SECRET_KEY == "change-me-in-production":
+    _logger.warning(
+        "SECRET_KEY is not set or uses the insecure default. "
+        "Set a strong SECRET_KEY environment variable for production. "
+        "Generate one with: openssl rand -hex 32"
+    )
+    if not SECRET_KEY:
+        SECRET_KEY = "change-me-in-production"
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "opal")
@@ -40,6 +51,7 @@ DOMAIN_CONFIG = {
         "date_col": "condition_start_date",
         "concept_id": "condition_concept_id",
         "source_value": "condition_source_value",
+        "source_concept_id": "condition_source_concept_id",
     },
     "Drug": {
         "table": "drug_exposure",
@@ -48,6 +60,7 @@ DOMAIN_CONFIG = {
         "concept_id": "drug_concept_id",
         "source_value": "drug_source_value",
         "source_name": "drug_source_name",
+        "source_concept_id": "drug_source_concept_id",
     },
     "Measurement": {
         "table": "measurement",
@@ -56,6 +69,7 @@ DOMAIN_CONFIG = {
         "concept_id": "measurement_concept_id",
         "source_value": "measurement_source_value",
         "source_name": "measurement_source_name",
+        "source_concept_id": "measurement_source_concept_id",
     },
     "Observation": {
         "table": "observation",
@@ -63,6 +77,7 @@ DOMAIN_CONFIG = {
         "date_col": "observation_date",
         "concept_id": "observation_concept_id",
         "source_value": "observation_source_value",
+        "source_concept_id": "observation_source_concept_id",
     },
     "Procedure": {
         "table": "procedure_occurrence",
@@ -70,6 +85,7 @@ DOMAIN_CONFIG = {
         "date_col": "procedure_date",
         "concept_id": "procedure_concept_id",
         "source_value": "procedure_source_value",
+        "source_concept_id": "procedure_source_concept_id",
     },
     "Visit": {
         "table": "visit_occurrence",
@@ -77,6 +93,7 @@ DOMAIN_CONFIG = {
         "date_col": "visit_start_date",
         "concept_id": "visit_concept_id",
         "source_value": "visit_source_value",
+        "source_concept_id": "visit_source_concept_id",
     },
     "Device": {
         "table": "device_exposure",
@@ -84,6 +101,7 @@ DOMAIN_CONFIG = {
         "date_col": "device_exposure_start_date",
         "concept_id": "device_concept_id",
         "source_value": "device_source_value",
+        "source_concept_id": "device_source_concept_id",
     },
     "Death": {
         "table": "death",
@@ -91,6 +109,7 @@ DOMAIN_CONFIG = {
         "date_col": "death_date",
         "concept_id": "cause_concept_id",
         "source_value": "cause_source_value",
+        "source_concept_id": "cause_source_concept_id",
     },
 }
 
