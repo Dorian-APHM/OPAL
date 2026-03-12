@@ -27,26 +27,7 @@ Ce document decrit l'architecture interne, les choix de conception, le modele de
 
 ### Topologie des services
 
-```mermaid
-flowchart LR
-    User(("Utilisateur")) --> Frontend
-
-    subgraph compose ["Docker Compose"]
-        Frontend["opal-frontend\nNginx + React\n:3000"]
-        Backend["opal-backend\nFastAPI / Uvicorn\n:8000"]
-        DB[("opal-db\nPostgreSQL 16\n:5432")]
-        KC["opal-keycloak\nKeycloak 24\n:8080"]
-        OHDSI["OHDSI Containers\n(on-demand)"]
-
-        Frontend -- "/api/*" --> Backend
-        Backend --> DB
-        Backend -- "OIDC / userinfo" --> KC
-        Backend -. "Docker Socket" .-> OHDSI
-    end
-
-    CDM[("CDM OMOP\nN bases externes\nPostgreSQL")]
-    Backend -- "psycopg2\n(lecture seule)" --> CDM
-```
+![Architecture OPAL](images/architecture.svg)
 
 ### Principes architecturaux
 

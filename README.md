@@ -46,26 +46,7 @@ OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (op
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    User(("Utilisateur")) --> Frontend
-
-    subgraph compose ["docker compose up"]
-        Frontend["opal-frontend\nReact + Nginx\n:3000"]
-        Backend["opal-backend\nFastAPI / Uvicorn\n:8000"]
-        DB[("opal-db\nPostgreSQL 16\n:5432")]
-        KC["opal-keycloak\nKeycloak 24\n:8080"]
-        OHDSI["OHDSI Tools\n(on-demand)"]
-
-        Frontend -- "/api/*" --> Backend
-        Backend --> DB
-        Backend -- "OIDC" --> KC
-        Backend -. "Docker Socket" .-> OHDSI
-    end
-
-    CDM[("CDM OMOP\nN bases externes\nPostgreSQL")]
-    Backend -- "psycopg2\n(lecture seule)" --> CDM
-```
+![Architecture OPAL](docs/images/architecture.svg)
 
 | Service | Role | Image |
 |---------|------|-------|
