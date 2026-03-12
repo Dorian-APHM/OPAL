@@ -24,8 +24,9 @@ Each line is a JSON object:
 """
 import json
 import logging
+import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,34 @@ from config import BASE_DIR
 AUDIT_LOG_DIR = BASE_DIR / "logs"
 AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# Retention: delete log files older than this many days (default 90)
+AUDIT_LOG_RETENTION_DAYS = int(os.getenv("AUDIT_LOG_RETENTION_DAYS", "90"))
+
 logger = logging.getLogger("opal.audit")
+
+
+def cleanup_old_logs() -> int:
+    """Remove audit log files older than AUDIT_LOG_RETENTION_DAYS. Returns count removed."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=AUDIT_LOG_RETENTION_DAYS)
+    removed = 0
+    for f in AUDIT_LOG_DIR.glob("*.jsonl"):
+        try:
+            file_date = datetime.strptime(f.stem, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            if file_date < cutoff:
+                f.unlink()
+                removed += 1
+        except (ValueError, OSError):
+            continue
+    if removed:
+        logger.info("Cleaned up %d audit log files older than %d days", removed, AUDIT_LOG_RETENTION_DAYS)
+    return removed
+
+
+# Run cleanup on module load (at startup)
+try:
+    cleanup_old_logs()
+except Exception:
+    logger.warning("Failed to clean up old audit logs", exc_info=True)
 
 # Action labels derived from method + path prefix
 ACTION_MAP = [
@@ -72,7 +100,7 @@ ACTION_MAP = [
 ]
 
 # Paths to skip (high-frequency, low-value)
-SKIP_PATHS = {"/api/health", "/api/i18n", "/api/auth", "/docs", "/openapi.json", "/", "/redoc"}
+SKIP_PATHS = {"/api/health", "/api/i18n", "/api/auth", "/api/access-requests", "/docs", "/openapi.json", "/", "/redoc"}
 
 
 def _resolve_action(method: str, path: str) -> str | None:

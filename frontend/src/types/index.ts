@@ -206,7 +206,8 @@ export interface AnalysisSettingsType {
 
 /** SSE batch progress event */
 export interface BatchProgressEvent {
-  type: 'progress' | 'done' | 'error';
+  type: 'start' | 'progress' | 'done' | 'error' | 'cancelled';
+  analysis_id?: string;
   domain?: string;
   status?: 'running' | 'success' | 'error';
   error?: string;
@@ -228,14 +229,29 @@ export interface OmopConcept {
   standard_concept: string | null;
 }
 
+/** Temporal relation between two criteria (Allen's interval algebra subset) */
+export type TemporalRelation =
+  | 'before'          // A ends before B starts
+  | 'after'           // A starts after B ends
+  | 'starts_before'   // A starts before B starts
+  | 'starts_after'    // A starts after B starts
+  | 'ends_before'     // A ends before B ends
+  | 'ends_after'      // A ends after B ends
+  | 'overlaps'        // A and B overlap in time
+  | 'contains'        // A fully contains B
+  | 'during';         // A occurs during B
+
 /** Temporal constraint for a criterion */
 export interface TemporalConstraint {
-  type: 'any_time' | 'absolute_window' | 'within_days' | 'during_visit';
+  type: 'any_time' | 'absolute_window' | 'within_days' | 'during_visit' | 'relative_to_criterion';
   date_from?: string;
   date_to?: string;
   days_before?: number;
   days_after?: number;
   relative_to?: 'index';
+  reference_criterion_id?: string;
+  /** Temporal relation when type='relative_to_criterion' (default: 'before') */
+  relation?: TemporalRelation;
 }
 
 /** Occurrence (frequency) constraint */
@@ -267,11 +283,18 @@ export interface CohortCriterion {
   operatorWithNext?: 'AND' | 'OR'; // operator linking to the NEXT criterion
 }
 
-/** Logical group of criteria (AND/OR) */
+/** A node in the criteria tree: either a leaf criterion or a nested group */
+export type CriteriaNode =
+  | { type: 'criterion'; criterion: CohortCriterion }
+  | { type: 'group'; group: CriteriaGroup };
+
+/** Logical group of criteria (AND/OR) — supports nested sub-groups */
 export interface CriteriaGroup {
   operator: 'AND' | 'OR';
   criteria: CohortCriterion[];
   groups?: CriteriaGroup[];
+  /** Ordered children mixing criteria and sub-groups (preferred over separate arrays) */
+  children?: CriteriaNode[];
   sameVisit?: boolean;
 }
 
@@ -289,6 +312,9 @@ export interface CohortCriteria {
   inclusion: CriteriaGroup;
   exclusion: CriteriaGroup;
   demographics?: DemographicConstraints;
+  exit_criteria?: CohortExitCriteria;
+  /** ID of the criterion designated as the initial/index event (cohort entry) */
+  initial_event_criterion_id?: string;
 }
 
 /** Cohort summary from list endpoint */
@@ -297,6 +323,8 @@ export interface CohortSummary {
   cdm_name: string;
   name: string;
   description: string;
+  created_by?: string;
+  shared_with_all?: boolean;
   created_at: string | null;
   updated_at: string | null;
   latest_version: number;
@@ -332,6 +360,29 @@ export interface AttritionStep {
   error?: string;
 }
 
+/** Patient journey event (from timeline endpoint) */
+export interface PatientJourneyEvent {
+  domain: string;
+  start_date: string | null;
+  end_date?: string;
+  concept_id: number | null;
+  concept_name: string;
+  source_value: string;
+  source_concept_name?: string;
+  value_as_number?: number;
+  unit_source_value?: string;
+  quantity?: number;
+}
+
+/** Patient info returned with journey */
+export interface PatientJourneyInfo {
+  person_id: number;
+  year_of_birth: number;
+  gender: string;
+  observation_period_start_date: string | null;
+  observation_period_end_date: string | null;
+}
+
 /** Sample patient row */
 export interface SamplePatient {
   person_id: number;
@@ -340,6 +391,180 @@ export interface SamplePatient {
   race: string;
   observation_period_start_date: string | null;
   observation_period_end_date: string | null;
+}
+
+// ──── Characterization (Table 1) types ────
+
+/** Demographics section of characterization */
+export interface CharacterizationDemographics {
+  age: {
+    n: number;
+    mean_age: number | null;
+    std_age: number | null;
+    min_age: number | null;
+    max_age: number | null;
+    q1_age: number | null;
+    median_age: number | null;
+    q3_age: number | null;
+  };
+  age_groups: { age_group: string; count: number }[];
+  gender: { label: string; concept_id: number | null; count: number }[];
+  race: { label: string; concept_id: number | null; count: number }[];
+  ethnicity: { label: string; concept_id: number | null; count: number }[];
+}
+
+/** Top concept in a domain */
+export interface CharacterizationConcept {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  vocabulary_id: string;
+  n_persons: number;
+  n_records: number;
+  pct_persons: number;
+}
+
+/** Domain prevalence section */
+export interface CharacterizationDomainPrevalence {
+  domain: string;
+  patients_with_data: number;
+  pct_with_data: number;
+  top_concepts: CharacterizationConcept[];
+  error?: string;
+}
+
+/** Measurement value stats */
+export interface CharacterizationMeasurementStat {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  n_persons: number;
+  pct_persons: number;
+  mean_value: number | null;
+  std_value: number | null;
+  median_value: number | null;
+  min_value: number | null;
+  max_value: number | null;
+  unit: string;
+}
+
+/** Visit type distribution */
+export interface CharacterizationVisitType {
+  concept_id: number;
+  concept_name: string;
+  n_persons: number;
+  n_records: number;
+  pct_persons: number;
+}
+
+/** Observation period stats */
+export interface CharacterizationObsPeriod {
+  n_periods: number;
+  n_persons: number;
+  mean_days: number | null;
+  std_days: number | null;
+  min_days: number | null;
+  max_days: number | null;
+  median_days: number | null;
+  earliest_start: string | null;
+  latest_end: string | null;
+}
+
+/** Full characterization result */
+export interface CharacterizationVisitDuration {
+  n_visits: number;
+  mean_days: number | null;
+  std_days: number | null;
+  min_days: number | null;
+  max_days: number | null;
+  median_days: number | null;
+  by_type?: { visit_type: string; n_visits: number; mean_days: number | null; std_days: number | null; median_days: number | null }[];
+}
+
+export interface CharacterizationResult {
+  cohort_size: number;
+  demographics: CharacterizationDemographics;
+  domain_prevalence: CharacterizationDomainPrevalence[];
+  measurement_stats: CharacterizationMeasurementStat[];
+  visit_types: CharacterizationVisitType[];
+  visit_duration?: CharacterizationVisitDuration;
+  observation_period: CharacterizationObsPeriod;
+}
+
+// ──── Cohort Comparison (SMD) types ────
+
+export interface CohortComparisonDemographicCategory {
+  label: string;
+  pct_a: number;
+  pct_b: number;
+  smd: number | null;
+}
+
+export interface CohortComparisonConcept {
+  concept_id: number;
+  concept_name: string;
+  pct_persons_a: number;
+  pct_persons_b: number;
+  smd: number | null;
+}
+
+export interface CohortComparisonDomain {
+  domain: string;
+  pct_with_data_a: number;
+  pct_with_data_b: number;
+  smd: number | null;
+  concepts: CohortComparisonConcept[];
+}
+
+export interface CohortComparisonMeasurement {
+  concept_id: number;
+  concept_name: string;
+  unit: string;
+  mean_a: number | null;
+  std_a: number | null;
+  mean_b: number | null;
+  std_b: number | null;
+  smd: number | null;
+  pct_persons_a: number;
+  pct_persons_b: number;
+  prevalence_smd: number | null;
+}
+
+export interface CohortComparisonVisitType {
+  concept_id: number;
+  concept_name: string;
+  pct_persons_a: number;
+  pct_persons_b: number;
+  smd: number | null;
+}
+
+export interface CohortComparisonVariable {
+  category: string;
+  variable: string;
+  smd: number | null;
+}
+
+export interface CohortComparisonResult {
+  cohort_a_name: string;
+  cohort_b_name: string;
+  cohort_a_size: number;
+  cohort_b_size: number;
+  demographics: {
+    age: { mean_a: number | null; std_a: number | null; mean_b: number | null; std_b: number | null; smd: number | null };
+    gender: CohortComparisonDemographicCategory[];
+    race: CohortComparisonDemographicCategory[];
+    ethnicity: CohortComparisonDemographicCategory[];
+    age_groups: (CohortComparisonDemographicCategory & { age_group: string })[];
+  };
+  domain_prevalence: CohortComparisonDomain[];
+  measurement_stats: CohortComparisonMeasurement[];
+  visit_types: CohortComparisonVisitType[];
+  observation_period: {
+    mean_days_a: number | null; std_days_a: number | null;
+    mean_days_b: number | null; std_days_b: number | null;
+    smd: number | null;
+  };
+  all_variables: CohortComparisonVariable[];
 }
 
 // ──── Phase 3: Mapping types ────
@@ -357,6 +582,21 @@ export interface MappingDomainStat {
   pct_rows_mapped: number;
   version: number;
   snapshot_date: string | null;
+}
+
+/** Strategy confidence statistics */
+export interface StrategyStats {
+  strategy: string;
+  total_decisions: number;
+  approved: number;
+  modified: number;
+  rejected: number;
+  approval_rate: number;
+  rejection_rate: number;
+  modification_rate: number;
+  avg_confidence: number | null;
+  avg_confidence_approved: number | null;
+  avg_confidence_rejected: number | null;
 }
 
 /** Mapping dashboard response */
@@ -418,5 +658,183 @@ export interface MappingDecisionEntry {
   confidence_score: number | null;
   user: string;
   reason: string;
+  created_at: string | null;
+}
+
+// ──── Concept Sets ────
+
+export interface ConceptSetItem {
+  concept_id: number;
+  concept_name: string;
+  concept_code: string;
+  vocabulary_id: string;
+  include_descendants: boolean;
+}
+
+export interface ConceptSetSummary {
+  id: number;
+  name: string;
+  cdm_name: string;
+  domain: string | null;
+  description: string;
+  concept_count: number;
+  created_by: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ConceptSetDetail extends ConceptSetSummary {
+  concepts: ConceptSetItem[];
+}
+
+// ──── Exit Criteria ────
+
+export interface CohortExitCriteria {
+  type: 'end_of_observation' | 'fixed_duration' | 'event_based';
+  duration_days?: number;
+  exit_event?: CriteriaGroup;
+}
+
+// ──── Incidence Rate ────
+
+export interface IncidenceStrataResult {
+  strata_values: Record<string, string>;
+  target_count: number;
+  outcome_count: number;
+  person_years: number;
+  incidence_rate: number;
+  incidence_proportion: number;
+  ci_lower: number;
+  ci_upper: number;
+}
+
+export interface IncidenceResult {
+  target_count: number;
+  outcome_count: number;
+  person_years: number;
+  incidence_rate: number;
+  incidence_proportion: number;
+  ci_lower: number;
+  ci_upper: number;
+  target_name: string;
+  outcome_name: string;
+  strata: IncidenceStrataResult[];
+  sql?: string;
+}
+
+export interface IncidenceAnalysisSummary {
+  id: number;
+  cdm_name: string;
+  name: string;
+  target_cohort_id: number;
+  outcome_cohort_id: number;
+  created_at: string | null;
+}
+
+// ──── Kaplan-Meier ────
+
+export interface KMPoint {
+  time: number;
+  survival: number;
+  ci_lower: number;
+  ci_upper: number;
+  at_risk: number;
+  events: number;
+  censored: number;
+}
+
+export interface KaplanMeierResult {
+  target_name: string;
+  outcome_name: string;
+  overall: KMPoint[];
+  strata: Record<string, KMPoint[]>;
+  log_rank: { chi_square: number; p_value: number; df: number } | null;
+  median_survival: number | null;
+  time_unit: string;
+  summary: { n: number; events: number; censored: number };
+}
+
+export interface EstimationAnalysisSummary {
+  id: number;
+  cdm_name: string;
+  name: string;
+  analysis_type: string;
+  target_cohort_id: number;
+  outcome_cohort_id: number;
+  created_at: string | null;
+}
+
+// ──── Audit types ────
+
+/** Audit log entry */
+export interface AuditEntry {
+  ts: string;
+  user: string;
+  roles: string[];
+  action: string;
+  method: string;
+  path: string;
+  status: number;
+  duration_ms: number;
+  ip: string;
+  params?: Record<string, string>;
+}
+
+/** Audit stats */
+export interface AuditStats {
+  total_events: number;
+  by_user: { user: string; count: number }[];
+  by_action: { action: string; count: number }[];
+}
+
+// ──── Admin user types ────
+
+/** Keycloak user */
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  enabled: boolean;
+  created_at: number | null;
+  roles: string[];
+}
+
+/** User group summary (from /api/groups/) */
+export interface GroupSummary {
+  name: string;
+  description: string;
+  created_by: string;
+  member_count: number;
+  created_at: string | null;
+}
+
+/** User group detail (from /api/groups/:name) */
+export interface GroupDetail {
+  name: string;
+  description: string;
+  created_by: string;
+  members: { username: string; added_by: string }[];
+}
+
+/** Cohort sharing info (from /api/cohorts/:id/shares) */
+export interface CohortShareInfo {
+  cohort_id: number;
+  shared_with_all: boolean;
+  shares: { type: string; target: string; shared_by: string; created_at: string | null }[];
+}
+
+/** Access request */
+export interface AccessRequest {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  requested_role: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
   created_at: string | null;
 }

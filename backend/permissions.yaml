@@ -1,0 +1,97 @@
+# ============================================================================
+# OPAL Permissions Matrix
+# ============================================================================
+# Single source of truth for all role-based access control.
+# Edit this file to change who can access what — no code changes needed.
+#
+# Roles: admin, data-manager, chercheur, medecin
+# Each role lists the features it can access.
+# "all" means unrestricted access to everything.
+# ============================================================================
+
+roles:
+  admin:
+    description: "Full access — system administration, users, audit"
+    pages: all
+    api: all
+    cdm_visibility: all          # sees all CDMs regardless of ACL
+    can_manage_access: true       # can grant/revoke CDM access (user + group)
+    can_clear_all_grants: true    # can wipe all grants for a CDM
+
+  data-manager:
+    description: "Full data access — quality, mapping, SQL, CDM management"
+    pages:
+      - /
+      - /quality
+      - /cohorts
+      - /data-management
+      - /mapping
+      - /concepts
+      - /ohdsi
+      - /cdm
+      - /settings
+    api:
+      - /api/quality
+      - /api/cohorts
+      - /api/concepts
+      - /api/mapping
+      - /api/cdm
+      - /api/datamanagement
+      - /api/ohdsi
+      - /api/search
+      - /api/favorites
+      - /api/notifications
+      - /api/saved-queries
+      - /api/cohort-templates
+      - /api/cdm-access
+      - /api/groups
+      - /api/i18n
+      - /api/health
+      - /api/incidence
+      - /api/estimation
+    cdm_visibility: all
+    can_manage_access: true
+    can_clear_all_grants: false
+
+  chercheur:
+    description: "Research — cohorts, concepts, shared cohorts"
+    pages:
+      - /
+      - /cohorts
+      - /concepts
+    api:
+      - /api/cohorts
+      - /api/concepts
+      - /api/search
+      - /api/favorites
+      - /api/notifications
+      - /api/saved-queries
+      - /api/cohort-templates
+      - /api/cdm-access/cdms-for-user
+      - /api/groups
+      - /api/i18n
+      - /api/health
+    cdm_visibility: acl_only      # only sees CDMs with explicit grant (user or group)
+    can_manage_access: false
+    can_clear_all_grants: false
+
+  medecin:
+    description: "Clinical — mapping validation, concepts"
+    pages:
+      - /
+      - /mapping
+      - /concepts
+    api:
+      - /api/mapping
+      - /api/concepts
+      - /api/search
+      - /api/favorites
+      - /api/notifications
+      - /api/saved-queries
+      - /api/cdm-access/cdms-for-user
+      - /api/groups
+      - /api/i18n
+      - /api/health
+    cdm_visibility: acl_only
+    can_manage_access: false
+    can_clear_all_grants: false

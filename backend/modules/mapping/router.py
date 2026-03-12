@@ -6,18 +6,18 @@ validation workflow, apply mapping, and audit history.
 """
 import csv
 import io
-import json
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from db.app_db import get_db
 from db.models import CdmConfig, AnalysisSettings, AnalysisSnapshot, MappingDecision, ReferenceCodebook, SapbertMapping
+from utils.notifications import notify
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
@@ -26,20 +26,24 @@ from modules.mapping.suggest import suggest_mappings, suggest_batch
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 
+# Background suggestion tasks — survive page navigation
+_active_suggestions: dict[str, dict] = {}
+# Stores: { task_id: { status, cdm_name, domain, results, error, cancelled } }
+
 
 # ──── Request models ────
 
 class SuggestRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    source_value: str
-    source_name: str = ""
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    source_value: str = Field(..., min_length=1, max_length=1000)
+    source_name: str = Field(default="", max_length=1000)
 
 
 class SuggestBatchRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    limit: int = 20
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    limit: int = Field(default=20, ge=1, le=200)
     enable_fuzzy: bool = True
     enable_keyword: bool = True
     enable_contextual: bool = True
@@ -47,30 +51,30 @@ class SuggestBatchRequest(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    source_value: str
-    source_name: str = ""
-    action: str  # approved, modified, rejected
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    source_value: str = Field(..., min_length=1, max_length=1000)
+    source_name: str = Field(default="", max_length=1000)
+    action: str = Field(..., pattern=r"^(approved|modified|rejected)$")
     target_concept_id: int | None = None
-    target_concept_name: str = ""
-    target_vocabulary_id: str = ""
-    suggestion_source: str = ""
-    confidence_score: float | None = None
-    reason: str = ""
+    target_concept_name: str = Field(default="", max_length=500)
+    target_vocabulary_id: str = Field(default="", max_length=100)
+    suggestion_source: str = Field(default="", max_length=50)
+    confidence_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    reason: str = Field(default="", max_length=5000)
 
 
 class BulkDecisionRequest(BaseModel):
-    cdm_name: str
-    domain: str
-    action: str  # approved, rejected
-    min_confidence: float = 80.0
-    source_values: list[str] | None = None
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., pattern=r"^(approved|rejected)$")
+    min_confidence: float = Field(default=80.0, ge=0.0, le=100.0)
+    source_values: list[str] | None = Field(default=None, max_length=1000)
 
 
 class ApplyMappingRequest(BaseModel):
-    cdm_name: str
-    domain: str
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str = Field(..., min_length=1, max_length=100)
     write_to_cdm: bool = False
 
 
@@ -173,6 +177,75 @@ def mapping_evolution(cdm_name: str, domain: str, db: Session = Depends(get_db))
     return {"cdm_name": cdm_name, "domain": domain, "evolution": evolution}
 
 
+# ──── 5.1b Strategy Confidence Statistics ────
+
+@router.get("/strategies/{cdm_name}")
+def strategy_stats(
+    cdm_name: str,
+    domain: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Compute confidence statistics per suggestion strategy.
+    Returns per-strategy: total decisions, approval rate, avg confidence,
+    rejection rate, and modification rate.
+    """
+    query = db.query(MappingDecision).filter(
+        MappingDecision.cdm_name == cdm_name,
+        MappingDecision.suggestion_source.isnot(None),
+        MappingDecision.suggestion_source != "",
+        MappingDecision.suggestion_source != "bulk",
+    )
+    if domain:
+        query = query.filter(MappingDecision.domain == domain)
+
+    decisions = query.all()
+
+    # Group by suggestion_source
+    by_source: dict[str, list] = {}
+    for d in decisions:
+        source = d.suggestion_source or "unknown"
+        # Normalize: strip "rollback of #..." entries
+        if source.startswith("rollback"):
+            continue
+        by_source.setdefault(source, []).append(d)
+
+    strategies = []
+    for source, items in sorted(by_source.items()):
+        total = len(items)
+        approved = sum(1 for d in items if d.action == "approved")
+        modified = sum(1 for d in items if d.action == "modified")
+        rejected = sum(1 for d in items if d.action == "rejected")
+
+        confidences = [d.confidence_score for d in items if d.confidence_score is not None]
+        approved_conf = [d.confidence_score for d in items if d.action == "approved" and d.confidence_score is not None]
+        rejected_conf = [d.confidence_score for d in items if d.action == "rejected" and d.confidence_score is not None]
+
+        strategies.append({
+            "strategy": source,
+            "total_decisions": total,
+            "approved": approved,
+            "modified": modified,
+            "rejected": rejected,
+            "approval_rate": round(approved / total * 100, 1) if total > 0 else 0,
+            "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0,
+            "modification_rate": round(modified / total * 100, 1) if total > 0 else 0,
+            "avg_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
+            "avg_confidence_approved": round(sum(approved_conf) / len(approved_conf), 1) if approved_conf else None,
+            "avg_confidence_rejected": round(sum(rejected_conf) / len(rejected_conf), 1) if rejected_conf else None,
+        })
+
+    # Sort by approval rate descending
+    strategies.sort(key=lambda s: s["approval_rate"], reverse=True)
+
+    return {
+        "cdm_name": cdm_name,
+        "domain": domain,
+        "strategies": strategies,
+        "total_decisions": sum(s["total_decisions"] for s in strategies),
+    }
+
+
 # ──── 5.2 Unmapped Exploration ────
 
 @router.get("/unmapped/{cdm_name}/{domain}")
@@ -182,11 +255,13 @@ def list_unmapped(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     search: str = Query(default=""),
+    include_mapped: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     """
     Paginated list of unmapped source values for a domain,
     queried directly from the CDM.
+    If include_mapped=True, also returns already-mapped codes (for manual mapping).
     """
     if domain not in DOMAIN_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown domain: {domain}")
@@ -209,7 +284,9 @@ def list_unmapped(
             else:
                 select_cols.append("'' AS source_name")
 
-            wheres = [f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)"]
+            wheres: list[str] = []
+            if not include_mapped:
+                wheres.append(f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)")
             params: dict = {}
 
             if search:
@@ -332,6 +409,47 @@ def export_unmapped(
     )
 
 
+# ──── 5.2b Concept Lookup (for manual mapping) ────
+
+@router.get("/concept-lookup/{cdm_name}/{concept_id}")
+def concept_lookup(cdm_name: str, concept_id: int, db: Session = Depends(get_db)):
+    """
+    Look up a single concept by ID from the CDM vocabulary.
+    Used by the manual mapping workflow to validate a concept_id.
+    """
+    cdm, conn = _get_cdm_conn(db, cdm_name)
+    schema = _get_schema(db, cdm)
+
+    try:
+        from psycopg2.extras import DictCursor
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute(f"""
+                SELECT concept_id, concept_name, concept_code,
+                       vocabulary_id, domain_id, standard_concept, concept_class_id
+                FROM {schema}.concept
+                WHERE concept_id = %(cid)s
+            """, {"cid": concept_id})
+            row = cur.fetchone()
+    except Exception as e:
+        logger.exception("Concept lookup failed")
+        raise HTTPException(status_code=500, detail=f"Lookup error: {e}")
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Concept {concept_id} not found")
+
+    return {
+        "concept_id": row["concept_id"],
+        "concept_name": row["concept_name"],
+        "concept_code": row["concept_code"],
+        "vocabulary_id": row["vocabulary_id"],
+        "domain_id": row["domain_id"],
+        "standard_concept": row["standard_concept"],
+        "concept_class_id": row["concept_class_id"],
+    }
+
+
 # ──── 5.3 Auto-Suggestion ────
 
 def _get_sapbert_suggestions(db: Session, source_value: str, domain: str) -> list[dict]:
@@ -404,23 +522,21 @@ def suggest_single(req: SuggestRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/suggest/batch")
-def suggest_batch_endpoint(req: SuggestBatchRequest, db: Session = Depends(get_db)):
+def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Session = Depends(get_db)):
     """
-    Get mapping suggestions for the top N unmapped terms in a domain.
-    Fetches unmapped terms from CDM, then runs suggestion engine on each.
+    Launch mapping suggestions in a background thread.
+    Returns immediately with a task_id. Poll /suggest/status/{task_id} for results.
     """
+    import threading
+    import uuid as _uuid
+
     if req.domain not in DOMAIN_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown domain: {req.domain}")
 
+    # Gather all data needed by the worker while we still have the DB session
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
     cfg = DOMAIN_CONFIG[req.domain]
-    full_table = f"{schema}.{cfg['table']}"
-    sv_col = cfg["source_value"]
-    concept_col = cfg["concept_id"]
-    sn_col = cfg.get("source_name")
-
-    # Pre-fetch approved/modified/rejected source values to exclude them from CDM query
     approved_svs = [
         r[0] for r in
         db.query(MappingDecision.source_value)
@@ -431,110 +547,177 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, db: Session = Depends(get_d
         ).all()
     ]
 
-    try:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            select_cols = [f"t.{sv_col} AS source_value"]
-            if sn_col:
-                select_cols.append(f"MAX(t.{sn_col}) AS source_name")
-            else:
-                select_cols.append("'' AS source_name")
+    # Pre-fetch SapBERT mappings
+    sapbert_rows = (
+        db.query(SapbertMapping)
+        .filter(SapbertMapping.domain == req.domain)
+        .order_by(SapbertMapping.source_code, SapbertMapping.rank)
+        .all()
+    )
+    sapbert_all: dict[str, list[dict]] = {}
+    for r in sapbert_rows:
+        sapbert_all.setdefault(r.source_code, []).append({
+            "concept_id": r.target_concept_id,
+            "concept_name": r.target_concept_name,
+            "concept_code": r.target_concept_code,
+            "vocabulary_id": r.target_vocabulary_id,
+            "domain_id": req.domain,
+            "standard_concept": "S",
+            "confidence": int(r.similarity * 100),
+            "source": "sapbert",
+        })
 
-            where_clauses = [f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)"]
-            params: dict = {"lim": req.limit}
+    # Pre-fetch reference codebooks
+    ref_rows = db.query(ReferenceCodebook.code, ReferenceCodebook.description).filter(
+        ReferenceCodebook.domain == req.domain
+    ).all()
+    ref_map = {r.code: r.description for r in ref_rows}
 
-            # Exclude already-approved terms directly in SQL
-            if approved_svs:
-                where_clauses.append(f"t.{sv_col} != ALL(%(approved)s)")
-                params["approved"] = approved_svs
+    task_id = str(_uuid.uuid4())[:8]
+    _active_suggestions[task_id] = {
+        "status": "running", "cdm_name": req.cdm_name, "domain": req.domain,
+        "results": None, "error": None, "cancelled": False,
+    }
 
-            sql = f"""
-                SELECT {', '.join(select_cols)}, COUNT(*) AS n_records
-                FROM {full_table} t
-                WHERE {' AND '.join(where_clauses)}
-                GROUP BY t.{sv_col}
-                ORDER BY COUNT(*) DESC
-                LIMIT %(lim)s
-            """
-            cur.execute(sql, params)
-            terms = [dict(r) for r in cur.fetchall()]
+    # Capture request params for worker
+    domain = req.domain
+    limit = req.limit
+    enable_fuzzy = req.enable_fuzzy
+    enable_keyword = req.enable_keyword
+    enable_contextual = req.enable_contextual
+    enable_sapbert = req.enable_sapbert
 
-        # Enrich terms with reference codebook descriptions
-        codes_without_name = [t["source_value"] for t in terms if not t.get("source_name")]
-        if codes_without_name:
-            refs = (
-                db.query(ReferenceCodebook.code, ReferenceCodebook.description)
-                .filter(
-                    ReferenceCodebook.domain == req.domain,
-                    ReferenceCodebook.code.in_(codes_without_name),
-                ).all()
-            )
-            ref_map = {r.code: r.description for r in refs}
+    def _worker():
+        try:
+            from psycopg2.extras import DictCursor
+            full_table = f"{schema}.{cfg['table']}"
+            sv_col = cfg["source_value"]
+            concept_col = cfg["concept_id"]
+            sn_col = cfg.get("source_name")
+
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                select_cols = [f"t.{sv_col} AS source_value"]
+                if sn_col:
+                    select_cols.append(f"MAX(t.{sn_col}) AS source_name")
+                else:
+                    select_cols.append("'' AS source_name")
+
+                where_clauses = [f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)"]
+                params: dict = {"lim": limit}
+                if approved_svs:
+                    where_clauses.append(f"t.{sv_col} != ALL(%(approved)s)")
+                    params["approved"] = approved_svs
+
+                sql = f"""
+                    SELECT {', '.join(select_cols)}, COUNT(*) AS n_records
+                    FROM {full_table} t
+                    WHERE {' AND '.join(where_clauses)}
+                    GROUP BY t.{sv_col}
+                    ORDER BY COUNT(*) DESC
+                    LIMIT %(lim)s
+                """
+                cur.execute(sql, params)
+                terms = [dict(r) for r in cur.fetchall()]
+
+            # Enrich with reference codebook
             for t in terms:
                 if not t.get("source_name") and t["source_value"] in ref_map:
                     t["source_name"] = ref_map[t["source_value"]]
 
-        # Pre-fetch SapBERT suggestions for all source values (if enabled)
-        all_svs = [t["source_value"] for t in terms]
-        sapbert_map: dict[str, list[dict]] = {}
-        if not req.enable_sapbert:
-            all_svs = []  # skip SapBERT lookup
-        sapbert_rows = (
-            db.query(SapbertMapping)
-            .filter(
-                SapbertMapping.domain == req.domain,
-                SapbertMapping.source_code.in_(all_svs),
-            )
-            .order_by(SapbertMapping.source_code, SapbertMapping.rank)
-            .all()
-        )
-        for r in sapbert_rows:
-            sapbert_map.setdefault(r.source_code, []).append({
-                "concept_id": r.target_concept_id,
-                "concept_name": r.target_concept_name,
-                "concept_code": r.target_concept_code,
-                "vocabulary_id": r.target_vocabulary_id,
-                "domain_id": req.domain,
-                "standard_concept": "S",
-                "confidence": int(r.similarity * 100),
-                "source": "sapbert",
-            })
+            if _active_suggestions.get(task_id, {}).get("cancelled"):
+                return
 
-        # Split: terms with SapBERT results skip SQL strategies entirely
-        terms_without_sapbert = [t for t in terms if t["source_value"] not in sapbert_map]
+            # Filter SapBERT map for fetched terms
+            all_svs = [t["source_value"] for t in terms]
+            sapbert_map: dict[str, list[dict]] = {}
+            if enable_sapbert:
+                for sv in all_svs:
+                    if sv in sapbert_all:
+                        sapbert_map[sv] = sapbert_all[sv]
 
-        # For terms with SapBERT, build results directly from pre-computed data
-        results_sapbert = []
-        for t in terms:
-            sv = t["source_value"]
-            if sv in sapbert_map:
-                results_sapbert.append({
-                    "source_value": sv,
-                    "source_name": t.get("source_name", ""),
-                    "suggestions": list(sapbert_map[sv]),
-                })
+            terms_without_sapbert = [t for t in terms if t["source_value"] not in sapbert_map]
 
-        # Only run SQL strategies for terms without SapBERT results
-        results_slow = []
-        if terms_without_sapbert:
-            results_slow = suggest_batch(conn, terms_without_sapbert, req.domain, schema,
-                                         enable_fuzzy=req.enable_fuzzy,
-                                         enable_keyword=req.enable_keyword,
-                                         enable_contextual=req.enable_contextual)
+            results_sapbert = []
+            for t in terms:
+                sv = t["source_value"]
+                if sv in sapbert_map:
+                    results_sapbert.append({
+                        "source_value": sv,
+                        "source_name": t.get("source_name", ""),
+                        "suggestions": list(sapbert_map[sv]),
+                    })
 
-        # Rebuild results in original order
-        result_map = {}
-        for r in results_sapbert + results_slow:
-            result_map[r["source_value"]] = r
-        results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
+            if _active_suggestions.get(task_id, {}).get("cancelled"):
+                return
 
-    except Exception as e:
-        logger.exception("Batch suggestion failed")
-        raise HTTPException(status_code=500, detail=f"Batch suggestion error: {e}")
-    finally:
-        conn.close()
+            results_slow = []
+            if terms_without_sapbert:
+                results_slow = suggest_batch(conn, terms_without_sapbert, domain, schema,
+                                             enable_fuzzy=enable_fuzzy,
+                                             enable_keyword=enable_keyword,
+                                             enable_contextual=enable_contextual)
 
-    return {"domain": req.domain, "results": results}
+            result_map = {}
+            for r in results_sapbert + results_slow:
+                result_map[r["source_value"]] = r
+            results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
+
+            if task_id in _active_suggestions:
+                _active_suggestions[task_id]["status"] = "done"
+                _active_suggestions[task_id]["results"] = results
+
+        except Exception as e:
+            logger.exception("Background batch suggestion failed")
+            if task_id in _active_suggestions:
+                _active_suggestions[task_id]["status"] = "error"
+                _active_suggestions[task_id]["error"] = str(e)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"task_id": task_id, "status": "running"}
+
+
+@router.get("/suggest/status/{task_id}")
+def suggest_status(task_id: str):
+    """Check status of a background suggestion task."""
+    entry = _active_suggestions.get(task_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Task not found")
+    resp: dict = {"task_id": task_id, "status": entry["status"], "domain": entry["domain"]}
+    if entry["status"] == "done":
+        resp["results"] = entry["results"]
+        # Clean up after delivering results
+        _active_suggestions.pop(task_id, None)
+    elif entry["status"] == "error":
+        resp["error"] = entry["error"]
+        _active_suggestions.pop(task_id, None)
+    return resp
+
+
+@router.post("/suggest/cancel/{task_id}")
+def suggest_cancel(task_id: str):
+    """Cancel a running suggestion task."""
+    entry = _active_suggestions.get(task_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Task not found")
+    entry["cancelled"] = True
+    _active_suggestions.pop(task_id, None)
+    return {"cancelled": True, "task_id": task_id}
+
+
+@router.get("/suggest/active")
+def suggest_active():
+    """List running suggestion tasks."""
+    return {
+        "active": [
+            {"task_id": tid, "cdm_name": info["cdm_name"], "domain": info["domain"], "status": info["status"]}
+            for tid, info in _active_suggestions.items()
+        ]
+    }
 
 
 # ──── 5.4 Validation Workflow ────
@@ -605,7 +788,7 @@ def bulk_decision(req: BulkDecisionRequest, db: Session = Depends(get_db)):
 # ──── 5.5 Apply Mapping ────
 
 @router.post("/apply")
-def apply_mapping(req: ApplyMappingRequest, db: Session = Depends(get_db)):
+def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
     """
     Generate source_to_concept_map entries from approved decisions.
     Optionally writes directly to the CDM's source_to_concept_map table.
@@ -663,6 +846,19 @@ def apply_mapping(req: ApplyMappingRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=500, detail=f"Write error: {e}")
         finally:
             conn.close()
+
+    # Notify: mapping applied
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    if username and req.write_to_cdm:
+        notify(
+            db, username, "mapping_review",
+            title=f"Mapping appliqué : {req.domain}",
+            message=f"{len(stcm_rows)} mapping(s) écrits dans {req.cdm_name}.source_to_concept_map.",
+            link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
+            item_id=req.domain,
+        )
+        db.commit()
 
     return {
         "count": len(stcm_rows),

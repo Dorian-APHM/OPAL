@@ -1,9 +1,13 @@
 """
 SQLAlchemy models for the OPAL application database.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, Boolean, UniqueConstraint
+
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -21,8 +25,8 @@ class CdmConfig(Base):
     db_user = Column(String(255), nullable=False)
     db_password_encrypted = Column(Text, nullable=False)
     omop_schema = Column(String(255), nullable=False, default="omop_cdm")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class AnalysisSnapshot(Base):
@@ -34,7 +38,7 @@ class AnalysisSnapshot(Base):
     domain = Column(String(100), nullable=False, index=True)
     version = Column(Integer, nullable=False)
     results = Column(JSON, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class AnalysisSettings(Base):
@@ -59,8 +63,10 @@ class Cohort(Base):
     cdm_name = Column(String(255), nullable=False, index=True)
     name = Column(String(500), nullable=False)
     description = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(255), nullable=True, index=True)
+    shared_with_all = Column(Integer, default=0)  # 0=private, 1=public (Integer for SQLite compat)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class CohortVersion(Base):
@@ -73,7 +79,9 @@ class CohortVersion(Base):
     criteria_json = Column(JSON, nullable=False)
     generated_sql = Column(Text, default="")
     patient_count = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    characterization_json = Column(JSON, nullable=True)
+    characterized_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class MappingDecision(Base):
@@ -97,7 +105,7 @@ class MappingDecision(Base):
     confidence_score = Column(Float, nullable=True)
     user = Column(String(255), default="system")
     reason = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class ReferenceCodebook(Base):
@@ -115,7 +123,7 @@ class ReferenceCodebook(Base):
     domain = Column(String(100), nullable=False, index=True)
     code = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=_utcnow)
 
 
 class SapbertMapping(Base):
@@ -135,4 +143,193 @@ class SapbertMapping(Base):
     target_concept_name = Column(String(500), default="")
     target_vocabulary_id = Column(String(100), default="")
     similarity = Column(Float, nullable=False)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=_utcnow)
+
+
+class ConceptSet(Base):
+    """Reusable concept sets (groups of concepts)."""
+    __tablename__ = "concept_sets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(500), nullable=False)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    domain = Column(String(100), nullable=True)
+    description = Column(Text, default="")
+    concepts_json = Column(Text, nullable=False)
+    created_by = Column(String(255), default="system")
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class IncidenceAnalysis(Base):
+    """Saved incidence rate analyses."""
+    __tablename__ = "incidence_analyses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    target_cohort_id = Column(Integer, nullable=False)
+    outcome_cohort_id = Column(Integer, nullable=False)
+    parameters_json = Column(Text, default="{}")
+    results_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class EstimationAnalysis(Base):
+    """Saved estimation analyses (Kaplan-Meier, etc.)."""
+    __tablename__ = "estimation_analyses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    analysis_type = Column(String(50), nullable=False, default="kaplan_meier")
+    target_cohort_id = Column(Integer, nullable=False)
+    outcome_cohort_id = Column(Integer, nullable=False)
+    parameters_json = Column(Text, default="{}")
+    results_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class CdmAccess(Base):
+    """Per-user CDM access control. When no rows exist for a CDM, it's open to all."""
+    __tablename__ = "cdm_access"
+    __table_args__ = (
+        UniqueConstraint("cdm_name", "username", name="uq_cdm_access"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    username = Column(String(255), nullable=False, index=True)
+    granted_by = Column(String(255), default="admin")
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class CdmGroupAccess(Base):
+    """Per-group CDM access control. Grants all members of a user group access to a CDM."""
+    __tablename__ = "cdm_group_access"
+    __table_args__ = (
+        UniqueConstraint("cdm_name", "group_name", name="uq_cdm_group_access"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    group_name = Column(String(255), nullable=False, index=True)
+    granted_by = Column(String(255), default="admin")
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class UserFavorite(Base):
+    """User favorites (cohorts, concepts, queries, etc.)."""
+    __tablename__ = "user_favorites"
+    __table_args__ = (
+        UniqueConstraint("username", "item_type", "item_id", name="uq_user_fav"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, index=True)
+    item_type = Column(String(50), nullable=False)  # cohort, concept, query, cdm
+    item_id = Column(String(500), nullable=False)  # id or identifier
+    item_label = Column(String(500), default="")
+    item_meta = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class SavedQuery(Base):
+    """Saved SQL queries for the SQL Editor."""
+    __tablename__ = "saved_queries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    sql = Column(Text, nullable=False)
+    description = Column(Text, default="")
+    created_by = Column(String(255), default="system")
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class Notification(Base):
+    """In-app notifications."""
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, index=True)
+    type = Column(String(50), nullable=False)  # mapping_review, quality_done, cohort_shared, access_request
+    title = Column(String(500), nullable=False)
+    message = Column(Text, default="")
+    link = Column(String(500), default="")  # frontend route to navigate to
+    item_id = Column(String(500), nullable=True, index=True)  # identifies the specific element (domain name, cohort id, etc.)
+    read = Column(Integer, default=0)  # 0=unread, 1=read (using Integer for SQLite compat)
+    target_role = Column(String(50), nullable=True, index=True)  # if set, visible to all users with this role
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class CohortTemplate(Base):
+    """Pre-defined cohort templates."""
+    __tablename__ = "cohort_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(500), nullable=False)
+    category = Column(String(100), nullable=False, default="General")  # e.g. Cardiology, Endocrinology
+    description = Column(Text, default="")
+    criteria_json = Column(JSON, nullable=False)
+    author = Column(String(255), default="system")
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class CohortShare(Base):
+    """Tracks who a cohort is shared with (individual user or group)."""
+    __tablename__ = "cohort_shares"
+    __table_args__ = (
+        UniqueConstraint("cohort_id", "share_type", "share_target", name="uq_cohort_share"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cohort_id = Column(Integer, nullable=False, index=True)
+    share_type = Column(String(20), nullable=False)  # "user" or "group"
+    share_target = Column(String(255), nullable=False)  # username or group name
+    shared_by = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class UserGroup(Base):
+    """Custom user groups for sharing."""
+    __tablename__ = "user_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False, index=True)
+    description = Column(Text, default="")
+    created_by = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class UserGroupMember(Base):
+    """Members of a user group."""
+    __tablename__ = "user_group_members"
+    __table_args__ = (
+        UniqueConstraint("group_name", "username", name="uq_group_member"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_name = Column(String(255), nullable=False, index=True)
+    username = Column(String(255), nullable=False, index=True)
+    added_by = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class AccessRequest(Base):
+    """
+    Self-service sign-up requests awaiting admin approval.
+    """
+    __tablename__ = "access_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, index=True)
+    email = Column(String(500), nullable=True, default="")
+    first_name = Column(String(255), nullable=True, default="")
+    last_name = Column(String(255), nullable=True, default="")
+    requested_role = Column(String(100), nullable=False)  # admin, data-manager, chercheur, medecin
+    status = Column(String(50), nullable=False, default="pending")  # pending, approved, rejected
+    reviewed_by = Column(String(255), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
