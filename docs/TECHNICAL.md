@@ -27,34 +27,34 @@ Ce document decrit l'architecture interne, les choix de conception, le modele de
 
 ### Topologie des services
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          Docker Compose                               │
-│                                                                       │
-│  ┌─────────────────┐          ┌─────────────────┐                    │
-│  │  opal-frontend   │  /api/  │  opal-backend    │                    │
-│  │  Nginx + React   │────────>│  FastAPI/Uvicorn  │                    │
-│  │  :3000           │         │  :8000            │                    │
-│  └─────────────────┘         └────┬──────┬───────┘                    │
-│                                   │      │                             │
-│                    ┌──────────────┘      └──────────────┐             │
-│                    │                                     │             │
-│             ┌──────┴──────┐                      ┌──────┴──────┐     │
-│             │  opal-db     │                      │opal-keycloak│     │
-│             │ PostgreSQL 16│                      │ Keycloak 24 │     │
-│             │ :5432        │                      │ :8080       │     │
-│             └─────────────┘                      └─────────────┘     │
-│                                                                       │
-│              Docker Socket ──> OHDSI Containers (on-demand)           │
-└──────────────────────────────────────────────────────────────────────┘
-                    │
-                    │ psycopg2 (lecture seule)
-                    ▼
-           ┌──────────────────┐
-           │  CDM OMOP        │
-           │  PostgreSQL      │
-           │  (N bases)       │
-           └──────────────────┘
+```mermaid
+graph TB
+    User(("👤 Utilisateur"))
+
+    subgraph Docker["🐳 Docker Compose"]
+        Frontend["<b>opal-frontend</b><br/>Nginx + React<br/>:3000"]
+        Backend["<b>opal-backend</b><br/>FastAPI / Uvicorn<br/>:8000"]
+        DB[("<b>opal-db</b><br/>PostgreSQL 16<br/>:5432")]
+        KC["<b>opal-keycloak</b><br/>Keycloak 24<br/>:8080"]
+        OHDSI["<b>OHDSI Containers</b><br/>Atlas / WebAPI<br/>(on-demand)"]
+    end
+
+    CDM[("<b>CDM OMOP</b><br/>N bases externes<br/>PostgreSQL")]
+
+    User --> Frontend
+    Frontend -->|"/api/*"| Backend
+    Backend --> DB
+    Backend -->|"OIDC / userinfo"| KC
+    Backend -.->|"Docker Socket"| OHDSI
+    Backend -->|"psycopg2 (lecture seule)"| CDM
+
+    style Docker fill:#0d1b2a,stroke:#2bc459,stroke-width:2px,color:#e0e0e0
+    style Frontend fill:#1b2838,stroke:#2bc459,color:#e0e0e0
+    style Backend fill:#1b2838,stroke:#2bc459,color:#e0e0e0
+    style DB fill:#1b2838,stroke:#1f77b4,color:#e0e0e0
+    style KC fill:#1b2838,stroke:#1f77b4,color:#e0e0e0
+    style OHDSI fill:#1b2838,stroke:#555,stroke-dasharray:5 5,color:#888
+    style CDM fill:#0a1628,stroke:#1f77b4,stroke-width:2px,color:#e0e0e0
 ```
 
 ### Principes architecturaux
