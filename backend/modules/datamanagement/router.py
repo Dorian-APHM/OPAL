@@ -332,8 +332,15 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
             with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
                 cur.itersize = 2000
                 cur.execute(extraction_sql)
+                # Named cursors: description is None until first fetch
+                first_row = cur.fetchone()
                 csv_columns = [desc[0] for desc in cur.description] if cur.description else []
                 writer.writerow(csv_columns)
+                if first_row:
+                    writer.writerow([
+                        v.isoformat() if hasattr(v, 'isoformat') else v
+                        for v in (first_row[col] for col in csv_columns)
+                    ])
                 for row in cur:
                     writer.writerow([
                         v.isoformat() if hasattr(v, 'isoformat') else v
@@ -573,6 +580,8 @@ def extract_download(req: ExtractRequest, db: Session = Depends(get_db)):
             with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
                 cur.itersize = 2000
                 cur.execute(extraction_sql)
+                # Named cursors: description is None until first fetch
+                first_row = cur.fetchone()
                 columns = [desc[0] for desc in cur.description] if cur.description else []
 
                 output = io.StringIO()
@@ -580,10 +589,22 @@ def extract_download(req: ExtractRequest, db: Session = Depends(get_db)):
                 writer.writerow(columns)
                 yield output.getvalue()
 
+                if first_row:
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+                    writer.writerow([
+                        v.isoformat() if hasattr(v, 'isoformat') else v
+                        for v in (first_row[col] for col in columns)
+                    ])
+                    yield output.getvalue()
+
                 for row in cur:
                     output = io.StringIO()
                     writer = csv.writer(output)
-                    writer.writerow([row[col] for col in columns])
+                    writer.writerow([
+                        v.isoformat() if hasattr(v, 'isoformat') else v
+                        for v in (row[col] for col in columns)
+                    ])
                     yield output.getvalue()
 
             conn.close()
