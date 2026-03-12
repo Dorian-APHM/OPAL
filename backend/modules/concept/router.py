@@ -256,6 +256,16 @@ def get_concept_source_values(
                 table = cfg["table"]
                 concept_col = cfg["concept_id"]
                 source_col = cfg["source_value"]
+                source_concept_col = cfg.get("source_concept_id")
+
+                # Build WHERE clause: match standard concept_id OR source_concept_id
+                where_parts = [f"{concept_col} = %s"]
+                params: list = [domain_name, concept_id]
+                if source_concept_col:
+                    where_parts.append(f"{source_concept_col} = %s")
+                    params.append(concept_id)
+                where_clause = " OR ".join(where_parts)
+
                 try:
                     cur.execute(
                         f"""
@@ -264,13 +274,13 @@ def get_concept_source_values(
                                COUNT(*) AS n_records,
                                COUNT(DISTINCT person_id) AS n_persons
                         FROM {schema}.{table}
-                        WHERE {concept_col} = %s
+                        WHERE ({where_clause})
                           AND {source_col} IS NOT NULL
                         GROUP BY {source_col}
                         ORDER BY COUNT(*) DESC
                         LIMIT 50
                         """,
-                        [domain_name, concept_id],
+                        params,
                     )
                     rows = cur.fetchall()
                     for r in rows:
@@ -458,6 +468,7 @@ def export_source_value_search(
 
 class ConceptCountsRequest(BaseModel):
     concept_ids: list[int]
+    domains: list[str] | None = None  # Optional: limit to specific domains for faster queries
 
 
 @router.post("/counts")
@@ -478,19 +489,15 @@ def get_concept_counts(
     counts: dict[int, dict] = {}
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            for domain_name, cfg in DOMAIN_CONFIG.items():
+            # Query standard concept_id columns (all indexed → fast)
+            for cfg in DOMAIN_CONFIG.values():
                 table = cfg["table"]
                 concept_col = cfg["concept_id"]
                 try:
                     cur.execute(
-                        f"""
-                        SELECT {concept_col} AS concept_id,
-                               COUNT(*) AS n_records,
-                               COUNT(DISTINCT person_id) AS n_persons
-                        FROM {schema}.{table}
-                        WHERE {concept_col} = ANY(%s)
-                        GROUP BY {concept_col}
-                        """,
+                        f"SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
+                        f"COUNT(DISTINCT person_id) AS n_persons "
+                        f"FROM {schema}.{table} WHERE {concept_col} = ANY(%s) GROUP BY {concept_col}",
                         [ids],
                     )
                     for r in cur.fetchall():
@@ -499,6 +506,52 @@ def get_concept_counts(
                             counts[cid] = {"n_records": 0, "n_persons": 0}
                         counts[cid]["n_records"] += r["n_records"]
                         counts[cid]["n_persons"] += r["n_persons"]
+                except Exception:
+                    conn.rollback()
+
+        return {"counts": counts}
+    finally:
+        conn.close()
+
+
+@router.post("/counts/source")
+def get_concept_source_counts(
+    req: ConceptCountsRequest,
+    cdm_name: str,
+    db: Session = Depends(get_db),
+):
+    """Get source_concept_id counts. Pass domains to limit to specific tables (much faster)."""
+    if not req.concept_ids:
+        return {"counts": {}}
+
+    from config import DOMAIN_CONFIG
+
+    conn, schema = _get_conn(db, cdm_name)
+    ids = req.concept_ids[:200]
+    counts: dict[int, dict] = {}
+    # Filter to requested domains only (if provided)
+    domains_to_search = {k: v for k, v in DOMAIN_CONFIG.items() if k in req.domains} if req.domains else DOMAIN_CONFIG
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            for cfg in domains_to_search.values():
+                table = cfg["table"]
+                source_concept_col = cfg.get("source_concept_id")
+                if not source_concept_col:
+                    continue
+                try:
+                    cur.execute(
+                        f"SELECT {source_concept_col} AS concept_id, COUNT(*) AS n_records, "
+                        f"COUNT(DISTINCT person_id) AS n_persons "
+                        f"FROM {schema}.{table} WHERE {source_concept_col} = ANY(%s) "
+                        f"GROUP BY {source_concept_col}",
+                        [ids],
+                    )
+                    for r in cur.fetchall():
+                        cid = r["concept_id"]
+                        if cid not in counts:
+                            counts[cid] = {"n_source_records": 0, "n_source_persons": 0}
+                        counts[cid]["n_source_records"] += r["n_records"]
+                        counts[cid]["n_source_persons"] += r["n_persons"]
                 except Exception:
                     conn.rollback()
 

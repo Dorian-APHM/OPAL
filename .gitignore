@@ -29,7 +29,23 @@ Thumbs.db
 opal_pgdata/
 opal_data/
 
+# Environment files (may contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Data / reference CSV files (loaded via API, not tracked)
+*.csv
+
+# LibreOffice / Excel lock files
+.~lock.*#
+~$*
+
+# Demo / preview HTML files
+demo*.html
+preview*.html
+
 # Misc
 *.png
-demo.html
 .claude/
+backend/test_opal.db
