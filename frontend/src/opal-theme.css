@@ -12,7 +12,10 @@ html, body {
   text-rendering: optimizeLegibility;
   background: #0B0F1A !important;
   color: #F8FAFC;
+  overflow-x: hidden;
 }
+html { height: 100%; }
+body { min-height: 100%; }
 
 /* ── Page transition ───────────────────────────────────── */
 .opal-page-enter {

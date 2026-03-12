@@ -1,20 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSessionState } from '../hooks/useSessionState';
 import {
-  Card, Table, Tag, Button, Tabs, Badge, Select, Modal, Switch, Empty, Confirm, Input, useToast,
+  Card, Table, Tag, Button, Tabs, Badge, Select, MultiSelect, Modal, Switch, Empty, Confirm, Input, useToast,
 } from '../components/ui';
 import type { Column } from '../components/ui';
 import {
-  User, RefreshCw, CheckCircle, Ban, Plus, XCircle, UserPlus,
+  User, RefreshCw, CheckCircle, Ban, Plus, XCircle, UserPlus, Users, Trash2, Edit,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { adminApi } from '../api/client';
-import type { AdminUser, AccessRequest } from '../types';
+import { adminApi, groupApi, usersApi } from '../api/client';
+import type { AdminUser, AccessRequest, GroupSummary } from '../types';
+import { useNotifDots } from '../hooks/useNotifDots';
 
-const OPAL_ROLES = ['admin', 'omop-dim', 'chercheur', 'medecin'];
+const OPAL_ROLES = ['admin', 'data-manager', 'chercheur', 'medecin'];
 
 const ROLE_COLORS: Record<string, string> = {
   admin: 'red',
-  'omop-dim': 'purple',
+  'data-manager': 'purple',
   chercheur: 'blue',
   medecin: 'green',
 };
@@ -30,7 +32,7 @@ export default function UserManagementPage() {
   // Access requests
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('users');
+  const [activeTab, setActiveTab] = useSessionState('users:activeTab', 'users');
 
   // Add user modal
   const [addUserOpen, setAddUserOpen] = useState(false);
@@ -43,10 +45,28 @@ export default function UserManagementPage() {
   const [approveConfirm, setApproveConfirm] = useState<number | null>(null);
   const [rejectConfirm, setRejectConfirm] = useState<number | null>(null);
 
+  // Groups state
+  const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [opalUsers, setOpalUsers] = useState<string[]>([]);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<GroupSummary | null>(null);
+  const [groupForm, setGroupForm] = useState<{ name: string; description: string; members: string[] }>({ name: '', description: '', members: [] });
+  const [groupFormLoading, setGroupFormLoading] = useState(false);
+  const [deleteGroupConfirm, setDeleteGroupConfirm] = useState<string | null>(null);
+
+  // Notification dots for access requests — show on "Requests" tab, clear on tab click
+  const { hasNotif: hasAccessNotif, markAllReadForType: markAllAccessRead, count: accessNotifCount } = useNotifDots('access_request');
+
   const resetAddForm = () => {
     setAddUsername('');
     setAddRole('');
     setAddErrors({});
+  };
+
+  const resetGroupForm = () => {
+    setGroupForm({ name: '', description: '', members: [] });
+    setEditingGroup(null);
   };
 
   const handleAddUser = async () => {
@@ -101,10 +121,33 @@ export default function UserManagementPage() {
     }
   }, []);
 
+  const fetchGroups = useCallback(async () => {
+    setGroupsLoading(true);
+    try {
+      const resp = await groupApi.list();
+      setGroups(resp.data.groups);
+    } catch {
+      // silently fail
+    } finally {
+      setGroupsLoading(false);
+    }
+  }, []);
+
+  const fetchOpalUsers = useCallback(async () => {
+    try {
+      const resp = await usersApi.listOpalUsers();
+      setOpalUsers(resp.data.users);
+    } catch {
+      // silently fail
+    }
+  }, []);
+
   useEffect(() => {
     fetchUsers();
     fetchRequests();
-  }, [fetchUsers, fetchRequests]);
+    fetchGroups();
+    fetchOpalUsers();
+  }, [fetchUsers, fetchRequests, fetchGroups, fetchOpalUsers]);
 
   const handleAssignRole = async (userId: string, role: string) => {
     try {
@@ -157,6 +200,72 @@ export default function UserManagementPage() {
       fetchRequests();
     } catch (e: any) {
       toast.error(e.message || 'Failed to reject');
+    }
+  };
+
+  const handleOpenGroupModal = (group?: GroupSummary) => {
+    if (group) {
+      setEditingGroup(group);
+      // Fetch group detail to get members
+      groupApi.get(group.name).then(resp => {
+        setGroupForm({
+          name: resp.data.name,
+          description: resp.data.description || '',
+          members: resp.data.members.map(m => m.username),
+        });
+      }).catch(() => {
+        setGroupForm({
+          name: group.name,
+          description: group.description || '',
+          members: [],
+        });
+      });
+    } else {
+      resetGroupForm();
+    }
+    setGroupModalOpen(true);
+  };
+
+  const handleSaveGroup = async () => {
+    if (!groupForm.name.trim()) {
+      toast.error('Group name is required');
+      return;
+    }
+    setGroupFormLoading(true);
+    try {
+      if (editingGroup) {
+        await groupApi.update(editingGroup.name, {
+          description: groupForm.description,
+          members: groupForm.members,
+        });
+        toast.success(t('admin.group_updated', 'Group updated'));
+      } else {
+        await groupApi.create({
+          name: groupForm.name.trim(),
+          description: groupForm.description,
+          members: groupForm.members,
+        });
+        toast.success(t('admin.group_created', 'Group created'));
+      }
+      setGroupModalOpen(false);
+      resetGroupForm();
+      fetchGroups();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || 'Failed to save group';
+      toast.error(detail);
+    } finally {
+      setGroupFormLoading(false);
+    }
+  };
+
+  const handleDeleteGroup = async (groupName: string) => {
+    try {
+      await groupApi.delete(groupName);
+      toast.success(t('admin.group_deleted', 'Group deleted'));
+      fetchGroups();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || 'Failed to delete group';
+      toast.error(detail);
     }
   };
 
@@ -258,7 +367,7 @@ export default function UserManagementPage() {
       dataIndex: 'username',
       key: 'username',
       width: 150,
-      render: (u: string) => (
+      render: (u: string, record: AccessRequest) => (
         <div className="flex items-center gap-2">
           <User className="h-3.5 w-3.5 text-text-dim" />
           {u}
@@ -324,6 +433,78 @@ export default function UserManagementPage() {
     },
   ];
 
+  const groupColumns: Column<GroupSummary>[] = [
+    {
+      title: t('admin.group_name', 'Name'),
+      dataIndex: 'name',
+      key: 'name',
+      width: 180,
+      render: (name: string) => (
+        <div className="flex items-center gap-2">
+          <Users className="h-3.5 w-3.5 text-text-dim" />
+          <span className="text-sm font-medium text-text-bright">{name}</span>
+        </div>
+      ),
+    },
+    {
+      title: 'Description',
+      dataIndex: 'description',
+      key: 'description',
+      width: 250,
+      render: (desc: string) => (
+        <span className="text-sm text-text-muted">{desc || '\u2014'}</span>
+      ),
+    },
+    {
+      title: t('admin.members', 'Members'),
+      dataIndex: 'member_count',
+      key: 'member_count',
+      width: 100,
+      render: (count: number) => (
+        <Tag color="blue">{count} {count === 1 ? 'member' : 'members'}</Tag>
+      ),
+    },
+    {
+      title: t('admin.created_by', 'Created By'),
+      dataIndex: 'created_by',
+      key: 'created_by',
+      width: 150,
+      render: (creator: string) => (
+        <span className="text-sm text-text-muted">{creator || '\u2014'}</span>
+      ),
+    },
+    {
+      title: t('admin.created', 'Created'),
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 130,
+      render: (ts: string | null) =>
+        ts ? new Date(ts).toLocaleDateString() : '\u2014',
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 140,
+      render: (_: any, record: GroupSummary) => (
+        <div className="flex items-center gap-2">
+          <Button
+            size="small"
+            icon={<Edit className="h-3.5 w-3.5" />}
+            onClick={() => handleOpenGroupModal(record)}
+          >
+            {t('common.edit', 'Edit')}
+          </Button>
+          <Button
+            variant="danger"
+            size="small"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            onClick={() => setDeleteGroupConfirm(record.name)}
+          />
+        </div>
+      ),
+    },
+  ];
+
   const pendingCount = requests.length;
 
   return (
@@ -331,7 +512,10 @@ export default function UserManagementPage() {
       <Card size="small">
         <Tabs
           activeKey={activeTab}
-          onChange={setActiveTab}
+          onChange={(key) => {
+            setActiveTab(key);
+            if (key === 'requests') markAllAccessRead();
+          }}
           items={[
             {
               key: 'users',
@@ -369,6 +553,9 @@ export default function UserManagementPage() {
                   <div className="flex items-center gap-2">
                     <Plus className="h-4 w-4" />
                     {t('admin.access_requests', 'Access Requests')}
+                    {accessNotifCount > 0 && (
+                      <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                    )}
                   </div>
                 </Badge>
               ),
@@ -394,6 +581,49 @@ export default function UserManagementPage() {
                 />
               ),
             },
+            {
+              key: 'groups',
+              label: (
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  {t('admin.groups', 'Groups')}
+                  <Tag>{groups.length}</Tag>
+                </div>
+              ),
+              children: (
+                <>
+                  <div className="mb-3 flex justify-end">
+                    <Button
+                      variant="primary"
+                      size="small"
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      onClick={() => handleOpenGroupModal()}
+                    >
+                      {t('admin.new_group', 'New Group')}
+                    </Button>
+                  </div>
+                  <Table
+                    dataSource={groups}
+                    columns={groupColumns}
+                    rowKey="name"
+                    loading={groupsLoading}
+                    size="small"
+                    scroll={{ x: true }}
+                    emptyText={
+                      <div className="py-12 text-center">
+                        <Users className="h-12 w-12 text-text-dim mx-auto mb-3" />
+                        <h3 className="text-lg font-semibold text-text-bright mb-1">
+                          {t('admin.no_groups', 'No groups yet')}
+                        </h3>
+                        <span className="text-sm text-text-muted">
+                          {t('admin.create_group_hint', 'Create a group to organize users and share resources.')}
+                        </span>
+                      </div>
+                    }
+                  />
+                </>
+              ),
+            },
           ]}
           extra={
             <div className="flex items-center gap-2">
@@ -411,6 +641,7 @@ export default function UserManagementPage() {
                 onClick={() => {
                   fetchUsers();
                   fetchRequests();
+                  fetchGroups();
                 }}
               >
                 {t('audit.refresh', 'Refresh')}
@@ -441,6 +672,20 @@ export default function UserManagementPage() {
         }}
         title={t('admin.confirm_reject', 'Reject this request?')}
         confirmText={t('admin.reject', 'Reject')}
+        danger
+      />
+
+      {/* Delete group confirm */}
+      <Confirm
+        open={deleteGroupConfirm !== null}
+        onClose={() => setDeleteGroupConfirm(null)}
+        onConfirm={() => {
+          if (deleteGroupConfirm !== null) handleDeleteGroup(deleteGroupConfirm);
+          setDeleteGroupConfirm(null);
+        }}
+        title={t('admin.confirm_delete_group', 'Delete this group?')}
+        description={t('admin.delete_group_warning', 'This will permanently remove the group and all its member associations.')}
+        confirmText={t('common.delete', 'Delete')}
         danger
       />
 
@@ -554,6 +799,83 @@ export default function UserManagementPage() {
             onClick={handleAddUser}
           >
             Ajouter
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Group create/edit modal */}
+      <Modal
+        open={groupModalOpen}
+        onClose={() => { setGroupModalOpen(false); resetGroupForm(); }}
+        title={
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            {editingGroup
+              ? t('admin.edit_group', 'Edit Group')
+              : t('admin.new_group', 'New Group')}
+          </div>
+        }
+        width="max-w-md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">
+              {t('admin.group_name', 'Name')}
+            </label>
+            <Input
+              placeholder={t('admin.group_name_placeholder', 'e.g. Cardiology Team')}
+              value={groupForm.name}
+              onChange={e => setGroupForm(prev => ({ ...prev, name: e.target.value }))}
+              disabled={!!editingGroup}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">
+              Description
+            </label>
+            <Input
+              placeholder={t('admin.group_desc_placeholder', 'Optional description')}
+              value={groupForm.description}
+              onChange={e => setGroupForm(prev => ({ ...prev, description: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">
+              {t('admin.members', 'Members')}
+            </label>
+            <Select
+              placeholder={t('admin.add_member', 'Add a member...')}
+              value={null}
+              onChange={(v) => {
+                if (v && !groupForm.members.includes(v)) {
+                  setGroupForm(prev => ({ ...prev, members: [...prev.members, v] }));
+                }
+              }}
+              options={opalUsers
+                .filter(u => !groupForm.members.includes(u))
+                .map(u => ({ value: u, label: u }))}
+            />
+            {groupForm.members.length > 0 && (
+              <div className="mt-2">
+                <MultiSelect
+                  value={groupForm.members}
+                  onChange={(v) => setGroupForm(prev => ({ ...prev, members: v }))}
+                  options={opalUsers.map(u => ({ value: u, label: u }))}
+                  placeholder=""
+                />
+              </div>
+            )}
+          </div>
+          <Button
+            variant="primary"
+            block
+            loading={groupFormLoading}
+            icon={editingGroup ? <Edit className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+            onClick={handleSaveGroup}
+          >
+            {editingGroup
+              ? t('common.save', 'Save')
+              : t('admin.create_group', 'Create Group')}
           </Button>
         </div>
       </Modal>

@@ -20,8 +20,8 @@ export function Tabs({ items, activeKey, onChange, extra, className = '' }: Tabs
   const current = activeKey ?? internalKey;
 
   const handleChange = (key: string) => {
+    if (!activeKey) setInternalKey(key);
     if (onChange) onChange(key);
-    else setInternalKey(key);
   };
 
   const activeTab = items.find((t) => t.key === current);

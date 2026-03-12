@@ -6,7 +6,7 @@ import {
   Shield, ClipboardList,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { cdmApi } from '../../api/client';
+import { cdmApi, cdmAccessApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
 import { Select } from '../ui/Select';
@@ -34,7 +34,7 @@ const menuConfig = [
 
 const roleColors: Record<string, 'red' | 'purple' | 'blue' | 'green' | 'default'> = {
   admin: 'red',
-  'omop-dim': 'purple',
+  'data-manager': 'purple',
   chercheur: 'blue',
   medecin: 'green',
 };
@@ -48,7 +48,9 @@ export default function Sidebar({ selectedCdm, onCdmChange, collapsed, onCollaps
 
   useEffect(() => {
     if (authenticated && token) {
-      cdmApi.list().then((res) => setCdms(res.data.cdms)).catch(() => {});
+      cdmAccessApi.getAccessibleCdms()
+        .then((res) => setCdms(res.data.cdms.map((name: string) => ({ name } as CdmConfig))))
+        .catch(() => cdmApi.list().then((r) => setCdms(r.data.cdms)).catch(() => {}));
     }
   }, [authenticated, token]);
 

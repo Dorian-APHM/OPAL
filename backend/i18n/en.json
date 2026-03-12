@@ -12,7 +12,9 @@
     "concept_sets": "Concept Sets",
     "incidence": "Incidence",
     "estimation": "Estimation",
-    "ohdsi": "OHDSI Tools"
+    "ohdsi": "OHDSI Tools",
+    "data_management": "Data Management",
+    "dashboard": "Dashboard"
   },
   "cdm": {
     "title": "CDM Management",
@@ -221,6 +223,29 @@
     "no_analyses": "No estimation analyses yet",
     "strata": "Stratify by"
   },
+  "datamanagement": {
+    "title": "Data Management",
+    "select_cdm": "Please select a CDM database from the sidebar.",
+    "select_cohort": "Select a Cohort",
+    "choose_cohort": "Choose a saved cohort...",
+    "select_tables": "Select Tables & Columns",
+    "tables_selected": "selected",
+    "columns": "columns",
+    "no_tables": "No tables found",
+    "loading_columns": "Loading columns...",
+    "enable_table": "Enable this table to see columns",
+    "select_all": "Select All",
+    "same_visit_only": "Same Visit Only",
+    "same_visit_disabled": "This cohort was not built with Same Visit enabled. Enable Same Visit in the Cohort Builder to use this option.",
+    "same_visit_tooltip": "When enabled, only extract data for the specific visits matched by the cohort. When disabled, extract all visits for each patient.",
+    "extract": "Extract Dataset",
+    "preview": "Preview",
+    "rows": "rows",
+    "download_csv": "Download CSV",
+    "download_success": "Dataset downloaded successfully",
+    "total_rows": "Total rows",
+    "showing": "showing"
+  },
   "audit": {
     "title": "Audit Log",
     "time": "Time",
@@ -270,5 +295,44 @@
     "password_change_required": "The user will be asked to change their password on first login.",
     "no_pending": "No pending requests",
     "all_clear": "All access requests have been processed."
-  }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome to OPAL",
+    "select_cdm": "Select a CDM database from the sidebar to get started.",
+    "total_persons": "Total Persons",
+    "domains": "Domains",
+    "cohorts": "Saved Cohorts",
+    "favorites": "Favorites",
+    "recent_cohorts": "Recent Cohorts",
+    "view_all": "View All",
+    "no_cohorts": "No cohorts yet",
+    "create_cohort": "Create a Cohort",
+    "favorites_title": "Favorites",
+    "no_favorites": "No favorites yet. Star items from other pages to see them here.",
+    "domain_overview": "Domain Overview",
+    "quick_actions": "Quick Actions",
+    "new_cohort": "New Cohort",
+    "run_quality": "Quality Analysis",
+    "extract_data": "Extract Dataset",
+    "sql_editor": "SQL Editor"
+  },
+  "conformity": {
+    "title": "CDM Conformity",
+    "score": "Conformity Score",
+    "run_check": "Run Conformity Check",
+    "passed": "Passed",
+    "warnings": "Warnings",
+    "failures": "Failures",
+    "structure": "Structure",
+    "completeness": "Completeness",
+    "plausibility": "Plausibility",
+    "conformance": "Conformance"
+  },
+  "templates": {
+    "title": "Cohort Templates",
+    "use_template": "Use Template",
+    "category": "Category",
+    "no_templates": "No templates available"
+  },
 }

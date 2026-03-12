@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useSessionState } from '../hooks/useSessionState';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, TextArea, NumberInput,
   Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, useToast,
@@ -15,6 +16,7 @@ import {
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
 import { useAuth } from '../auth/KeycloakContext';
+import { useNotifDots } from '../hooks/useNotifDots';
 import type {
   MappingDomainStat, MappingEvolutionPoint, UnmappedItem,
   SuggestionResult, MappingSuggestion, MappingDecisionEntry,
@@ -22,7 +24,6 @@ import type {
 } from '../types';
 
 const DOMAIN_LIST = ['Condition', 'Drug', 'Measurement', 'Observation', 'Procedure', 'Visit', 'Device', 'Death'];
-const DOMAIN_OPTIONS = DOMAIN_LIST.map(d => ({ value: d, label: d }));
 
 interface Props {
   selectedCdm: string | null;
@@ -30,12 +31,16 @@ interface Props {
 
 export default function MappingPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useSessionState('mapping:activeTab', 'dashboard');
   const [historyKey, setHistoryKey] = useState(0);
+  const { markAllReadForType, count: mappingNotifCount } = useNotifDots('mapping_review');
 
   const handleTabChange = (key: string) => {
     setActiveTab(key);
-    if (key === 'history') setHistoryKey(k => k + 1);
+    if (key === 'history') {
+      setHistoryKey(k => k + 1);
+      markAllReadForType();
+    }
   };
 
   if (!selectedCdm) {
@@ -65,7 +70,14 @@ export default function MappingPage({ selectedCdm }: Props) {
     },
     {
       key: 'history',
-      label: <span className="inline-flex items-center gap-1.5"><History className="h-4 w-4" /> {t('mapping.history', 'History')}</span>,
+      label: (
+        <span className="inline-flex items-center gap-1.5">
+          <History className="h-4 w-4" /> {t('mapping.history', 'History')}
+          {mappingNotifCount > 0 && (
+            <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
+          )}
+        </span>
+      ),
       children: <MappingHistoryTab cdmName={selectedCdm} refreshKey={historyKey} />,
     },
   ];
@@ -82,10 +94,10 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   const [data, setData] = useState<MappingDomainStat[]>([]);
   const [decisions, setDecisions] = useState<Record<string, number>>({});
   const [evolution, setEvolution] = useState<MappingEvolutionPoint[]>([]);
-  const [evoDomain, setEvoDomain] = useState('Condition');
+  const [evoDomain, setEvoDomain] = useSessionState('mapping:dashboard:evoDomain', 'Condition');
   const [loading, setLoading] = useState(true);
   const [strategyData, setStrategyData] = useState<StrategyStats[]>([]);
-  const [strategyDomain, setStrategyDomain] = useState<string | undefined>(undefined);
+  const [strategyDomain, setStrategyDomain] = useSessionState<string | undefined>('mapping:dashboard:strategyDomain', undefined);
 
   useEffect(() => {
     setLoading(true);
@@ -136,7 +148,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
         <Card><Statistic title={t('mapping.overall_rate', 'Overall Mapping Rate')} value={pctOverall.toFixed(1)} suffix="%" /></Card>
         <Card><Statistic title={t('mapping.total_terms', 'Total Terms')} value={totalTerms.toLocaleString()} /></Card>
         <Card><Statistic title={t('mapping.mapped', 'Mapped')} value={mappedTerms.toLocaleString()} valueStyle={{ color: '#10B981' }} /></Card>
-        <Card><Statistic title={t('mapping.decisions_made', 'Decisions Made')} value={Object.values(decisions).reduce((a, b) => a + b, 0)} /></Card>
+        <Card><Statistic title={t('mapping.decisions_made', 'Decisions Made')} value={Object.values(decisions).reduce((a, b) => a + b, 0).toLocaleString()} /></Card>
       </div>
 
       {/* Bar chart */}
@@ -175,7 +187,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             size="small"
             value={evoDomain}
             onChange={setEvoDomain}
-            options={DOMAIN_OPTIONS}
+            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-[150px]"
           />
         }
@@ -206,7 +218,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             size="small"
             value={strategyDomain ?? ''}
             onChange={(v) => setStrategyDomain(v || undefined)}
-            options={DOMAIN_OPTIONS}
+            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-[150px]"
             allowClear
             placeholder={t('mapping.all_domains', 'All domains')}
@@ -249,11 +261,11 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
 
 function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
   const { t } = useTranslation();
-  const [domain, setDomain] = useState('Condition');
+  const [domain, setDomain] = useSessionState('mapping:unmapped:domain', 'Condition');
   const [items, setItems] = useState<UnmappedItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
+  const [page, setPage] = useSessionState('mapping:unmapped:page', 1);
+  const [search, setSearch] = useSessionState('mapping:unmapped:search', '');
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(() => {
@@ -283,7 +295,7 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
           <Select
             value={domain}
             onChange={v => { setDomain(v); setPage(1); }}
-            options={DOMAIN_OPTIONS}
+            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-[150px]"
           />
           <Input
@@ -320,16 +332,86 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
 function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [domain, setDomain] = useState('Condition');
-  const [results, setResults] = useState<SuggestionResult[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [limit, setLimit] = useState(20);
-  const [enableFuzzy, setEnableFuzzy] = useState(true);
-  const [enableKeyword, setEnableKeyword] = useState(true);
-  const [enableContextual, setEnableContextual] = useState(true);
-  const [enableSapbert, setEnableSapbert] = useState(true);
+  const [domain, setDomain] = useSessionState('mapping:suggest:domain', 'Condition');
+  const [results, setResults] = useSessionState<SuggestionResult[]>('mapping:suggest:results', []);
+  const [loading, setLoading] = useSessionState('mapping:suggest:loading', false);
+  const [taskId, setTaskId] = useSessionState<string | null>('mapping:suggest:taskId', null);
+  const [limit, setLimit] = useSessionState('mapping:suggest:limit', 20);
+  const [enableFuzzy, setEnableFuzzy] = useSessionState('mapping:suggest:enableFuzzy', true);
+  const [enableKeyword, setEnableKeyword] = useSessionState('mapping:suggest:enableKeyword', true);
+  const [enableContextual, setEnableContextual] = useSessionState('mapping:suggest:enableContextual', true);
+  const [enableSapbert, setEnableSapbert] = useSessionState('mapping:suggest:enableSapbert', true);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+
+  // Poll for suggestion task completion
+  const startPolling = useCallback((tid: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => {
+      mappingApi.suggestStatus(tid)
+        .then(res => {
+          if (!mountedRef.current) return;
+          if (res.data.status === 'done') {
+            setResults(res.data.results || []);
+            setLoading(false);
+            setTaskId(null);
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+            toast.success(t('common.success'));
+          } else if (res.data.status === 'error') {
+            toast.error(res.data.error || t('common.error'));
+            setLoading(false);
+            setTaskId(null);
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+        })
+        .catch(() => {
+          // Task not found — may have finished and been cleaned up
+          if (mountedRef.current) {
+            setLoading(false);
+            setTaskId(null);
+          }
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+        });
+    }, 2000);
+  }, [t, toast]);
+
+  // On mount: check if there's an active suggestion task
+  useEffect(() => {
+    mountedRef.current = true;
+
+    if (taskId) {
+      // Resume polling for existing task
+      setLoading(true);
+      startPolling(taskId);
+    } else if (loading) {
+      // Stale loading state without a task — clear it
+      setLoading(false);
+    }
+
+    // Also check server for any active tasks for this CDM
+    if (!taskId) {
+      mappingApi.suggestActive()
+        .then(res => {
+          if (!mountedRef.current) return;
+          const active = res.data.active.find(a => a.cdm_name === cdmName && a.status === 'running');
+          if (active) {
+            setTaskId(active.task_id);
+            setLoading(true);
+            startPolling(active.task_id);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      mountedRef.current = false;
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [cdmName]);
 
   // Pre-configure strategies per domain
   useEffect(() => {
@@ -347,22 +429,34 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   }, [domain]);
 
   const runBatch = () => {
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
     setLoading(true);
+    setResults([]);
     mappingApi.suggestBatch(cdmName, domain, limit, {
       enable_fuzzy: enableFuzzy,
       enable_keyword: enableKeyword,
       enable_contextual: enableContextual,
       enable_sapbert: enableSapbert,
     })
-      .then(r => { if (!ctrl.signal.aborted) setResults(r.data.results); })
-      .catch(e => { if (!ctrl.signal.aborted) toast.error(e.response?.data?.detail || 'Suggestion failed'); })
-      .finally(() => { setLoading(false); abortRef.current = null; });
+      .then(r => {
+        if (!mountedRef.current) return;
+        const tid = r.data.task_id;
+        setTaskId(tid);
+        startPolling(tid);
+      })
+      .catch(e => {
+        if (mountedRef.current) {
+          toast.error(e.response?.data?.detail || 'Suggestion failed');
+          setLoading(false);
+        }
+      });
   };
 
   const cancelBatch = () => {
-    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+    if (taskId) {
+      mappingApi.suggestCancel(taskId).catch(() => {});
+      setTaskId(null);
+    }
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     setLoading(false);
     toast.info('Cancelled');
   };
@@ -448,7 +542,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
           <Select
             value={domain}
             onChange={setDomain}
-            options={DOMAIN_OPTIONS}
+            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-[150px]"
           />
           <NumberInput
@@ -595,8 +689,8 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
 function ManualMappingTab({ cdmName }: { cdmName: string }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [domain, setDomain] = useState('Condition');
-  const [search, setSearch] = useState('');
+  const [domain, setDomain] = useSessionState('mapping:manual:domain', 'Condition');
+  const [search, setSearch] = useSessionState('mapping:manual:search', '');
   const [searchResults, setSearchResults] = useState<UnmappedItem[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -704,7 +798,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           <Select
             value={domain}
             onChange={v => { setDomain(v); setSearchResults([]); setSelectedSource(null); }}
-            options={DOMAIN_OPTIONS}
+            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-[150px]"
           />
           <Input
@@ -876,14 +970,14 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const { t } = useTranslation();
   const toast = useToast();
   const { roles } = useAuth();
-  const canWriteCdm = roles.includes('admin') || roles.includes('omop-dim');
+  const canWriteCdm = roles.includes('admin') || roles.includes('data-manager');
   const [items, setItems] = useState<MappingDecisionEntry[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [filterDomain, setFilterDomain] = useState<string>('');
-  const [filterAction, setFilterAction] = useState<string>('');
+  const [page, setPage] = useSessionState('mapping:history:page', 1);
+  const [filterDomain, setFilterDomain] = useSessionState('mapping:history:filterDomain', '');
+  const [filterAction, setFilterAction] = useSessionState('mapping:history:filterAction', '');
   const [loading, setLoading] = useState(false);
-  const [applyDomain, setApplyDomain] = useState('Condition');
+  const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
   const [applyPreview, setApplyPreview] = useState<{ total_decisions: number; impacted_rows: number; impacted_persons: number } | null>(null);
 
   const load = useCallback(() => {
@@ -992,7 +1086,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
           <Select
             value={filterDomain}
             onChange={v => { setFilterDomain(v); setPage(1); }}
-            options={DOMAIN_OPTIONS}
+            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-[130px]"
             allowClear
             placeholder="All domains"
@@ -1017,7 +1111,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               size="small"
               value={applyDomain}
               onChange={setApplyDomain}
-              options={DOMAIN_OPTIONS}
+              options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
               className="w-[120px]"
             />
             <Button size="small" onClick={handleApplyPreview}>Preview</Button>

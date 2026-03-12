@@ -41,7 +41,17 @@ def encrypt_password(password: str) -> str:
 
 
 def decrypt_password(encrypted_password: str) -> str:
-    """Decrypt an encrypted password string."""
+    """Decrypt an encrypted password string.
+    Returns empty string if decryption fails (e.g. key mismatch after volume recreate).
+    """
     if not encrypted_password:
         return ""
-    return get_fernet().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+    try:
+        return get_fernet().decrypt(encrypted_password.encode("utf-8")).decode("utf-8")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to decrypt password — encryption key may have changed. "
+            "Please re-enter the CDM password in Settings."
+        )
+        return ""
