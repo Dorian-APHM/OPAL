@@ -60,7 +60,7 @@ def test_submit_invalid_role(client):
 
 
 def test_submit_valid_roles(client):
-    for i, role in enumerate(["admin", "omop-dim", "chercheur", "medecin"]):
+    for i, role in enumerate(["admin", "data-manager", "chercheur", "medecin"]):
         body = _make_request_body(username=f"user_{i}", requested_role=role)
         resp = client.post("/api/access-requests", json=body)
         assert resp.status_code == 200, f"Role {role} should be accepted"

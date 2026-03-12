@@ -1,9 +1,23 @@
-/* OPAL Keycloak Login Theme — PatternFly v5 (keycloak.v2) */
+/* OPAL Keycloak Login Theme — Neumorphic Emerald Night */
 
 /* ── Background ── */
 #keycloak-bg,
 body {
-  background: linear-gradient(135deg, #001529 0%, #002140 50%, #003a5c 100%) !important;
+  background: #0B0F1A !important;
+}
+
+/* Emerald glow behind card */
+body::before {
+  content: '';
+  position: fixed;
+  top: 25%;
+  left: 50%;
+  width: 600px;
+  height: 400px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(ellipse, rgba(16, 185, 129, 0.12) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 /* ── Header / Logo area ── */
@@ -15,81 +29,97 @@ body {
 #kc-header-wrapper {
   font-size: 0 !important;
   text-align: center !important;
-  padding: 30px 0 16px !important;
+  padding: 30px 0 8px !important;
   color: transparent !important;
 }
 
 #kc-header-wrapper::before {
   content: '';
   display: block;
-  width: 280px;
-  height: 160px;
+  width: 80px;
+  height: 80px;
   margin: 0 auto 12px;
-  background: url('../img/opal-logo.svg') center/contain no-repeat;
+  background: url('../img/opal-logo.png') center/contain no-repeat;
 }
 
 #kc-header-wrapper::after {
   content: 'OMOP Platform for Analytics & Lineage';
   display: block;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.4);
   font-weight: 400;
   letter-spacing: 0.5px;
   margin-top: 4px;
 }
 
-/* ── Login card ── */
+/* ── Login card — glass dark ── */
 .pf-v5-c-login__main {
-  background: rgba(255, 255, 255, 0.97) !important;
-  border-radius: 12px !important;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
-  border: 1px solid rgba(43, 196, 89, 0.15) !important;
-  max-width: 420px !important;
+  background: rgba(15, 23, 42, 0.8) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(16, 185, 129, 0.15) !important;
+  max-width: 440px !important;
 }
 
 /* Card header title */
 .pf-v5-c-login__main-header .pf-v5-c-title {
-  color: #001529 !important;
+  color: #F1F5F9 !important;
   font-weight: 600 !important;
 }
 
-/* ── Form inputs (PatternFly v5) ── */
+/* ── Form inputs ── */
 .pf-v5-c-form-control {
-  border-radius: 6px !important;
+  border-radius: 8px !important;
+  background: rgba(15, 23, 42, 0.6) !important;
+  border-color: rgba(148, 163, 184, 0.2) !important;
+  color: #F1F5F9 !important;
+}
+
+.pf-v5-c-form-control > input,
+.pf-v5-c-form-control > textarea {
+  color: #F1F5F9 !important;
+  background: transparent !important;
+}
+
+.pf-v5-c-form-control > input::placeholder {
+  color: rgba(148, 163, 184, 0.5) !important;
 }
 
 .pf-v5-c-form-control:focus-within,
 .pf-v5-c-form-control:focus {
-  --pf-v5-c-form-control--m-expanded--BorderBottomColor: #2bc459 !important;
-  border-color: #2bc459 !important;
-  box-shadow: 0 0 0 1px #2bc459 !important;
+  border-color: #10B981 !important;
+  box-shadow: 0 0 0 1px #10B981, 0 0 12px rgba(16, 185, 129, 0.15) !important;
   outline: none !important;
 }
 
 /* ── Primary button (Sign In) ── */
 .pf-v5-c-button.pf-m-primary,
 #kc-login {
-  background-color: #2bc459 !important;
-  border-radius: 6px !important;
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+  border-radius: 10px !important;
   font-weight: 600 !important;
   font-size: 15px !important;
   border: none !important;
-  box-shadow: 0 2px 8px rgba(43, 196, 89, 0.3) !important;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.3) !important;
   transition: all 0.2s ease !important;
-  --pf-v5-c-button--m-primary--BackgroundColor: #2bc459 !important;
+  color: #fff !important;
+  --pf-v5-c-button--m-primary--BackgroundColor: #10B981 !important;
 }
 
 .pf-v5-c-button.pf-m-primary:hover,
 #kc-login:hover {
-  background-color: #24a34a !important;
-  box-shadow: 0 4px 12px rgba(43, 196, 89, 0.4) !important;
-  --pf-v5-c-button--m-primary--hover--BackgroundColor: #24a34a !important;
+  background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4) !important;
+  transform: translateY(-1px);
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #059669 !important;
 }
 
 .pf-v5-c-button.pf-m-primary:focus,
 #kc-login:focus {
-  background-color: #24a34a !important;
-  --pf-v5-c-button--m-primary--focus--BackgroundColor: #24a34a !important;
+  background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #059669 !important;
 }
 
 /* ── Links ── */
@@ -98,41 +128,51 @@ body {
 #kc-registration a,
 #kc-form-options a,
 a.pf-v5-c-button {
-  color: #1f77b4 !important;
-  --pf-v5-c-button--m-link--Color: #1f77b4 !important;
+  color: #10B981 !important;
+  --pf-v5-c-button--m-link--Color: #10B981 !important;
 }
 
 .pf-v5-c-button.pf-m-link:hover,
 #kc-form-options a:hover {
-  color: #155a8a !important;
-  --pf-v5-c-button--m-link--hover--Color: #155a8a !important;
+  color: #34D399 !important;
+  --pf-v5-c-button--m-link--hover--Color: #34D399 !important;
 }
 
 /* ── Labels ── */
 .pf-v5-c-form__label-text {
-  color: #333 !important;
+  color: #CBD5E1 !important;
   font-weight: 500 !important;
 }
 
 /* ── Alert messages ── */
 .pf-v5-c-alert.pf-m-danger {
-  --pf-v5-c-alert--m-danger--BackgroundColor: #fff2f0 !important;
-  border-left-color: #cf1322 !important;
+  --pf-v5-c-alert--m-danger--BackgroundColor: rgba(239, 68, 68, 0.1) !important;
+  border-left-color: #EF4444 !important;
+  color: #FCA5A5 !important;
 }
 
 .pf-v5-c-alert.pf-m-success {
-  --pf-v5-c-alert--m-success--BackgroundColor: #f6ffed !important;
-  border-left-color: #2bc459 !important;
+  --pf-v5-c-alert--m-success--BackgroundColor: rgba(16, 185, 129, 0.1) !important;
+  border-left-color: #10B981 !important;
+  color: #6EE7B7 !important;
+}
+
+.pf-v5-c-alert__title,
+.pf-v5-c-alert__description {
+  color: inherit !important;
 }
 
 /* ── Footer area ── */
 .pf-v5-c-login__main-footer {
-  border-top: 1px solid #f0f0f0 !important;
+  border-top: 1px solid rgba(148, 163, 184, 0.1) !important;
 }
 
 /* ── Password visibility toggle ── */
 .pf-v5-c-button.pf-m-control {
-  border-radius: 0 6px 6px 0 !important;
+  border-radius: 0 8px 8px 0 !important;
+  background: rgba(15, 23, 42, 0.6) !important;
+  border-color: rgba(148, 163, 184, 0.2) !important;
+  color: #94A3B8 !important;
 }
 
 /* ── Container ── */
@@ -142,11 +182,28 @@ a.pf-v5-c-button {
 
 /* ── Locale dropdown ── */
 #kc-locale ul {
-  background: rgba(255, 255, 255, 0.95) !important;
-  border-radius: 6px !important;
+  background: rgba(15, 23, 42, 0.95) !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(148, 163, 184, 0.1) !important;
 }
 
 #kc-locale-dropdown > a,
 .kc-dropdown a {
-  color: rgba(255, 255, 255, 0.7) !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* ── Additional dark overrides ── */
+.pf-v5-c-login__main-body,
+.pf-v5-c-login__main-header {
+  color: #F1F5F9 !important;
+}
+
+/* Remember me checkbox */
+.pf-v5-c-check__label {
+  color: #94A3B8 !important;
+}
+
+/* "Forgot password" text */
+#kc-form-options {
+  color: #94A3B8 !important;
 }

@@ -82,6 +82,14 @@ if _insp.has_table("cohort_versions"):
         if "characterized_at" not in _cols:
             _conn.execute(text("ALTER TABLE cohort_versions ADD COLUMN characterized_at TIMESTAMP"))
 
+if _insp.has_table("cohorts"):
+    _cohort_cols = {c["name"] for c in _insp.get_columns("cohorts")}
+    with engine.begin() as _conn:
+        if "created_by" not in _cohort_cols:
+            _conn.execute(text("ALTER TABLE cohorts ADD COLUMN created_by VARCHAR(255)"))
+        if "shared_with_all" not in _cohort_cols:
+            _conn.execute(text("ALTER TABLE cohorts ADD COLUMN shared_with_all INTEGER DEFAULT 0"))
+
 # Import and register routers
 from modules.cdm_router import router as cdm_router
 from modules.quality.router import router as quality_router
@@ -92,6 +100,15 @@ from modules.ohdsi.router import router as ohdsi_router
 from modules.concept_set.router import router as concept_set_router
 from modules.incidence.router import router as incidence_router
 from modules.estimation.router import router as estimation_router
+from modules.datamanagement.router import router as datamanagement_router
+from modules.cdm_access_router import router as cdm_access_router
+from modules.notifications_router import router as notifications_router
+from modules.favorites_router import router as favorites_router
+from modules.saved_queries_router import router as saved_queries_router
+from modules.cohort_templates_router import router as cohort_templates_router
+from modules.search_router import router as search_router
+from modules.cohort_sharing_router import router as cohort_sharing_router
+from modules.groups_router import router as groups_router
 
 app.include_router(cdm_router)
 app.include_router(quality_router)
@@ -102,6 +119,15 @@ app.include_router(ohdsi_router)
 app.include_router(concept_set_router)
 app.include_router(incidence_router)
 app.include_router(estimation_router)
+app.include_router(datamanagement_router)
+app.include_router(cdm_access_router)
+app.include_router(notifications_router)
+app.include_router(favorites_router)
+app.include_router(saved_queries_router)
+app.include_router(cohort_templates_router)
+app.include_router(search_router)
+app.include_router(cohort_sharing_router)
+app.include_router(groups_router)
 
 
 # i18n endpoint
@@ -129,6 +155,19 @@ def auth_me(request: Request):
         "email": user.get("email", ""),
         "roles": user.get("roles", []),
     }
+
+
+@app.get("/api/auth/permissions")
+def auth_permissions(request: Request):
+    """Return the resolved permissions for the current user based on their roles.
+    Driven by permissions.yaml — the frontend uses this to show/hide pages and features.
+    """
+    from auth.permissions import build_frontend_permissions
+    user = getattr(request.state, "user", None)
+    if not user or user.get("sub") == "anonymous":
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    roles = user.get("roles", [])
+    return build_frontend_permissions(roles)
 
 
 @app.get("/api/audit/logs")
@@ -306,7 +345,7 @@ def list_users(request: Request):
     headers = {"Authorization": f"Bearer {token}"}
 
     # Collect users by OPAL role (avoids listing all LDAP users)
-    opal_roles = ["admin", "omop-dim", "chercheur", "medecin"]
+    opal_roles = ["admin", "data-manager", "chercheur", "medecin"]
     user_map = {}
 
     try:
@@ -465,7 +504,7 @@ def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
             return JSONResponse(status_code=400, content={"detail": f"{field} is required"})
 
     role = body["requested_role"]
-    if role not in ("admin", "omop-dim", "chercheur", "medecin"):
+    if role not in ("admin", "data-manager", "chercheur", "medecin"):
         return JSONResponse(status_code=400, content={"detail": f"Invalid role: {role}"})
 
     existing = db.query(AccessRequest).filter(
@@ -483,6 +522,19 @@ def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
         requested_role=role,
     )
     db.add(req)
+    db.flush()
+
+    # Notify all admins about the new access request (role-targeted)
+    from utils.notifications import notify
+    notify(
+        db, body["username"], "access_request",
+        title=f"Nouvelle demande d'accès : {body['username']}",
+        message=f"{body['username']} demande le rôle « {role} ».",
+        link="/users",
+        target_role="admin",
+        item_id=str(req.id),
+    )
+
     db.commit()
     return {"status": "ok", "id": req.id}
 
@@ -594,6 +646,16 @@ def approve_access_request(request_id: int, request: Request, db=Depends(get_db)
     ar.status = "approved"
     ar.reviewed_by = user_info.get("preferred_username", "admin")
     ar.reviewed_at = datetime.now(timezone.utc)
+
+    # Notify the requester
+    from utils.notifications import notify
+    notify(
+        db, ar.username, "access_request",
+        title="Demande d'accès approuvée",
+        message=f"Votre demande d'accès avec le rôle « {ar.requested_role} » a été approuvée.",
+        item_id=str(ar.id),
+    )
+
     db.commit()
 
     result = {
@@ -619,7 +681,7 @@ async def add_user_direct(request: Request):
 
     if not username:
         return JSONResponse(status_code=400, content={"detail": "Matricule requis"})
-    if role not in ("admin", "omop-dim", "chercheur", "medecin"):
+    if role not in ("admin", "data-manager", "chercheur", "medecin"):
         return JSONResponse(status_code=400, content={"detail": f"Role invalide: {role}"})
 
     token = _get_keycloak_admin_token()
@@ -690,9 +752,53 @@ def reject_access_request(request_id: int, request: Request, db=Depends(get_db))
     ar.status = "rejected"
     ar.reviewed_by = user_info.get("preferred_username", "admin")
     ar.reviewed_at = datetime.now(timezone.utc)
+
+    from utils.notifications import notify
+    notify(
+        db, ar.username, "access_request",
+        title="Demande d'accès refusée",
+        message=f"Votre demande d'accès avec le rôle « {ar.requested_role} » a été refusée.",
+        item_id=str(ar.id),
+    )
+
     db.commit()
 
     return {"status": "ok", "id": ar.id}
+
+
+@app.get("/api/users/list")
+def list_opal_users(request: Request):
+    """List usernames of all users who have an OPAL role.
+
+    Available to any authenticated user (for sharing dropdowns).
+    Returns only usernames — no admin details.
+    """
+    import requests as http_requests
+    token = _get_keycloak_admin_token()
+    if not token:
+        return {"users": []}
+
+    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {token}"}
+    opal_roles = ["admin", "data-manager", "chercheur", "medecin"]
+    usernames = set()
+
+    try:
+        for role_name in opal_roles:
+            resp = http_requests.get(
+                f"{base}/roles/{role_name}/users?max=500", headers=headers, timeout=10
+            )
+            if not resp.ok:
+                continue
+            for u in resp.json():
+                uname = u.get("username", "")
+                if uname:
+                    usernames.add(uname)
+    except Exception as e:
+        logger.warning("Failed to fetch OPAL users: %s", e)
+        return {"users": []}
+
+    return {"users": sorted(usernames)}
 
 
 @app.get("/api/health")

@@ -2,13 +2,15 @@ import { useState, lazy, Suspense, Component, useEffect, useRef, type ReactNode,
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import TopNav from './components/layout/TopNav';
 import { useAuth } from './auth/KeycloakContext';
+import { cdmAccessApi } from './api/client';
 import { Button } from './components/ui/Button';
 import { Spinner, Skeleton } from './components/ui/Spinner';
 
 // Lazy-loaded pages for code splitting
-const LandingPage = lazy(() => import('./pages/LandingPage'));
+const HomePage = lazy(() => import('./pages/HomePage'));
 const QualityPage = lazy(() => import('./pages/QualityPage'));
 const CohortPage = lazy(() => import('./pages/CohortPage'));
+const DataManagementPage = lazy(() => import('./pages/DataManagementPage'));
 const MappingPage = lazy(() => import('./pages/MappingPage'));
 const CdmManagementPage = lazy(() => import('./pages/CdmManagementPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -102,7 +104,7 @@ function ProtectedRoute({ path, children }: { path: string; children: React.Reac
   return hasPageAccess(path) ? <>{children}</> : <ForbiddenPage />;
 }
 
-const ALL_PAGES = ['/quality', '/cohorts', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
+const ALL_PAGES = ['/', '/quality', '/cohorts', '/data-management', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
 
 function DefaultRedirect() {
   const { hasPageAccess } = useAuth();
@@ -111,10 +113,25 @@ function DefaultRedirect() {
 }
 
 export default function App() {
-  const { initialized, authenticated, login } = useAuth();
+  const { initialized, authenticated, login, token } = useAuth();
   const [selectedCdm, setSelectedCdm] = useState<string | null>(
     localStorage.getItem('opal-selected-cdm')
   );
+
+  // Validate that the stored CDM is accessible to the current user
+  useEffect(() => {
+    if (authenticated && token && selectedCdm) {
+      cdmAccessApi.getAccessibleCdms()
+        .then((res) => {
+          if (!res.data.cdms.includes(selectedCdm)) {
+            // User doesn't have access to the stored CDM — clear it
+            setSelectedCdm(null);
+            localStorage.removeItem('opal-selected-cdm');
+          }
+        })
+        .catch(() => {});
+    }
+  }, [authenticated, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCdmChange = (cdm: string) => {
     setSelectedCdm(cdm);
@@ -133,8 +150,6 @@ export default function App() {
     return (
       <Suspense fallback={<div className="flex items-center justify-center h-screen bg-deep-base"><Spinner size="large" /></div>}>
         <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/landing" element={<LandingPage />} />
           <Route path="*" element={<LoginPage onSignIn={login} />} />
         </Routes>
       </Suspense>
@@ -142,16 +157,16 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-deep-base">
+    <div className="h-screen overflow-hidden bg-deep-base">
       <TopNav selectedCdm={selectedCdm} onCdmChange={handleCdmChange} />
-      {/* Content with top padding for fixed nav */}
-      <main className="pt-[68px] px-4 lg:px-6 pb-8 max-w-[1600px] mx-auto">
+      <main className="pt-[56px] h-full overflow-y-auto px-3 lg:px-4 pb-4 max-w-[1920px] mx-auto">
         <Routes>
-          <Route path="/" element={<DefaultRedirect />} />
+          <Route path="/" element={<ProtectedRoute path="/"><PageSuspense><HomePage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/quality" element={<ProtectedRoute path="/quality"><PageSuspense><QualityPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/cdm" element={<ProtectedRoute path="/cdm"><PageSuspense><CdmManagementPage /></PageSuspense></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute path="/settings"><PageSuspense><SettingsPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/cohorts" element={<ProtectedRoute path="/cohorts"><PageSuspense><CohortPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
+          <Route path="/data-management" element={<ProtectedRoute path="/data-management"><PageSuspense><DataManagementPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/mapping" element={<ProtectedRoute path="/mapping"><PageSuspense><MappingPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/concepts" element={<ProtectedRoute path="/concepts"><PageSuspense><ConceptExplorerPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/ohdsi" element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />

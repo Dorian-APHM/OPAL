@@ -10,7 +10,7 @@ interface LoginPageProps {
 const ROLES = [
   { value: 'chercheur', label: 'Chercheur', description: 'Quality, Cohorts, Concepts' },
   { value: 'medecin', label: 'Medecin', description: 'Mapping, Cohorts, Concepts' },
-  { value: 'omop-dim', label: 'OMOP DIM', description: 'Full access' },
+  { value: 'data-manager', label: 'OMOP DIM', description: 'Full access' },
   { value: 'admin', label: 'Admin', description: 'Full access + administration' },
 ];
 
@@ -50,9 +50,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
       <Card className="w-[460px]" hoverable={false}>
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center mb-3">
-            <div className="w-12 h-12 rounded-full border-[2.5px] border-emerald-accent flex items-center justify-center">
-              <div className="w-3.5 h-3.5 rounded-full bg-emerald-accent shadow-[0_0_16px_rgba(16,185,129,0.4)]" />
-            </div>
+            <img src="/opal-logo.png" alt="OPAL" className="h-16 w-16 object-contain" />
           </div>
           <h2 className="text-2xl font-bold text-text-bright mb-1">OPAL</h2>
           <p className="text-sm text-text-muted">OMOP Platform for Analytics & Lineage</p>

@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useSessionState } from '../../hooks/useSessionState';
 import { Card, Statistic, Button, Tooltip, Alert, Spinner } from '../../components/ui';
 import { Play, Users, BarChart3, Download, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -17,11 +18,11 @@ interface Props {
 
 export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props) {
   const { t } = useTranslation();
-  const [patientCount, setPatientCount] = useState<number | null>(null);
+  const [patientCount, setPatientCount] = useSessionState<number | null>('cohort:results:count', null);
   const [countLoading, setCountLoading] = useState(false);
-  const [attrition, setAttrition] = useState<AttritionStep[]>([]);
+  const [attrition, setAttrition] = useSessionState<AttritionStep[]>('cohort:results:attrition', []);
   const [attritionLoading, setAttritionLoading] = useState(false);
-  const [generatedSql, setGeneratedSql] = useState<string>('');
+  const [generatedSql, setGeneratedSql] = useSessionState<string>('cohort:results:sql', '');
   const [error, setError] = useState<string>('');
   const abortRef = useRef<AbortController | null>(null);
 
@@ -81,7 +82,7 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
                 {t('cohort.patient_count', 'Patient Count')}
               </div>
             }
-            value={countLoading ? '...' : (patientCount ?? '—')}
+            value={countLoading ? '...' : (patientCount != null ? patientCount.toLocaleString() : '—')}
             valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
           />
         </div>

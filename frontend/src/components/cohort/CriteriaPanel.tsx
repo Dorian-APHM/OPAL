@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Card, Input, Select, Tag, Empty, Spinner, Collapse } from '../../components/ui';
-import { Search, Plus, Hash, Layers } from 'lucide-react';
+import { Card, Input, Select, Tag, Empty, Spinner } from '../../components/ui';
+import { Search, Plus, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cohortApi, conceptApi, conceptSetApi } from '../../api/client';
 import type { OmopConcept, CohortCriterion, ConceptSetSummary, ConceptSetDetail } from '../../types';
@@ -14,18 +14,14 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchDomain, setSearchDomain] = useState<string | undefined>();
-  const [searchVocab, setSearchVocab] = useState<string | undefined>();
+  const [standardOnly, setStandardOnly] = useState(false);
   const [concepts, setConcepts] = useState<OmopConcept[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedConcepts, setSelectedConcepts] = useState<OmopConcept[]>([]);
-  const [vocabularies, setVocabularies] = useState<{ vocabulary_id: string; vocabulary_name: string }[]>([]);
   const [domains, setDomains] = useState<{ name: string; table: string }[]>([]);
 
   useEffect(() => {
     cohortApi.listDomains().then(r => setDomains(r.data.domains));
-    if (cdmName) {
-      cohortApi.listVocabularies(cdmName).then(r => setVocabularies(r.data.vocabularies)).catch(() => {});
-    }
   }, [cdmName]);
 
   useEffect(() => {
@@ -35,13 +31,13 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
     }
     const timer = setTimeout(() => {
       setLoading(true);
-      cohortApi.searchConcepts(cdmName, searchQuery, searchDomain, searchVocab)
+      cohortApi.searchConcepts(cdmName, searchQuery, searchDomain, undefined, standardOnly)
         .then(r => setConcepts(r.data.concepts))
         .catch(() => setConcepts([]))
         .finally(() => setLoading(false));
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery, searchDomain, searchVocab, cdmName]);
+  }, [searchQuery, searchDomain, standardOnly, cdmName]);
 
   const toggleConcept = (concept: OmopConcept) => {
     setSelectedConcepts(prev => {
@@ -153,8 +149,19 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
     }
   };
 
-  const domainOptions = domains.map(d => ({ value: d.name, label: d.name }));
-  const vocabOptions = vocabularies.map(v => ({ value: v.vocabulary_id, label: v.vocabulary_id }));
+  // Map domains to their source nomenclature names
+  const DOMAIN_NOMENCLATURE: Record<string, string> = {
+    Condition: 'CIM-10',
+    Procedure: 'CCAM',
+    Drug: 'ATC / UCD',
+    Measurement: 'NABM / LOINC',
+    Observation: 'Source',
+    Device: 'LPP',
+  };
+  const domainOptions = domains.map(d => ({
+    value: d.name,
+    label: DOMAIN_NOMENCLATURE[d.name] ? `${t(`domains.${d.name}`, d.name)} (${DOMAIN_NOMENCLATURE[d.name]})` : t(`domains.${d.name}`, d.name),
+  }));
 
   return (
     <div className="h-full flex flex-col gap-3">
@@ -180,7 +187,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                       <span className="text-xs font-semibold text-text-bright">{cs.name}</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      {cs.domain && <Tag className="text-[10px]">{cs.domain}</Tag>}
+                      {cs.domain && <Tag className="text-[10px]">{t(`domains.${cs.domain}`, cs.domain)}</Tag>}
                       <Tag color="blue" className="text-[10px]">{cs.concept_count} concepts</Tag>
                     </div>
                   </div>
@@ -195,7 +202,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
       )}
 
       {/* Source code input */}
-      <Card size="small" title={<span className="flex items-center gap-1"><Hash className="h-4 w-4" /> {t('cohort.source_code_search', 'Source Code')}</span>}>
+      <Card size="small" title={t('cohort.source_code_search', 'Source Code')}>
         <div className="flex flex-col gap-1 w-full">
           <Select
             size="small"
@@ -242,7 +249,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                       <span className="text-xs font-semibold text-text-bright">{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}</span>
                       <span className="text-text-dim text-[10px]">{r.n_records.toLocaleString()} rec</span>
                     </div>
-                    <div className="text-[11px] text-text-dim">{r.domain} · {r.n_persons.toLocaleString()} pers</div>
+                    <div className="text-[11px] text-text-dim">{t(`domains.${r.domain}`, r.domain)}{DOMAIN_NOMENCLATURE[r.domain] ? ` (${DOMAIN_NOMENCLATURE[r.domain]})` : ''} · {r.n_persons.toLocaleString()} pers</div>
                   </div>
                 );
               })}
@@ -254,7 +261,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
       </Card>
 
       {/* Concept search */}
-      <Card size="small" title={t('cohort.concept_search', 'Concept Search')} className="flex-1 overflow-hidden flex flex-col">
+      <Card size="small" title={t('cohort.concept_search', 'Concept Search (OMOP)')} className="flex-1 overflow-hidden flex flex-col">
         <Input
           prefix={<Search className="h-3.5 w-3.5" />}
           placeholder={t('cohort.search_placeholder', 'Search by name or code...')}
@@ -269,18 +276,20 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
             value={searchDomain || ''}
             onChange={v => setSearchDomain(v || undefined)}
             allowClear
-            className="w-[120px]"
+            className="flex-1 min-w-0"
             options={domainOptions}
           />
-          <Select
-            size="small"
-            placeholder={t('cohort.vocabulary', 'Vocabulary')}
-            value={searchVocab || ''}
-            onChange={v => setSearchVocab(v || undefined)}
-            allowClear
-            className="w-[120px]"
-            options={vocabOptions}
-          />
+          <button
+            type="button"
+            onClick={() => setStandardOnly(prev => !prev)}
+            className={`px-2.5 py-1.5 text-xs rounded-lg border transition-all duration-200 whitespace-nowrap ${
+              standardOnly
+                ? 'bg-emerald-accent/20 border-emerald-accent/40 text-emerald-accent font-medium'
+                : 'bg-deep-base border-glass-border text-text-dim hover:text-text-muted hover:border-glass-border/60'
+            }`}
+          >
+            Standard
+          </button>
         </div>
 
         {/* Selected concepts */}
@@ -328,7 +337,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                     {c.standard_concept === 'S' && <Tag color="green" className="text-[10px]">S</Tag>}
                   </div>
                   <div className="text-[11px] text-text-dim">
-                    {c.concept_code} · {c.vocabulary_id} · {c.domain_id}
+                    {c.concept_code} · {c.vocabulary_id} · {t(`domains.${c.domain_id}`, c.domain_id)}{DOMAIN_NOMENCLATURE[c.domain_id] ? ` (${DOMAIN_NOMENCLATURE[c.domain_id]})` : ''}
                   </div>
                 </div>
               );

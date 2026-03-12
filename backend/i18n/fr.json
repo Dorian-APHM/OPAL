@@ -12,7 +12,9 @@
     "concept_sets": "Groupes de Concepts",
     "incidence": "Incidence",
     "estimation": "Estimation",
-    "ohdsi": "Outils OHDSI"
+    "ohdsi": "Outils OHDSI",
+    "data_management": "Gestion des données",
+    "dashboard": "Tableau de bord"
   },
   "cdm": {
     "title": "Gestion des CDM",
@@ -74,15 +76,15 @@
   },
   "domains": {
     "Dashboard": "Tableau de bord",
-    "Person": "Personne",
-    "ObservationPeriod": "Période d'observation",
-    "Condition": "Condition",
+    "Person": "Patient",
+    "ObservationPeriod": "Période de suivi",
+    "Condition": "Diagnostique",
     "Drug": "Médicament",
-    "Measurement": "Mesure",
+    "Measurement": "Biologie",
     "Observation": "Observation",
-    "Procedure": "Procédure",
-    "Visit": "Visite",
-    "Device": "Dispositif",
+    "Procedure": "Acte",
+    "Visit": "Séjour",
+    "Device": "Dispositif médical",
     "Death": "Décès"
   },
   "cohort": {
@@ -221,6 +223,29 @@
     "no_analyses": "Aucune analyse d'estimation",
     "strata": "Stratifier par"
   },
+  "datamanagement": {
+    "title": "Gestion des données",
+    "select_cdm": "Veuillez sélectionner une base CDM dans la barre latérale.",
+    "select_cohort": "Sélectionner une cohorte",
+    "choose_cohort": "Choisir une cohorte sauvegardée...",
+    "select_tables": "Sélectionner les tables et colonnes",
+    "tables_selected": "sélectionnées",
+    "columns": "colonnes",
+    "no_tables": "Aucune table trouvée",
+    "loading_columns": "Chargement des colonnes...",
+    "enable_table": "Activez cette table pour voir les colonnes",
+    "select_all": "Tout sélectionner",
+    "same_visit_only": "Visites de la cohorte uniquement",
+    "same_visit_disabled": "Cette cohorte n'a pas été construite avec Same Visit activé. Activez Same Visit dans le Cohort Builder pour utiliser cette option.",
+    "same_visit_tooltip": "Lorsqu'activé, seules les données des visites spécifiques de la cohorte sont extraites. Sinon, toutes les visites de chaque patient sont extraites.",
+    "extract": "Extraire le dataset",
+    "preview": "Aperçu",
+    "rows": "lignes",
+    "download_csv": "Télécharger CSV",
+    "download_success": "Dataset téléchargé avec succès",
+    "total_rows": "Total lignes",
+    "showing": "affichées"
+  },
   "audit": {
     "title": "Journal d'audit",
     "time": "Heure",
@@ -270,5 +295,44 @@
     "password_change_required": "L'utilisateur devra changer son mot de passe à la première connexion.",
     "no_pending": "Aucune demande en attente",
     "all_clear": "Toutes les demandes d'accès ont été traitées."
-  }
+  },
+  "dashboard": {
+    "title": "Tableau de bord",
+    "welcome": "Bienvenue sur OPAL",
+    "select_cdm": "Sélectionnez une base CDM dans la barre latérale pour commencer.",
+    "total_persons": "Total personnes",
+    "domains": "Domaines",
+    "cohorts": "Cohortes sauvegardées",
+    "favorites": "Favoris",
+    "recent_cohorts": "Cohortes récentes",
+    "view_all": "Voir tout",
+    "no_cohorts": "Aucune cohorte",
+    "create_cohort": "Créer une cohorte",
+    "favorites_title": "Favoris",
+    "no_favorites": "Aucun favori. Marquez des éléments en favori depuis les autres pages.",
+    "domain_overview": "Vue d'ensemble des domaines",
+    "quick_actions": "Actions rapides",
+    "new_cohort": "Nouvelle cohorte",
+    "run_quality": "Analyse qualité",
+    "extract_data": "Extraire un dataset",
+    "sql_editor": "Éditeur SQL"
+  },
+  "conformity": {
+    "title": "Conformité CDM",
+    "score": "Score de conformité",
+    "run_check": "Lancer la vérification",
+    "passed": "Réussis",
+    "warnings": "Avertissements",
+    "failures": "Échecs",
+    "structure": "Structure",
+    "completeness": "Complétude",
+    "plausibility": "Plausibilité",
+    "conformance": "Conformance"
+  },
+  "templates": {
+    "title": "Templates de cohortes",
+    "use_template": "Utiliser le template",
+    "category": "Catégorie",
+    "no_templates": "Aucun template disponible"
+  },
 }

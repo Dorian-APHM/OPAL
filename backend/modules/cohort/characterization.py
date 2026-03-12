@@ -25,6 +25,7 @@ _TOP_N = 25
 def run_characterization(
     conn, criteria: dict, omop_schema: str, top_n: int = _TOP_N,
     visit_level: bool = False,
+    progress_callback=None,
 ) -> dict:
     """
     Run full Table 1 characterization for the given cohort criteria.
@@ -48,6 +49,16 @@ def run_characterization(
     results: dict[str, Any] = {}
     results["visit_level"] = effective_visit_level
 
+    # Total steps: cohort + demographics + 6 domains + measurements + visits + visit_duration + obs_period = 12
+    total_steps = 2 + len(_CHAR_DOMAINS) + 4  # cohort+demo, 6 domains, meas+visits+visit_dur+obs
+    completed_steps = 0
+
+    def _report(step_label: str):
+        nonlocal completed_steps
+        completed_steps += 1
+        if progress_callback:
+            progress_callback(completed_steps, total_steps, step_label)
+
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         # ── 0. Materialize cohort into a temp table (executed ONCE) ──
         cur.execute("DROP TABLE IF EXISTS _coh_char")
@@ -65,19 +76,22 @@ def run_characterization(
                 SELECT DISTINCT person_id FROM ({cohort_sql}) AS _coh_src
             """)
             cur.execute("CREATE INDEX ON _coh_char (person_id)")
+        _report("Cohort materialized")
 
         # ── 1. Demographics ──
         results["demographics"] = _query_demographics(cur, omop_schema)
 
         # ── 2. Cohort size ──
-        cur.execute("SELECT COUNT(*) AS n FROM _coh_char")
+        cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM _coh_char")
         results["cohort_size"] = cur.fetchone()["n"]
+        _report("Demographics")
 
         # ── 3. Domain prevalence ──
         domain_prev: list[dict] = []
         for domain_name in _CHAR_DOMAINS:
             cfg = DOMAIN_CONFIG.get(domain_name)
             if not cfg:
+                _report(domain_name)
                 continue
             try:
                 cur.execute("SAVEPOINT sp_domain")
@@ -98,6 +112,7 @@ def run_characterization(
                     "top_concepts": [],
                     "error": str(e),
                 })
+            _report(domain_name)
         results["domain_prevalence"] = domain_prev
 
         # ── 4. Measurement value stats (top measurements by patient count) ──
@@ -112,6 +127,7 @@ def run_characterization(
             logger.warning("Characterization: measurement stats failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_meas")
             results["measurement_stats"] = []
+        _report("Measurement stats")
 
         # ── 5. Visit type distribution ──
         try:
@@ -125,6 +141,21 @@ def run_characterization(
             logger.warning("Characterization: visit types failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_visit")
             results["visit_types"] = []
+        _report("Visit types")
+
+        # ── 5b. Visit duration stats ──
+        try:
+            cur.execute("SAVEPOINT sp_vdur")
+            results["visit_duration"] = _query_visit_duration(
+                cur, omop_schema,
+                visit_level=effective_visit_level,
+            )
+            cur.execute("RELEASE SAVEPOINT sp_vdur")
+        except Exception as e:
+            logger.warning("Characterization: visit duration failed: %s", e)
+            cur.execute("ROLLBACK TO SAVEPOINT sp_vdur")
+            results["visit_duration"] = {}
+        _report("Visit duration")
 
         # ── 6. Observation period stats ──
         try:
@@ -137,6 +168,7 @@ def run_characterization(
             logger.warning("Characterization: obs period failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_obs")
             results["observation_period"] = {}
+        _report("Observation period")
 
         # Cleanup temp table
         cur.execute("DROP TABLE IF EXISTS _coh_char")
@@ -471,3 +503,77 @@ def _query_observation_period(cur, schema: str) -> dict:
             except (TypeError, ValueError):
                 row[k] = str(v)
     return row
+
+
+def _query_visit_duration(cur, schema: str, visit_level: bool = False) -> dict:
+    """Average visit duration in days, overall and by visit type."""
+    visit_join = (
+        f"JOIN {schema}.visit_occurrence v ON coh.person_id = v.person_id AND coh.visit_occurrence_id = v.visit_occurrence_id"
+        if visit_level else
+        f"JOIN {schema}.visit_occurrence v ON coh.person_id = v.person_id"
+    )
+
+    cur.execute(f"""
+        WITH durations AS (
+            SELECT
+                v.visit_concept_id,
+                COALESCE(c.concept_name, 'Unknown') AS visit_type,
+                GREATEST(v.visit_end_date - v.visit_start_date, 0) AS days
+            FROM _coh_char coh
+            {visit_join}
+            LEFT JOIN {schema}.concept c ON v.visit_concept_id = c.concept_id
+            WHERE v.visit_start_date IS NOT NULL AND v.visit_end_date IS NOT NULL
+        )
+        SELECT
+            COUNT(*) AS n_visits,
+            ROUND(AVG(days)::numeric, 1) AS mean_days,
+            ROUND(STDDEV(days)::numeric, 1) AS std_days,
+            MIN(days) AS min_days,
+            MAX(days) AS max_days,
+            ROUND((PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY days))::numeric, 1) AS median_days
+        FROM durations
+    """)
+    overall = dict(cur.fetchone())
+    for k, v in overall.items():
+        if v is not None and not isinstance(v, (int, float, str)):
+            try:
+                overall[k] = float(v)
+            except (TypeError, ValueError):
+                overall[k] = str(v)
+
+    # By visit type (top 10)
+    cur.execute(f"""
+        WITH durations AS (
+            SELECT
+                v.visit_concept_id,
+                COALESCE(c.concept_name, 'Unknown') AS visit_type,
+                GREATEST(v.visit_end_date - v.visit_start_date, 0) AS days
+            FROM _coh_char coh
+            {visit_join}
+            LEFT JOIN {schema}.concept c ON v.visit_concept_id = c.concept_id
+            WHERE v.visit_start_date IS NOT NULL AND v.visit_end_date IS NOT NULL
+        )
+        SELECT
+            visit_type,
+            COUNT(*) AS n_visits,
+            ROUND(AVG(days)::numeric, 1) AS mean_days,
+            ROUND(STDDEV(days)::numeric, 1) AS std_days,
+            ROUND((PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY days))::numeric, 1) AS median_days
+        FROM durations
+        GROUP BY visit_type
+        ORDER BY n_visits DESC
+        LIMIT 10
+    """)
+    by_type = []
+    for row in cur.fetchall():
+        r = dict(row)
+        for k, v in r.items():
+            if v is not None and not isinstance(v, (int, float, str)):
+                try:
+                    r[k] = float(v)
+                except (TypeError, ValueError):
+                    pass
+        by_type.append(r)
+
+    overall["by_type"] = by_type
+    return overall
