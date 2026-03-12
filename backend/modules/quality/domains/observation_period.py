@@ -32,8 +32,18 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         "mapping": {},
     }
 
+    # Helper: build exact birth date using day_of_birth/month_of_birth when available,
+    # fallback to July 1st of year_of_birth otherwise.
+    birth_date_expr = f"""
+        MAKE_DATE(
+            p.year_of_birth,
+            COALESCE(NULLIF(p.month_of_birth, 0), 7),
+            COALESCE(NULLIF(p.day_of_birth, 0), 1)
+        )
+    """
+
     with conn.cursor(cursor_factory=DictCursor) as cur:
-        # 1) Age at First Observation
+        # 1) Age at First Observation (integer years for histogram)
         cur.execute(f"""
             WITH per AS (
                 SELECT person_id, MIN(observation_period_start_date) AS obs_start
@@ -41,13 +51,13 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                 GROUP BY person_id
             )
             SELECT
-                (EXTRACT(YEAR FROM AGE(per.obs_start, MAKE_DATE(p.year_of_birth, 7, 1))))::int AS age,
+                (EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date_expr})))::int AS age,
                 COUNT(*) AS n
             FROM per
             JOIN {person_table} p ON p.person_id = per.person_id
             WHERE per.obs_start IS NOT NULL
               AND p.year_of_birth IS NOT NULL
-              AND EXTRACT(YEAR FROM AGE(per.obs_start, MAKE_DATE(p.year_of_birth, 7, 1))) BETWEEN 0 AND 120
+              AND EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date_expr})) BETWEEN 0 AND 120
             GROUP BY 1
             ORDER BY age
         """)
@@ -57,7 +67,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
             counts.append(int(r["n"]))
         res["achilles_like"]["age_at_first_observation"] = {"age": ages, "count": counts}
 
-        # 2) Age by Gender (quantiles for boxplot)
+        # 2) Age by Gender (exact decimal age for boxplot quantiles)
         cur.execute(f"""
             WITH per AS (
                 SELECT person_id, MIN(observation_period_start_date) AS obs_start
@@ -68,12 +78,12 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                 SELECT
                     p.person_id,
                     p.gender_concept_id,
-                    EXTRACT(YEAR FROM AGE(per.obs_start, MAKE_DATE(p.year_of_birth, 7, 1)))::numeric AS age
+                    (per.obs_start - {birth_date_expr})::numeric / 365.25 AS age
                 FROM per
                 JOIN {person_table} p ON p.person_id = per.person_id
                 WHERE per.obs_start IS NOT NULL
                   AND p.year_of_birth IS NOT NULL
-                  AND EXTRACT(YEAR FROM AGE(per.obs_start, MAKE_DATE(p.year_of_birth, 7, 1))) BETWEEN 0 AND 120
+                  AND (per.obs_start - {birth_date_expr})::numeric / 365.25 BETWEEN 0 AND 120
             )
             SELECT
                 a.gender_concept_id,

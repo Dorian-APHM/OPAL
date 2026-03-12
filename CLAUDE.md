@@ -50,7 +50,7 @@ Frontend (React/Nginx :3000)  →  /api proxy  →  Backend (FastAPI :8000)
                                      External OMOP CDM (read-only connections)
 ```
 
-Docker Compose runs three services: `opal-frontend`, `opal-backend`, `opal-db`. The app DB on port 5433 (host) maps to 5432 inside the container.
+Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `opal-keycloak`. The app DB on port 5434 (host) maps to 5432 inside the container.
 
 ### Backend (`backend/`)
 
@@ -60,15 +60,28 @@ Docker Compose runs three services: `opal-frontend`, `opal-backend`, `opal-db`. 
 
 **Database layer** (`db/`):
 - `app_db.py` — SQLAlchemy engine/session for the internal app database
-- `models.py` — 6 models: `CdmConfig`, `AnalysisSnapshot`, `AnalysisSettings`, `Cohort`, `CohortVersion`, `MappingDecision`
+- `models.py` — 21 models: `CdmConfig`, `AnalysisSnapshot`, `AnalysisSettings`, `Cohort`, `CohortVersion`, `MappingDecision`, `ReferenceCodebook`, `SapbertMapping`, `ConceptSet`, `IncidenceAnalysis`, `EstimationAnalysis`, `CdmAccess`, `CdmGroupAccess`, `UserFavorite`, `SavedQuery`, `Notification`, `CohortTemplate`, `CohortShare`, `UserGroup`, `UserGroupMember`, `AccessRequest`
 - `omop_connector.py` — Dynamic `psycopg2` connections to external CDMs (not SQLAlchemy)
 
-**Modules** (`modules/`):
+**Modules** (`modules/`) — 18 routers:
 - `cdm_router.py` — CDM registration CRUD, connection testing, settings management (`/api/cdm/`)
 - `quality/router.py` + `quality/engine.py` — Quality analysis with Achilles-like metrics, snapshot versioning, comparison, CSV export (`/api/quality/`)
 - `cohort/router.py` + `cohort/sql_builder.py` — Visual cohort builder, JSON criteria → SQL generation, attrition analysis, patient sampling (`/api/cohorts/`)
-- `mapping/router.py` + `mapping/suggest.py` — 5-step mapping workflow with 4 suggestion strategies (exact, relationship, fuzzy, contextual), audit trail (`/api/mapping/`)
+- `mapping/router.py` + `mapping/suggest.py` — Mapping workflow with 6 suggestion strategies (SapBERT, exact, relationship, keyword, fuzzy, contextual), audit trail (`/api/mapping/`)
 - `concept/router.py` — Concept search, hierarchy navigation, source value lookup (`/api/concepts/`)
+- `ohdsi/router.py` — OHDSI Docker container orchestration (`/api/ohdsi/`)
+- `concept_set/router.py` — Concept set CRUD (`/api/concept-sets/`)
+- `incidence/router.py` — Incidence rate analysis (`/api/incidence/`)
+- `estimation/router.py` — Population-level estimation (`/api/estimation/`)
+- `datamanagement/router.py` — Data management and ETL monitoring (`/api/datamanagement/`)
+- `cdm_access_router.py` — Per-CDM user/group access control (`/api/cdm-access/`)
+- `notifications_router.py` — User notifications (`/api/notifications/`)
+- `favorites_router.py` — User favorites (`/api/favorites/`)
+- `saved_queries_router.py` — Saved SQL queries (`/api/saved-queries/`)
+- `cohort_templates_router.py` — Cohort templates (`/api/cohort-templates/`)
+- `search_router.py` — Global search across entities (`/api/search/`)
+- `cohort_sharing_router.py` — Cohort sharing between users (`/api/cohorts/`)
+- `groups_router.py` — User groups management (`/api/groups/`)
 
 **Security**: `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`.
 
@@ -76,13 +89,13 @@ Docker Compose runs three services: `opal-frontend`, `opal-backend`, `opal-db`. 
 
 ### Frontend (`frontend/`)
 
-**Stack**: React 18 + TypeScript + Vite + Ant Design 5 + Recharts
+**Stack**: React 18 + TypeScript + Vite + Custom Neumorphic UI components + Recharts + Lucide icons
 
 **Entry**: `src/main.tsx` → `src/App.tsx` — React Router with sidebar layout. Selected CDM stored in `localStorage` and passed as prop to all pages.
 
 **API client**: `src/api/client.ts` — Axios-based client organized by module (`cdmApi`, `qualityApi`, `cohortApi`, `mappingApi`, `conceptApi`). All requests go to `/api` prefix.
 
-**Pages** (`src/pages/`): `QualityPage`, `CohortPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`
+**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`, `LandingPage`
 
 **Types**: `src/types/index.ts` — Shared TypeScript interfaces for all API responses.
 
@@ -93,4 +106,4 @@ Docker Compose runs three services: `opal-frontend`, `opal-backend`, `opal-db`. 
 - All app state (configs, snapshots, cohorts, mapping decisions) lives in the internal PostgreSQL.
 - Quality analysis snapshots are versioned for temporal comparison.
 - Cohort criteria use a JSON structure that gets converted to SQL by `sql_builder.py`.
-- Mapping suggestions use 4 ranked strategies: exact match, relationship-based, fuzzy text, contextual.
+- Mapping suggestions use 6 ranked strategies: SapBERT (pre-computed), exact match, relationship-based, keyword, fuzzy text, contextual.

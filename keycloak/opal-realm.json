@@ -13,8 +13,8 @@
         "description": "Full access to all OPAL features"
       },
       {
-        "name": "omop-dim",
-        "description": "Full access to all OPAL features (OMOP DIM team)"
+        "name": "data-manager",
+        "description": "Full data access — quality, mapping, SQL, CDM management"
       },
       {
         "name": "chercheur",
@@ -76,5 +76,6 @@
       ],
       "realmRoles": ["admin"]
     }
-  ]
+  ],
+  "components": {}
 }

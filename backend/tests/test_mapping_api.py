@@ -162,7 +162,7 @@ def test_decide_invalid_action(client, cdm_name):
         "source_value": "E11",
         "action": "invalid_action",
     })
-    assert resp.status_code == 400
+    assert resp.status_code == 422  # Pydantic pattern validation rejects invalid action
 
 
 def test_decide_bulk(client, cdm_name):
@@ -202,10 +202,10 @@ def test_decide_bulk_invalid_action(client, cdm_name):
     resp = client.post("/api/mapping/decide/bulk", json={
         "cdm_name": cdm_name,
         "domain": "Condition",
-        "action": "modified",  # Not valid for bulk
+        "action": "modified",  # Not valid for bulk (pattern: approved|rejected)
         "source_values": ["E11"],
     })
-    assert resp.status_code == 400
+    assert resp.status_code == 422  # Pydantic pattern validation rejects 'modified' for bulk
 
 
 # ──── History tests ────

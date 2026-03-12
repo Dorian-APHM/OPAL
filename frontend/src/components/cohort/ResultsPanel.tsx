@@ -1,18 +1,14 @@
 import { useState, useRef } from 'react';
-import { Card, Statistic, Button, Table, Typography, Space, Tag, Tooltip, Spin, Alert } from 'antd';
-import {
-  PlayCircleOutlined, TeamOutlined, BarChartOutlined,
-  UserOutlined, DownloadOutlined, ThunderboltOutlined, StopOutlined,
-} from '@ant-design/icons';
+import { useSessionState } from '../../hooks/useSessionState';
+import { Card, Statistic, Button, Tooltip, Alert, Spinner } from '../../components/ui';
+import { Play, Users, BarChart3, Download, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
   ResponsiveContainer, Cell,
 } from 'recharts';
 import { cohortApi, authDownload } from '../../api/client';
-import type { CohortCriteria, AttritionStep, SamplePatient } from '../../types';
-
-const { Text, Title } = Typography;
+import type { CohortCriteria, AttritionStep } from '../../types';
 
 interface Props {
   cdmName: string;
@@ -22,23 +18,20 @@ interface Props {
 
 export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props) {
   const { t } = useTranslation();
-  const [patientCount, setPatientCount] = useState<number | null>(null);
+  const [patientCount, setPatientCount] = useSessionState<number | null>('cohort:results:count', null);
   const [countLoading, setCountLoading] = useState(false);
-  const [attrition, setAttrition] = useState<AttritionStep[]>([]);
+  const [attrition, setAttrition] = useSessionState<AttritionStep[]>('cohort:results:attrition', []);
   const [attritionLoading, setAttritionLoading] = useState(false);
-  const [patients, setPatients] = useState<SamplePatient[]>([]);
-  const [sampleLoading, setSampleLoading] = useState(false);
-  const [generatedSql, setGeneratedSql] = useState<string>('');
+  const [generatedSql, setGeneratedSql] = useSessionState<string>('cohort:results:sql', '');
   const [error, setError] = useState<string>('');
   const abortRef = useRef<AbortController | null>(null);
 
-  const anyLoading = countLoading || attritionLoading || sampleLoading;
+  const anyLoading = countLoading || attritionLoading;
 
   const cancelOperation = () => {
     if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
     setCountLoading(false);
     setAttritionLoading(false);
-    setSampleLoading(false);
   };
 
   const hasCriteria = criteria.inclusion.criteria.length > 0 || criteria.demographics?.age || criteria.demographics?.gender;
@@ -72,72 +65,36 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
     }
   };
 
-  const runSample = async () => {
-    if (!cdmName || !hasCriteria) return;
-    setSampleLoading(true);
-    setError('');
-    try {
-      const resp = await cohortApi.sample(cdmName, criteria, 10);
-      setPatients(resp.data.patients);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Sampling failed');
-    } finally {
-      setSampleLoading(false);
-    }
-  };
-
-  const [exportLoading, setExportLoading] = useState(false);
-  const runExport = async () => {
-    if (!cdmName || !hasCriteria) return;
-    setExportLoading(true);
-    setError('');
-    try {
-      const resp = await cohortApi.exportDirect(cdmName, criteria);
-      const blob = new Blob([resp.data], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'cohort_patients.csv';
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Export failed');
-    } finally {
-      setExportLoading(false);
-    }
-  };
-
   const attritionChartData = attrition.map(s => ({
     ...s,
-    fill: s.label.startsWith('-') ? '#ff4d4f' : '#2bc459',
+    fill: s.label.startsWith('-') ? '#ff4d4f' : '#10B981',
   }));
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto' }}>
+    <div className="h-full flex flex-col gap-3 overflow-auto">
       {/* Patient count */}
       <Card size="small">
-        <div style={{ textAlign: 'center', marginBottom: 8 }}>
+        <div className="text-center mb-2">
           <Statistic
             title={
-              <Space>
-                <TeamOutlined />
+              <div className="flex items-center gap-1 justify-center">
+                <Users className="h-3.5 w-3.5" />
                 {t('cohort.patient_count', 'Patient Count')}
-              </Space>
+              </div>
             }
-            value={patientCount ?? '—'}
-            loading={countLoading}
-            valueStyle={{ fontSize: 32, color: patientCount != null ? '#1f77b4' : '#ccc' }}
+            value={countLoading ? '...' : (patientCount != null ? patientCount.toLocaleString() : '—')}
+            valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
           />
         </div>
-        <Space style={{ width: '100%', justifyContent: 'center' }}>
+        <div className="flex items-center justify-center gap-2">
           {anyLoading ? (
-            <Button danger icon={<StopOutlined />} onClick={cancelOperation} size="small">
+            <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={cancelOperation} size="small">
               {t('common.cancel')}
             </Button>
           ) : (
             <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
+              variant="primary"
+              icon={<Play className="h-3.5 w-3.5" />}
               onClick={runCount}
               disabled={!hasCriteria || !cdmName}
               size="small"
@@ -146,26 +103,28 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
             </Button>
           )}
           <Tooltip title={t('cohort.approximate_tooltip', 'Quick approximate count')}>
-            <Button
-              icon={<ThunderboltOutlined />}
-              onClick={async () => {
-                setCountLoading(true);
-                try {
-                  const resp = await cohortApi.countApprox(cdmName, criteria);
-                  setPatientCount(resp.data.patient_count);
-                } catch (e: any) {
-                  setError(e.response?.data?.detail || 'Error');
-                } finally {
-                  setCountLoading(false);
-                }
-              }}
-              disabled={!hasCriteria || !cdmName}
-              size="small"
-            >
-              ~
-            </Button>
+            <span>
+              <Button
+                icon={<Play className="h-3.5 w-3.5" />}
+                onClick={async () => {
+                  setCountLoading(true);
+                  try {
+                    const resp = await cohortApi.countApprox(cdmName, criteria);
+                    setPatientCount(resp.data.patient_count);
+                  } catch (e: any) {
+                    setError(e.response?.data?.detail || 'Error');
+                  } finally {
+                    setCountLoading(false);
+                  }
+                }}
+                disabled={!hasCriteria || !cdmName}
+                size="small"
+              >
+                ~
+              </Button>
+            </span>
           </Tooltip>
-        </Space>
+        </div>
       </Card>
 
       {error && <Alert type="error" message={error} closable onClose={() => setError('')} />}
@@ -174,10 +133,10 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
       <Card
         size="small"
         title={
-          <Space>
-            <BarChartOutlined />
+          <div className="flex items-center gap-1">
+            <BarChart3 className="h-4 w-4" />
             {t('cohort.attrition', 'Attrition Diagram')}
-          </Space>
+          </div>
         }
         extra={
           <Button
@@ -191,7 +150,7 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
         }
       >
         {attritionLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
+          <div className="text-center py-5"><Spinner /></div>
         ) : attrition.length > 0 ? (
           <ResponsiveContainer width="100%" height={Math.max(150, attrition.length * 30)}>
             <BarChart data={attritionChartData} layout="vertical" margin={{ left: 10, right: 10 }}>
@@ -212,95 +171,43 @@ export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <span className="text-text-muted text-xs">
             {t('cohort.click_run_attrition', 'Click Run to see attrition diagram')}
-          </Text>
-        )}
-      </Card>
-
-      {/* Sample patients */}
-      <Card
-        size="small"
-        title={
-          <Space>
-            <UserOutlined />
-            {t('cohort.sample_patients', 'Sample Patients')}
-          </Space>
-        }
-        extra={
-          <Button
-            size="small"
-            onClick={runSample}
-            loading={sampleLoading}
-            disabled={!hasCriteria || !cdmName}
-          >
-            {t('cohort.sample', 'Sample')}
-          </Button>
-        }
-      >
-        {sampleLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}><Spin /></div>
-        ) : patients.length > 0 ? (
-          <Table
-            size="small"
-            dataSource={patients}
-            rowKey="person_id"
-            pagination={false}
-            scroll={{ x: true }}
-            columns={[
-              { title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90 },
-              { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
-              { title: t('cohort.gender', 'Gender'), dataIndex: 'gender', key: 'gender', width: 80 },
-              { title: t('cohort.race', 'Race'), dataIndex: 'race', key: 'race', width: 90, ellipsis: true },
-              { title: t('cohort.obs_start', 'Obs Start'), dataIndex: 'observation_period_start_date', key: 'obs_start', width: 100 },
-              { title: t('cohort.obs_end', 'Obs End'), dataIndex: 'observation_period_end_date', key: 'obs_end', width: 100 },
-            ]}
-          />
-        ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {t('cohort.click_sample', 'Click Sample to see random patients')}
-          </Text>
+          </span>
         )}
       </Card>
 
       {/* Export */}
-      <Card size="small" title={<Space><DownloadOutlined />{t('cohort.export', 'Export')}</Space>}>
-        <Space wrap>
-          <Button
-            size="small"
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={runExport}
-            loading={exportLoading}
-            disabled={!hasCriteria || !cdmName}
-          >
-            {t('cohort.export_patients', 'Export patients (CSV)')}
-          </Button>
+      <Card size="small" title={<div className="flex items-center gap-1"><Download className="h-4 w-4" />{t('cohort.export', 'Export')}</div>}>
+        <div className="flex flex-wrap gap-2">
           {savedCohortId && (
             <>
               <Button
                 size="small"
-                icon={<DownloadOutlined />}
+                variant="primary"
+                icon={<Download className="h-3.5 w-3.5" />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
               >
-                CSV (IDs only)
+                {criteria.inclusion.sameVisit
+                  ? 'CSV (Patient + Visit IDs)'
+                  : 'CSV (Patient IDs)'}
               </Button>
               <Button
                 size="small"
-                icon={<DownloadOutlined />}
+                icon={<Download className="h-3.5 w-3.5" />}
                 onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
               >
                 SQL
               </Button>
             </>
           )}
-        </Space>
+        </div>
       </Card>
 
       {/* Generated SQL preview */}
       {generatedSql && (
         <Card size="small" title={t('cohort.generated_sql', 'Generated SQL')}>
-          <pre style={{ fontSize: 10, maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          <pre className="text-[10px] max-h-[200px] overflow-auto whitespace-pre-wrap break-all text-text-muted bg-deep-base p-2 rounded">
             {generatedSql}
           </pre>
         </Card>

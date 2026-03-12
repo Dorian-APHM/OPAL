@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from sqlalchemy import func
 
 from db.app_db import get_db, SessionLocal
 from db.models import CdmConfig, AnalysisSnapshot, AnalysisSettings
+from utils.notifications import notify
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from modules.quality.engine import get_available_domains, run_domain_analysis
@@ -23,6 +24,10 @@ from config import DEFAULT_OMOP_SCHEMA
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quality", tags=["quality"])
+
+# Track active streaming analyses for cancel support.
+# Key: analysis_id (str), Value: {"cancelled": bool, "conn": psycopg2 connection or None}
+_active_analyses: dict[str, dict] = {}
 
 
 class AnalysisRequest(BaseModel):
@@ -84,7 +89,7 @@ def list_domains():
 
 
 @router.post("/analyze")
-def analyze_domain(req: AnalysisRequest, db: Session = Depends(get_db)):
+def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run analysis for a single domain on a CDM."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
@@ -118,6 +123,19 @@ def analyze_domain(req: AnalysisRequest, db: Session = Depends(get_db)):
 
     snapshot = _save_snapshot(db, req.cdm_name, req.domain, results)
 
+    # Notify the user who launched the analysis
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    if username:
+        notify(
+            db, username, "quality_done",
+            title=f"Analyse terminée : {req.domain}",
+            message=f"L'analyse qualité de « {req.domain} » sur {req.cdm_name} est terminée.",
+            link=f"/quality?cdm={req.cdm_name}&domain={req.domain}",
+            item_id=req.domain,
+        )
+        db.commit()
+
     return {
         "snapshot_id": snapshot.id,
         "version": snapshot.version,
@@ -128,7 +146,7 @@ def analyze_domain(req: AnalysisRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/analyze/batch")
-def analyze_batch(req: BatchAnalysisRequest, db: Session = Depends(get_db)):
+def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run analysis for multiple domains on a CDM."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
@@ -171,6 +189,21 @@ def analyze_batch(req: BatchAnalysisRequest, db: Session = Depends(get_db)):
     finally:
         conn.close()
 
+    # Notify user
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    if username:
+        domain_list = ", ".join(req.domains)
+        for d in req.domains:
+            notify(
+                db, username, "quality_done",
+                title=f"Analyse terminée : {d}",
+                message=f"L'analyse qualité de « {d} » sur {req.cdm_name} est terminée.",
+                link=f"/quality?cdm={req.cdm_name}&domain={d}",
+                item_id=d,
+            )
+        db.commit()
+
     return {
         "cdm_name": req.cdm_name,
         "completed": results_list,
@@ -182,7 +215,7 @@ def analyze_batch(req: BatchAnalysisRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/analyze/batch/stream")
-def analyze_batch_stream(req: BatchAnalysisRequest, db: Session = Depends(get_db)):
+def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run batch analysis with SSE progress stream."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
@@ -203,19 +236,49 @@ def analyze_batch_stream(req: BatchAnalysisRequest, db: Session = Depends(get_db
     cdm_user = cdm.db_user
     cdm_name = req.cdm_name
     domains = list(req.domains)
+    user = getattr(request.state, "user", {})
+    trigger_username = user.get("preferred_username", "")
 
-    def event_generator():
+    # Register this analysis for cancel support
+    import queue as _queue
+    import threading as _threading
+    import uuid as _uuid
+
+    analysis_id = str(_uuid.uuid4())[:8]
+    progress_q: _queue.Queue = _queue.Queue()
+
+    def _worker():
+        """Run the analysis in a background thread.
+
+        Snapshots are saved per-domain and a notification is sent at the
+        end.  The thread is completely independent of the SSE stream so
+        the analysis survives client disconnects and page navigations.
+        """
+        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": []}
+
         try:
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            progress_q.put({"type": "error", "message": str(e)})
+            progress_q.put(None)  # sentinel
+            _active_analyses.pop(analysis_id, None)
             return
 
+        _active_analyses[analysis_id]["conn"] = conn
         total = len(domains)
         completed = 0
+        cancelled = False
+        succeeded_domains: list[str] = []
+
         try:
             for domain in domains:
-                yield f"data: {json.dumps({'type': 'progress', 'domain': domain, 'status': 'running', 'completed': completed, 'total': total})}\n\n"
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    cancelled = True
+                    progress_q.put({"type": "cancelled", "completed": completed, "total": total})
+                    break
+
+                progress_q.put({"type": "progress", "domain": domain, "status": "running",
+                                "completed": completed, "total": total})
                 try:
                     results = run_domain_analysis(
                         conn, domain, omop_schema=params["omop_schema"],
@@ -224,7 +287,6 @@ def analyze_batch_stream(req: BatchAnalysisRequest, db: Session = Depends(get_db
                         max_records_per_person=params["max_rpp"],
                         max_observation_months=params["max_obs"],
                     )
-                    # Use a fresh session for each save
                     local_db = SessionLocal()
                     try:
                         _save_snapshot(local_db, cdm_name, domain, results)
@@ -232,16 +294,222 @@ def analyze_batch_stream(req: BatchAnalysisRequest, db: Session = Depends(get_db
                         local_db.close()
 
                     completed += 1
-                    yield f"data: {json.dumps({'type': 'progress', 'domain': domain, 'status': 'success', 'completed': completed, 'total': total})}\n\n"
+                    succeeded_domains.append(domain)
+                    if analysis_id in _active_analyses:
+                        _active_analyses[analysis_id]["completed"] = completed
+                        _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "success"})
+                    progress_q.put({"type": "progress", "domain": domain, "status": "success",
+                                    "completed": completed, "total": total})
                 except Exception as e:
                     completed += 1
-                    yield f"data: {json.dumps({'type': 'progress', 'domain': domain, 'status': 'error', 'error': str(e), 'completed': completed, 'total': total})}\n\n"
+                    if analysis_id in _active_analyses:
+                        _active_analyses[analysis_id]["completed"] = completed
+                        _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
+                    progress_q.put({"type": "progress", "domain": domain, "status": "error",
+                                    "error": str(e), "completed": completed, "total": total})
         finally:
             conn.close()
+            _active_analyses.pop(analysis_id, None)
 
-        yield f"data: {json.dumps({'type': 'done', 'completed': completed, 'total': total})}\n\n"
+        if not cancelled and succeeded_domains:
+            if trigger_username:
+                notif_db = SessionLocal()
+                try:
+                    for d in succeeded_domains:
+                        notify(
+                            notif_db, trigger_username, "quality_done",
+                            title=f"Analyse terminée : {d}",
+                            message=f"L'analyse qualité de « {d} » sur {cdm_name} est terminée.",
+                            link=f"/quality?cdm={cdm_name}&domain={d}",
+                            item_id=d,
+                        )
+                    notif_db.commit()
+                finally:
+                    notif_db.close()
+            progress_q.put({"type": "done", "completed": completed, "total": total})
+
+        progress_q.put(None)  # sentinel — tells the SSE generator to stop
+
+    # Start the worker thread — it runs independently of the HTTP connection.
+    thread = _threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    import asyncio as _asyncio
+
+    async def event_generator():
+        loop = _asyncio.get_event_loop()
+        yield f"data: {json.dumps({'type': 'start', 'analysis_id': analysis_id, 'total': len(domains)})}\n\n"
+
+        while True:
+            # Read from the queue in a thread-safe, non-blocking way.
+            try:
+                event = await loop.run_in_executor(None, progress_q.get, True, 2.0)
+            except _queue.Empty:
+                continue
+            if event is None:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/analyze/cancel/{analysis_id}")
+def cancel_analysis(analysis_id: str):
+    """Cancel a running streaming analysis.
+
+    Sets the cancelled flag so the generator stops between domains.
+    Also attempts to cancel the active PostgreSQL query.
+    """
+    entry = _active_analyses.get(analysis_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+
+    entry["cancelled"] = True
+
+    # Try to cancel the running PostgreSQL query
+    conn = entry.get("conn")
+    if conn and not conn.closed:
+        try:
+            conn.cancel()
+            logger.info("Cancelled PostgreSQL query for analysis %s", analysis_id)
+        except Exception as e:
+            logger.warning("Failed to cancel query for %s: %s", analysis_id, e)
+
+    return {"cancelled": True, "analysis_id": analysis_id}
+
+
+@router.get("/analyze/active")
+def list_active_analyses():
+    """List currently running analyses (batch + conformity)."""
+    return {
+        "active": [
+            {
+                "analysis_id": aid,
+                "cancelled": info.get("cancelled", False),
+                "cdm_name": info.get("cdm_name", ""),
+                "type": "conformity" if aid.startswith("conf-") else "batch",
+                "domains": info.get("domains", []),
+                "completed": info.get("completed", 0),
+                "total": info.get("total", 0),
+                "domain_status": info.get("domain_status", []),
+            }
+            for aid, info in _active_analyses.items()
+        ]
+    }
+
+
+@router.post("/conformity")
+def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
+    """Run CDM conformity validation checks in a background thread.
+
+    Returns immediately with an analysis_id.  The result is persisted as
+    an AnalysisSnapshot with domain='Conformity' so it survives page
+    navigation.  Supports cancel via /conformity/cancel/{analysis_id}.
+    """
+    import threading as _threading
+    import uuid as _uuid
+
+    cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
+    if not cdm:
+        raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
+
+    params = _get_cdm_analysis_params(db, cdm)
+    password = decrypt_password(cdm.db_password_encrypted)
+
+    # Copy values before the thread starts (db session may close).
+    cdm_host, cdm_port, cdm_dbname, cdm_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
+    cdm_name = req.cdm_name
+    omop_schema = params["omop_schema"]
+    user = getattr(request.state, "user", {})
+    trigger_username = user.get("preferred_username", "")
+
+    analysis_id = f"conf-{_uuid.uuid4().hex[:8]}"
+    _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"]}
+
+    def _worker():
+        from modules.quality.conformity import run_conformity_checks
+
+        try:
+            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
+        except Exception as e:
+            logger.error("Conformity: cannot connect to CDM %s: %s", cdm_name, e)
+            _active_analyses.pop(analysis_id, None)
+            return
+
+        _active_analyses[analysis_id]["conn"] = conn
+
+        try:
+            if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                return
+
+            report = run_conformity_checks(conn, omop_schema=omop_schema)
+
+            if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                return
+
+            # Persist result as a snapshot with domain='Conformity'
+            local_db = SessionLocal()
+            try:
+                _save_snapshot(local_db, cdm_name, "Conformity", report)
+                if trigger_username:
+                    notify(
+                        local_db, trigger_username, "quality_done",
+                        title=f"Conformité terminée — {cdm_name}",
+                        message=f"Score : {report.get('score', '?')}/100",
+                        link=f"/quality?cdm={cdm_name}",
+                        item_id="Conformity",
+                    )
+                    local_db.commit()
+            finally:
+                local_db.close()
+
+        except Exception as e:
+            if not _active_analyses.get(analysis_id, {}).get("cancelled"):
+                logger.exception("Conformity check failed for %s", cdm_name)
+        finally:
+            conn.close()
+            _active_analyses.pop(analysis_id, None)
+
+    thread = _threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return {"cdm_name": cdm_name, "analysis_id": analysis_id, "status": "started"}
+
+
+@router.post("/conformity/cancel/{analysis_id}")
+def cancel_conformity(analysis_id: str):
+    """Cancel a running conformity check."""
+    entry = _active_analyses.get(analysis_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+    entry["cancelled"] = True
+    conn = entry.get("conn")
+    if conn and not conn.closed:
+        try:
+            conn.cancel()
+        except Exception as e:
+            logger.warning("Failed to cancel conformity query %s: %s", analysis_id, e)
+    return {"cancelled": True, "analysis_id": analysis_id}
+
+
+@router.get("/conformity/{cdm_name}")
+def get_conformity(cdm_name: str, db: Session = Depends(get_db)):
+    """Get the latest conformity result for a CDM (from snapshots)."""
+    snapshot = (
+        db.query(AnalysisSnapshot)
+        .filter(AnalysisSnapshot.cdm_name == cdm_name, AnalysisSnapshot.domain == "Conformity")
+        .order_by(AnalysisSnapshot.version.desc())
+        .first()
+    )
+    if not snapshot:
+        return {"cdm_name": cdm_name, "result": None}
+    return {
+        "cdm_name": cdm_name,
+        "snapshot_id": snapshot.id,
+        "version": snapshot.version,
+        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+        "result": snapshot.results,
+    }
 
 
 @router.get("/snapshots/{cdm_name}/{domain}")
