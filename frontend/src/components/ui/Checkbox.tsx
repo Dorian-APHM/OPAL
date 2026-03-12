@@ -12,9 +12,11 @@ interface CheckboxProps {
 
 export function Checkbox({ checked, onChange, children, disabled = false, className = '', indeterminate = false }: CheckboxProps) {
   return (
-    <label className={`inline-flex items-center gap-2 cursor-pointer select-none ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${className}`}>
+    <label
+      onClick={(e) => { e.preventDefault(); if (!disabled) onChange(!checked); }}
+      className={`inline-flex items-center gap-2 cursor-pointer select-none ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${className}`}
+    >
       <span
-        onClick={(e) => { e.preventDefault(); if (!disabled) onChange(!checked); }}
         className={`
           relative flex items-center justify-center w-4 h-4 rounded border transition-all duration-150 shrink-0
           ${checked || indeterminate

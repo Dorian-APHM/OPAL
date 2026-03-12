@@ -264,7 +264,7 @@ export default function QueryCanvas({
                           });
                         }}
                       >
-                        {c.domain}: {c.concepts?.length > 0 ? c.concepts[0].concept_name || `${c.concepts.length} concepts` : c.source_codes?.[0] || c.domain}
+                        {t(`domains.${c.domain}`, c.domain)}: {c.concepts?.length > 0 ? c.concepts[0].concept_name || `${c.concepts.length} concepts` : c.source_codes?.[0] || t(`domains.${c.domain}`, c.domain)}
                       </Tag>
                     ))}
                   </div>

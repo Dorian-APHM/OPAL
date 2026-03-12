@@ -3,7 +3,7 @@
 **Version** : 2.0.0
 **Base URL** : `http://<host>:8000/api`
 **Authentification** : Keycloak (Bearer token) si `AUTH_ENABLED=true`
-**Total endpoints** : 71+
+**Total endpoints** : 140+
 
 ---
 
@@ -131,7 +131,7 @@ Retourne l'utilisateur courant (depuis le token Keycloak). **Authentifie** (tout
 
 ## 2. CDM Management
 
-Prefix : `/api/cdm` | **Roles** : admin, omop-dim (sauf `GET /api/cdm/` accessible a tous)
+Prefix : `/api/cdm` | **Roles** : admin, data-manager (sauf `GET /api/cdm/` accessible a tous)
 
 ### `GET /api/cdm/`
 
@@ -231,7 +231,7 @@ Met a jour les parametres d'analyse. Tous les champs sont optionnels.
 
 ## 3. Quality Analysis
 
-Prefix : `/api/quality` | **Roles** : admin, omop-dim, chercheur
+Prefix : `/api/quality` | **Roles** : admin, data-manager, chercheur
 
 ### `GET /api/quality/domains`
 
@@ -433,7 +433,7 @@ Genere un rapport PDF de comparaison.
 
 ## 4. Cohort Builder
 
-Prefix : `/api/cohorts` | **Roles** : admin, omop-dim, chercheur, medecin
+Prefix : `/api/cohorts` | **Roles** : admin, data-manager, chercheur, medecin
 
 ### Recherche de concepts
 
@@ -573,7 +573,7 @@ Met a jour une cohorte. Si les criteres changent, cree une nouvelle version.
 
 #### `DELETE /api/cohorts/{cohort_id}`
 
-Supprime une cohorte (admin/omop-dim uniquement).
+Supprime une cohorte (admin/data-manager uniquement).
 
 ### Execution
 
@@ -747,7 +747,7 @@ Timeline des evenements cliniques d'un patient.
 
 ## 5. Mapping
 
-Prefix : `/api/mapping` | **Roles** : admin, omop-dim, medecin
+Prefix : `/api/mapping` | **Roles** : admin, data-manager, medecin
 
 ### 5.1 Dashboard
 
@@ -1055,7 +1055,7 @@ Supprime les mappings SapBERT d'un domaine.
 
 ## 6. Concept Explorer
 
-Prefix : `/api/concepts` | **Roles** : admin, omop-dim, chercheur, medecin
+Prefix : `/api/concepts` | **Roles** : admin, data-manager, chercheur, medecin
 
 ### `GET /api/concepts/search`
 
@@ -1234,7 +1234,7 @@ Liste les `vocabulary_id` distincts de la table `concept`.
 
 ## 7. OHDSI Integration
 
-Prefix : `/api/ohdsi` | **Roles** : admin, omop-dim
+Prefix : `/api/ohdsi` | **Roles** : admin, data-manager
 
 Lance des conteneurs Docker OHDSI et streame leurs logs.
 
@@ -1542,7 +1542,7 @@ Rejette une demande.
 
 ### Matrice des permissions
 
-| Endpoint | Public | chercheur | medecin | admin / omop-dim |
+| Endpoint | Public | chercheur | medecin | admin / data-manager |
 |----------|--------|-----------|---------|-------------------|
 | `GET /api/health` | OK | OK | OK | OK |
 | `GET /api/i18n/{lang}` | OK | OK | OK | OK |
@@ -1564,7 +1564,180 @@ Pour les endpoints SSE (Server-Sent Events) et les telechargements, le token peu
 
 ---
 
-## 12. Codes d'erreur HTTP
+## 12. Concept Sets — `/api/concept-sets`
+
+Gestion de jeux de concepts reutilisables.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les concept sets (filtre optionnel par CDM, domaine) | Tous |
+| `POST` | `/` | Creer un concept set | admin, data-manager |
+| `GET` | `/{id}` | Recuperer un concept set | Tous |
+| `PUT` | `/{id}` | Modifier un concept set | admin, data-manager |
+| `DELETE` | `/{id}` | Supprimer un concept set | admin, data-manager |
+| `GET` | `/{id}/resolve` | Resoudre un concept set (IDs + descendants) | Tous |
+| `POST` | `/{id}/counts` | Comptages records/personnes par concept | Tous |
+
+---
+
+## 13. Incidence — `/api/incidence`
+
+Analyse de taux d'incidence sur cohortes.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `POST` | `/compute` | Calculer le taux d'incidence (cohorte cible + outcome) | Tous |
+| `POST` | `/save` | Sauvegarder une analyse d'incidence | Tous |
+| `GET` | `/` | Lister les analyses d'incidence (filtre par CDM) | Tous |
+| `GET` | `/{id}` | Recuperer une analyse | Tous |
+
+---
+
+## 14. Estimation — `/api/estimation`
+
+Estimation d'effets populationnels (Kaplan-Meier).
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `POST` | `/kaplan-meier` | Calculer une analyse de survie Kaplan-Meier | Tous |
+| `POST` | `/save` | Sauvegarder une analyse d'estimation | Tous |
+| `GET` | `/` | Lister les analyses d'estimation (filtre par CDM) | Tous |
+| `GET` | `/{id}` | Recuperer une analyse | Tous |
+
+---
+
+## 15. Gestion de donnees — `/api/datamanagement`
+
+Extraction de donnees et monitoring ETL.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/cohorts` | Lister les cohortes disponibles pour extraction | admin, data-manager |
+| `GET` | `/tables` | Lister les tables OMOP disponibles | admin, data-manager |
+| `GET` | `/tables/{table}/columns` | Lister les colonnes d'une table OMOP | admin, data-manager |
+| `POST` | `/extract/start` | Lancer une extraction en tache de fond | admin, data-manager |
+| `GET` | `/extract/status/{task_id}` | Consulter le statut d'une extraction | admin, data-manager |
+| `GET` | `/extract/download/{task_id}` | Telecharger le CSV d'une extraction terminee | admin, data-manager |
+| `POST` | `/extract/cancel/{task_id}` | Annuler une extraction en cours | admin, data-manager |
+| `GET` | `/extract/active` | Recuperer la tache d'extraction en cours | admin, data-manager |
+| `POST` | `/extract/preview` | Previsualiser les donnees extraites (limite) | admin, data-manager |
+| `POST` | `/extract/download` | Telecharger le dataset complet en CSV (sync) | admin, data-manager |
+
+---
+
+## 16. Controle d'acces CDM — `/api/cdm-access`
+
+Gestion des permissions utilisateur/groupe par CDM.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les acces CDM (utilisateur + groupe) | admin |
+| `GET` | `/cdms-for-user` | CDMs accessibles par l'utilisateur courant | Tous |
+| `POST` | `/grant` | Accorder l'acces a un utilisateur | admin |
+| `POST` | `/grant-group` | Accorder l'acces a un groupe | admin |
+| `POST` | `/revoke` | Revoquer l'acces d'un utilisateur | admin |
+| `POST` | `/revoke-group` | Revoquer l'acces d'un groupe | admin |
+| `DELETE` | `/cdm/{cdm_name}` | Supprimer tous les controles d'acces d'un CDM | admin |
+
+---
+
+## 17. Notifications — `/api/notifications`
+
+Notifications in-app pour les utilisateurs.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les notifications de l'utilisateur courant | Tous |
+| `GET` | `/badges` | Compteurs non lus par type (pour pastilles sidebar) | Tous |
+| `GET` | `/items` | IDs d'elements non lus par type (pour points rouges) | Tous |
+| `POST` | `/{id}/read` | Marquer une notification comme lue | Tous |
+| `POST` | `/read-item` | Marquer les notifications d'un element comme lues | Tous |
+| `POST` | `/read-all` | Marquer toutes les notifications comme lues | Tous |
+| `POST` | `/create` | Creer une notification (usage interne/admin) | admin |
+
+---
+
+## 18. Favoris — `/api/favorites`
+
+Gestion des favoris utilisateur.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les favoris de l'utilisateur courant | Tous |
+| `POST` | `/` | Ajouter un favori | Tous |
+| `DELETE` | `/{id}` | Supprimer un favori | Tous |
+
+---
+
+## 19. Requetes sauvegardees — `/api/saved-queries`
+
+Persistance des requetes SQL personnalisees.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les requetes sauvegardees (filtre par CDM) | Tous |
+| `POST` | `/` | Sauvegarder une requete | Tous |
+| `PUT` | `/{id}` | Modifier une requete sauvegardee | Tous |
+| `DELETE` | `/{id}` | Supprimer une requete | Tous |
+
+---
+
+## 20. Templates de cohortes — `/api/cohort-templates`
+
+Modeles de criteres de cohortes reutilisables.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les templates | Tous |
+| `GET` | `/categories` | Lister les categories distinctes | Tous |
+| `GET` | `/{id}` | Recuperer un template | Tous |
+| `POST` | `/` | Creer un template | admin, data-manager |
+| `DELETE` | `/{id}` | Supprimer un template | admin, data-manager |
+
+---
+
+## 21. Partage de cohortes — `/api/cohorts`
+
+Partage de cohortes entre utilisateurs et groupes.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `POST` | `/{id}/share` | Partager une cohorte (utilisateur, groupe ou tous) | Tous |
+| `POST` | `/{id}/unshare` | Retirer le partage d'une cohorte | Tous |
+| `GET` | `/{id}/shares` | Lister les partages d'une cohorte | Tous |
+| `GET` | `/admin/by-user` | Lister les cohortes par createur (admin) | admin |
+
+---
+
+## 22. Recherche globale — `/api/search`
+
+Recherche transversale sur toutes les entites.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Recherche dans cohortes, concepts, requetes, mappings, codes source | Tous |
+
+**Parametres** : `q` (texte), `cdm_name` (optionnel), `limit` (defaut 20)
+
+---
+
+## 23. Groupes d'utilisateurs — `/api/groups`
+
+Gestion de groupes pour le controle d'acces et le partage.
+
+| Methode | Endpoint | Description | Roles |
+|---------|----------|-------------|-------|
+| `GET` | `/` | Lister les groupes avec nombre de membres | admin |
+| `POST` | `/` | Creer un groupe | admin |
+| `GET` | `/{name}` | Recuperer un groupe et ses membres | admin |
+| `PUT` | `/{name}` | Modifier un groupe (description, membres) | admin |
+| `DELETE` | `/{name}` | Supprimer un groupe | admin |
+| `POST` | `/{name}/members` | Ajouter un membre | admin |
+| `DELETE` | `/{name}/members/{username}` | Retirer un membre | admin |
+
+---
+
+## 24. Codes d'erreur HTTP
 
 | Code | Signification |
 |------|---------------|

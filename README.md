@@ -19,6 +19,7 @@ Plateforme web de qualite des donnees, construction de cohortes, mapping de voca
    - [Outils OHDSI](#6-outils-ohdsi)
    - [Parametres](#7-parametres)
    - [Audit et Administration](#8-audit-et-administration)
+   - [Modules complementaires](#9-modules-complementaires)
 6. [Securite et Authentification](#securite-et-authentification)
 7. [Internationalisation](#internationalisation)
 8. [Developpement](#developpement)
@@ -159,7 +160,7 @@ Ces parametres sont configurables dans l'interface (page Parametres) pour chaque
 
 ### 1. Gestion des CDM
 
-**Route** : `/cdm` | **API** : `/api/cdm/` | **Roles** : admin, omop-dim
+**Route** : `/cdm` | **API** : `/api/cdm/` | **Roles** : admin, data-manager
 
 Enregistrez et gerez les connexions aux bases OMOP CDM externes.
 
@@ -175,7 +176,7 @@ Enregistrez et gerez les connexions aux bases OMOP CDM externes.
 
 ### 2. Analyse Qualite
 
-**Route** : `/quality` | **API** : `/api/quality/` | **Roles** : admin, omop-dim, chercheur
+**Route** : `/quality` | **API** : `/api/quality/` | **Roles** : admin, data-manager, chercheur
 
 Moteur d'analyse des donnees type Achilles, execute des requetes SQL sur votre CDM et stocke les resultats sous forme de snapshots versiones.
 
@@ -230,7 +231,7 @@ Compare deux snapshots et detecte les ecarts significatifs :
 
 ### 3. Constructeur de Cohortes
 
-**Route** : `/cohorts` | **API** : `/api/cohorts/` | **Roles** : admin, omop-dim, chercheur, medecin
+**Route** : `/cohorts` | **API** : `/api/cohorts/` | **Roles** : admin, data-manager, chercheur, medecin
 
 Query builder visuel pour definir, executer et exporter des cohortes de patients OMOP.
 
@@ -287,7 +288,7 @@ Query builder visuel pour definir, executer et exporter des cohortes de patients
 
 ### 4. Workflow de Mapping
 
-**Route** : `/mapping` | **API** : `/api/mapping/` | **Roles** : admin, omop-dim, medecin
+**Route** : `/mapping` | **API** : `/api/mapping/` | **Roles** : admin, data-manager, medecin
 
 Workflow complet de mapping des codes source vers les concepts standard OMOP.
 
@@ -334,7 +335,7 @@ Workflow complet de mapping des codes source vers les concepts standard OMOP.
 
 ### 5. Explorateur de Concepts
 
-**Route** : `/concepts` | **API** : `/api/concepts/` | **Roles** : admin, omop-dim, chercheur, medecin
+**Route** : `/concepts` | **API** : `/api/concepts/` | **Roles** : admin, data-manager, chercheur, medecin
 
 Navigation et exploration du vocabulaire OMOP.
 
@@ -362,7 +363,7 @@ Navigation et exploration du vocabulaire OMOP.
 
 ### 6. Outils OHDSI
 
-**Route** : `/ohdsi` | **API** : `/api/ohdsi/` | **Roles** : admin, omop-dim
+**Route** : `/ohdsi` | **API** : `/api/ohdsi/` | **Roles** : admin, data-manager
 
 Lancement et supervision de conteneurs Docker OHDSI.
 
@@ -382,7 +383,7 @@ Lancement et supervision de conteneurs Docker OHDSI.
 
 ### 7. Parametres
 
-**Route** : `/settings` | **API** : `/api/cdm/{name}/settings` | **Roles** : admin, omop-dim
+**Route** : `/settings` | **API** : `/api/cdm/{name}/settings` | **Roles** : admin, data-manager
 
 Configuration des parametres d'analyse pour chaque CDM :
 
@@ -427,6 +428,28 @@ Formulaire d'inscription en libre-service :
 
 ---
 
+### 9. Modules complementaires
+
+Les modules suivants completent les fonctionnalites principales :
+
+| Module | Route | API | Description |
+|--------|-------|-----|-------------|
+| **Accueil** | `/` | — | Tableau de bord personnel : notifications, cohortes recentes, actions rapides |
+| **Gestion de donnees** | `/data-management` | `/api/datamanagement/` | Monitoring ETL, extraction de donnees, suivi des chargements |
+| **Concept Sets** | `/concept-sets` | `/api/concept-sets/` | CRUD de jeux de concepts reutilisables |
+| **Incidence** | `/incidence` | `/api/incidence/` | Analyse de taux d'incidence sur cohortes |
+| **Estimation** | `/estimation` | `/api/estimation/` | Estimation d'effets populationnels |
+| **Controle d'acces CDM** | — | `/api/cdm-access/` | Gestion des permissions utilisateur/groupe par CDM |
+| **Notifications** | — | `/api/notifications/` | Notifications in-app (demandes, partages, alertes) |
+| **Favoris** | — | `/api/favorites/` | Marquer cohortes, concepts, requetes comme favoris |
+| **Requetes sauvegardees** | — | `/api/saved-queries/` | Persistance des requetes SQL personnalisees |
+| **Templates de cohortes** | — | `/api/cohort-templates/` | Modeles de criteres de cohortes reutilisables |
+| **Partage de cohortes** | — | `/api/cohorts/` | Partage de cohortes entre utilisateurs |
+| **Recherche globale** | — | `/api/search/` | Recherche transversale (cohortes, concepts, requetes) |
+| **Groupes** | — | `/api/groups/` | Gestion de groupes d'utilisateurs |
+
+---
+
 ## Securite et Authentification
 
 ### Chiffrement des mots de passe CDM
@@ -448,7 +471,7 @@ Formulaire d'inscription en libre-service :
 | Role | Pages accessibles | Description |
 |------|-------------------|-------------|
 | `admin` | Toutes | Acces complet + administration + audit |
-| `omop-dim` | Toutes | Data steward, acces complet sans audit |
+| `data-manager` | Toutes | Data steward, acces complet sans audit |
 | `chercheur` | Quality, Cohorts, Concepts | Recherche et analyse |
 | `medecin` | Mapping, Cohorts, Concepts | Mapping et analyse |
 
@@ -505,52 +528,89 @@ opal/
 ├── backend/
 │   ├── Dockerfile            # Python 3.12-slim + uvicorn
 │   ├── requirements.txt      # Dependances Python
-│   ├── main.py               # Point d'entree FastAPI + endpoints systeme
+│   ├── main.py               # Point d'entree FastAPI + endpoints systeme (18 routers)
 │   ├── config.py             # Variables d'environnement et constantes
 │   ├── auth/
-│   │   └── keycloak.py       # Middleware OIDC + RBAC
+│   │   ├── keycloak.py       # Middleware OIDC + RBAC
+│   │   └── permissions.py    # Permissions YAML loader
+│   ├── permissions.yaml      # Matrice RBAC declarative
 │   ├── audit/
 │   │   └── logger.py         # Middleware d'audit (trace toutes les requetes)
 │   ├── db/
 │   │   ├── app_db.py         # Engine SQLAlchemy (base OPAL)
-│   │   ├── models.py         # 8 modeles SQLAlchemy
+│   │   ├── models.py         # 21 modeles SQLAlchemy
 │   │   └── omop_connector.py # Connexion dynamique aux CDM (psycopg2)
 │   ├── utils/
-│   │   └── crypto.py         # Chiffrement Fernet
+│   │   ├── crypto.py         # Chiffrement Fernet
+│   │   └── notifications.py  # Systeme de notifications
 │   ├── modules/
-│   │   ├── cdm_router.py     # CRUD des connexions CDM
+│   │   ├── cdm_router.py          # CRUD des connexions CDM
+│   │   ├── cdm_access_router.py   # Controle d'acces par CDM
 │   │   ├── quality/
-│   │   │   ├── router.py     # Endpoints analyse qualite + rapports
-│   │   │   ├── engine.py     # Orchestration d'analyse
-│   │   │   ├── comparator.py # Comparaison de snapshots
-│   │   │   └── domains/      # SQL par domaine
+│   │   │   ├── router.py          # Endpoints analyse qualite + rapports
+│   │   │   ├── engine.py          # Orchestration d'analyse
+│   │   │   ├── comparator.py      # Comparaison de snapshots
+│   │   │   ├── conformity.py      # Conformite des donnees
+│   │   │   └── domains/           # SQL par domaine
 │   │   │       ├── dashboard.py
 │   │   │       ├── person.py
 │   │   │       ├── observation_period.py
 │   │   │       └── clinical.py
 │   │   ├── cohort/
-│   │   │   ├── router.py     # CRUD, execution, caracterisation, SQL
-│   │   │   ├── sql_builder.py # JSON -> SQL
+│   │   │   ├── router.py          # CRUD, execution, caracterisation, SQL
+│   │   │   ├── sql_builder.py     # JSON -> SQL
 │   │   │   ├── characterization.py # Table 1
-│   │   │   └── comparison.py # Comparaison de cohortes (SMD)
+│   │   │   └── comparison.py      # Comparaison de cohortes (SMD)
 │   │   ├── mapping/
-│   │   │   ├── router.py     # Workflow de mapping + reference + SapBERT
-│   │   │   └── suggest.py    # Moteur de suggestion (6 strategies)
+│   │   │   ├── router.py          # Workflow de mapping + reference + SapBERT
+│   │   │   └── suggest.py         # Moteur de suggestion (6 strategies)
 │   │   ├── concept/
-│   │   │   └── router.py     # Recherche, hierarchie, codes source
-│   │   └── ohdsi/
-│   │       └── router.py     # Orchestration Docker OHDSI
+│   │   │   └── router.py          # Recherche, hierarchie, codes source
+│   │   ├── concept_set/
+│   │   │   └── router.py          # Concept sets CRUD
+│   │   ├── ohdsi/
+│   │   │   └── router.py          # Orchestration Docker OHDSI
+│   │   ├── incidence/
+│   │   │   └── router.py          # Taux d'incidence
+│   │   ├── estimation/
+│   │   │   └── router.py          # Estimation populationnelle
+│   │   ├── datamanagement/
+│   │   │   ├── router.py          # Gestion de donnees / ETL
+│   │   │   └── extractor.py       # Extraction de donnees
+│   │   ├── notifications_router.py    # Notifications utilisateur
+│   │   ├── favorites_router.py        # Favoris utilisateur
+│   │   ├── saved_queries_router.py    # Requetes sauvegardees
+│   │   ├── cohort_templates_router.py # Templates de cohortes
+│   │   ├── cohort_sharing_router.py   # Partage de cohortes
+│   │   ├── search_router.py          # Recherche globale
+│   │   └── groups_router.py          # Groupes utilisateurs
 │   ├── i18n/
 │   │   ├── en.json           # Traductions anglais
 │   │   └── fr.json           # Traductions francais
-│   └── tests/
+│   └── tests/                # 22 fichiers de tests
 │       ├── conftest.py       # Fixtures SQLite in-memory
 │       ├── test_api.py
 │       ├── test_engine.py
 │       ├── test_comparator.py
 │       ├── test_crypto.py
 │       ├── test_cohort_api.py
-│       └── test_mapping_api.py
+│       ├── test_mapping_api.py
+│       ├── test_suggest.py
+│       ├── test_sql_builder.py
+│       ├── test_cohort_comparison.py
+│       ├── test_cohort_diff.py
+│       ├── test_cohort_sharing.py
+│       ├── test_cohort_templates.py
+│       ├── test_admin_api.py
+│       ├── test_audit_api.py
+│       ├── test_access_requests.py
+│       ├── test_cdm_access.py
+│       ├── test_conformity.py
+│       ├── test_favorites.py
+│       ├── test_groups.py
+│       ├── test_notifications.py
+│       ├── test_saved_queries.py
+│       └── test_search.py
 │
 ├── frontend/
 │   ├── Dockerfile            # Node 20 build + Nginx runtime
@@ -560,31 +620,50 @@ opal/
 │   ├── tsconfig.json         # TypeScript strict
 │   └── src/
 │       ├── main.tsx          # Point d'entree React
-│       ├── App.tsx           # Routing et layout
+│       ├── App.tsx           # Routing et layout (16 pages)
+│       ├── opal-theme.css    # Theme Neumorphic Emerald Night
 │       ├── auth/
 │       │   └── KeycloakContext.tsx  # Contexte auth + RBAC frontend
 │       ├── api/
-│       │   └── client.ts     # Client Axios (71+ endpoints)
+│       │   └── client.ts     # Client Axios (100+ endpoints)
 │       ├── types/
 │       │   └── index.ts      # Interfaces TypeScript
+│       ├── hooks/
+│       │   ├── useNotifDots.ts    # Pastilles de notification
+│       │   ├── useSessionState.ts # Etat session en memoire
+│       │   └── useIsMobile.ts     # Detection mobile
 │       ├── i18n/
 │       │   ├── index.ts      # Configuration i18next
 │       │   ├── en.json       # Traductions anglais
 │       │   └── fr.json       # Traductions francais
-│       ├── pages/
+│       ├── pages/            # 16 pages
+│       │   ├── HomePage.tsx
 │       │   ├── QualityPage.tsx
 │       │   ├── CohortPage.tsx
+│       │   ├── DataManagementPage.tsx
 │       │   ├── MappingPage.tsx
 │       │   ├── ConceptExplorerPage.tsx
 │       │   ├── CdmManagementPage.tsx
 │       │   ├── SettingsPage.tsx
 │       │   ├── OhdsiPage.tsx
+│       │   ├── IncidencePage.tsx
+│       │   ├── EstimationPage.tsx
+│       │   ├── ConceptSetPage.tsx
 │       │   ├── AuditPage.tsx
 │       │   ├── UserManagementPage.tsx
-│       │   └── LoginPage.tsx
+│       │   ├── LoginPage.tsx
+│       │   └── LandingPage.tsx
 │       └── components/
 │           ├── layout/
-│           │   └── Sidebar.tsx       # Navigation + CDM selector
+│           │   ├── Sidebar.tsx    # Navigation + CDM selector
+│           │   └── TopNav.tsx     # Barre superieure + recherche globale
+│           ├── ui/                # Composants Neumorphic custom
+│           │   ├── Card.tsx
+│           │   ├── Checkbox.tsx
+│           │   ├── Select.tsx
+│           │   └── Tabs.tsx
+│           ├── GlobalSearch.tsx   # Recherche globale
+│           ├── SqlEditor.tsx      # Editeur SQL (CodeMirror)
 │           ├── quality/
 │           │   ├── AnalysisResults.tsx
 │           │   ├── ComparisonView.tsx
@@ -592,6 +671,7 @@ opal/
 │           │   └── SnapshotTimeline.tsx
 │           └── cohort/
 │               ├── CriteriaPanel.tsx
+│               ├── CriteriaGroupEditor.tsx
 │               ├── QueryCanvas.tsx
 │               ├── ResultsPanel.tsx
 │               ├── CharacterizationPanel.tsx
@@ -599,11 +679,14 @@ opal/
 │               └── PatientJourney.tsx
 │
 ├── keycloak/
-│   ├── realm-export.json     # Configuration du realm OPAL
-│   └── themes/               # Theme personnalise
+│   ├── opal-realm.json       # Configuration du realm OPAL
+│   └── themes/opal/          # Theme personnalise Keycloak
 │
 └── scripts/
-    └── sapbert_mapping.py    # Generation des embeddings SapBERT
+    ├── sapbert_mapping.py    # Generation des embeddings SapBERT
+    ├── scrape_athena_ccam.py # Scraping vocabulaire CCAM depuis Athena
+    ├── reload_codebooks.sh   # Chargement des codebooks de reference
+    └── setup_keycloak.sh     # Configuration LDAP Keycloak
 ```
 
 ### Developpement local (sans Docker)
@@ -659,8 +742,10 @@ Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP. A
 | React 18 | Framework UI |
 | TypeScript 5 | Typage statique |
 | Vite 5 | Build et dev server |
-| Ant Design 5 | Composants UI |
+| Composants Neumorphic custom | Design system (Card, Select, Tabs, Checkbox…) |
+| Lucide React | Icones |
 | Recharts | Graphiques (barres, courbes, camemberts, aires) |
+| CodeMirror 6 | Editeur SQL |
 | Axios | Client HTTP |
 | i18next | Internationalisation |
 | React Router 6 | Routing SPA |

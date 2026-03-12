@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useSessionState } from '../../hooks/useSessionState';
 import { ArrowLeftRight, AlertTriangle, TrendingUp, TrendingDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { cdmApi, qualityApi } from '../../api/client';
+import { cdmApi, cdmAccessApi, qualityApi } from '../../api/client';
 import AnalysisResults from './AnalysisResults';
 import type { CdmConfig, ComparisonResult } from '../../types';
 import { Card, Select, Button, Alert, Tag, Table, useToast } from '../ui';
@@ -18,11 +19,13 @@ export default function ComparisonView({ cdmNameA, cdmNameB, domain, onCdmBChang
   const { t } = useTranslation();
   const toast = useToast();
   const [cdms, setCdms] = useState<CdmConfig[]>([]);
-  const [comparison, setComparison] = useState<ComparisonResult | null>(null);
+  const [comparison, setComparison] = useSessionState<ComparisonResult | null>('quality:comparison:result', null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    cdmApi.list().then((res) => setCdms(res.data.cdms));
+    cdmAccessApi.getAccessibleCdms()
+      .then((res) => setCdms(res.data.cdms.map((name: string) => ({ name } as CdmConfig))))
+      .catch(() => cdmApi.list().then((r) => setCdms(r.data.cdms)).catch(() => {}));
   }, []);
 
   const runComparison = async () => {
