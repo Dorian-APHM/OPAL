@@ -7,10 +7,10 @@ ENV https_proxy=${HTTPS_PROXY}
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json ./
 RUN npm config set strict-ssl false && \
     if [ -n "$HTTP_PROXY" ]; then npm config set proxy $HTTP_PROXY && npm config set https-proxy $HTTPS_PROXY; fi && \
-    npm install
+    npm ci
 
 COPY . .
 RUN npm run build
