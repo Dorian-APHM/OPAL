@@ -34,26 +34,19 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             full_table = f"{omop_schema}.{table}"
 
             try:
-                # Basic stats
+                # Basic stats + mapping stats in a single scan (P9 fix)
                 cur.execute(f"""
                     SELECT
                         COUNT(*) AS total_records,
-                        COUNT(DISTINCT {person_id}) AS distinct_persons
+                        COUNT(DISTINCT {person_id}) AS distinct_persons,
+                        COUNT(DISTINCT {source_value}) AS total_terms,
+                        COUNT(DISTINCT CASE WHEN {concept_id} != 0 THEN {source_value} END) AS mapped_terms
                     FROM {full_table}
                 """)
                 row = cur.fetchone()
                 total_records = int(row["total_records"] or 0)
                 distinct_persons = int(row["distinct_persons"] or 0)
                 pct_persons = (distinct_persons / total_persons * 100) if total_persons > 0 else 0
-
-                # Mapping stats
-                cur.execute(f"""
-                    SELECT
-                        COUNT(DISTINCT {source_value}) AS total_terms,
-                        COUNT(DISTINCT CASE WHEN {concept_id} != 0 THEN {source_value} END) AS mapped_terms
-                    FROM {full_table}
-                """)
-                row = cur.fetchone()
                 total_terms = int(row["total_terms"] or 0)
                 mapped_terms = int(row["mapped_terms"] or 0)
                 unmapped_terms = total_terms - mapped_terms

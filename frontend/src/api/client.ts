@@ -385,11 +385,13 @@ export const ohdsiApi = {
   }) => api.post(`/ohdsi/run/${service}`, params),
   stop: (service: string) => api.post(`/ohdsi/stop/${service}`),
   status: () => api.get<Record<string, { status: string; log_count: number }>>('/ohdsi/status'),
-  logsUrl: (service: string, offset?: number) => {
-    const token = _getToken?.();
+  logsUrl: async (service: string, offset?: number): Promise<string> => {
     const params = new URLSearchParams();
     if (offset) params.set('offset', String(offset));
-    if (token) params.set('token', token);
+    try {
+      const resp = await api.post<{ ticket: string }>('/auth/sse-ticket');
+      params.set('ticket', resp.data.ticket);
+    } catch { /* will get 401 on SSE if ticket fails */ }
     const qs = params.toString();
     return `/api/ohdsi/logs/${service}${qs ? `?${qs}` : ''}`;
   },

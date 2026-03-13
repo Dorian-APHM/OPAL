@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 def _utcnow():
     return datetime.now(timezone.utc)
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
+from sqlalchemy import Column, Index, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -32,6 +32,11 @@ class CdmConfig(Base):
 class AnalysisSnapshot(Base):
     """Versioned analysis snapshots."""
     __tablename__ = "analysis_snapshots"
+    __table_args__ = (
+        Index("ix_snapshots_cdm_domain", "cdm_name", "domain"),
+        Index("ix_snapshots_cdm_domain_version", "cdm_name", "domain", "version"),
+        UniqueConstraint("cdm_name", "domain", "version", name="uq_snapshot_cdm_domain_version"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     cdm_name = Column(String(255), nullable=False, index=True)
@@ -72,6 +77,10 @@ class Cohort(Base):
 class CohortVersion(Base):
     """Versioned cohort criteria & results. Each edit creates a new version."""
     __tablename__ = "cohort_versions"
+    __table_args__ = (
+        Index("ix_cohort_versions_cohort_version", "cohort_id", "version"),
+        UniqueConstraint("cohort_id", "version", name="uq_cohort_version"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     cohort_id = Column(Integer, nullable=False, index=True)
@@ -90,6 +99,10 @@ class MappingDecision(Base):
     Each row records one decision: approve, modify, reject, or rollback.
     """
     __tablename__ = "mapping_decisions"
+    __table_args__ = (
+        Index("ix_mapping_decisions_cdm_domain", "cdm_name", "domain"),
+        Index("ix_mapping_decisions_cdm_domain_sv", "cdm_name", "domain", "source_value"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     cdm_name = Column(String(255), nullable=False, index=True)
@@ -251,6 +264,9 @@ class SavedQuery(Base):
 class Notification(Base):
     """In-app notifications."""
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read", "username", "read"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(255), nullable=False, index=True)

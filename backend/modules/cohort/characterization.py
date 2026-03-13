@@ -110,7 +110,7 @@ def run_characterization(
                     "patients_with_data": 0,
                     "pct_with_data": 0,
                     "top_concepts": [],
-                    "error": str(e),
+                    "error": "An internal error occurred",
                 })
             _report(domain_name)
         results["domain_prevalence"] = domain_prev
