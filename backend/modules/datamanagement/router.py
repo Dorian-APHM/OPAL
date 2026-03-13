@@ -54,7 +54,8 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", cdm.name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return cdm, conn
 
 
@@ -387,7 +388,7 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
             logger.exception("Extraction failed")
             task = _active_extractions.get(task_id)
             if task:
-                task["error"] = str(e)
+                task["error"] = "An internal error occurred during data extraction"
                 task["status"] = "error"
         finally:
             if conn:
@@ -440,13 +441,17 @@ def extract_download_task(task_id: str):
     if not csv_data:
         raise HTTPException(status_code=404, detail="CSV data not available")
 
-    # Clean up after download
+    # Clean up after download — free memory
+    # Use a copy so cleanup doesn't race with the streaming response
     _active_extractions.pop(task_id, None)
 
     return StreamingResponse(
         iter([csv_data]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(csv_data.encode("utf-8"))),
+        },
     )
 
 

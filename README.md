@@ -113,6 +113,12 @@ docker compose down -v       # Arret + suppression des volumes (reset complet)
 | `KEYCLOAK_REALM` | `opal` | Realm Keycloak |
 | `KEYCLOAK_CLIENT_ID` | `opal-frontend` | Client ID Keycloak |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Origines CORS autorisees |
+| `OMOP_POOL_MIN_CONN` | `2` | Connexions idle maintenues par pool CDM |
+| `OMOP_POOL_MAX_CONN` | `20` | Max connexions simultanees par CDM |
+| `OMOP_POOL_IDLE_TIMEOUT` | `1800` | Eviction des pools inactifs (secondes) |
+| `APP_DB_POOL_SIZE` | `10` | Taille du pool SQLAlchemy (base app) |
+| `APP_DB_MAX_OVERFLOW` | `20` | Connexions supplementaires sous charge |
+| `APP_DB_POOL_RECYCLE` | `1800` | Recyclage des connexions app (secondes) |
 
 ### Parametres d'analyse (par CDM)
 

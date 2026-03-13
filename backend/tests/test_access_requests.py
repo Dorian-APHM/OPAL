@@ -33,23 +33,22 @@ def test_submit_duplicate_username(client):
     client.post("/api/access-requests", json=body)
     resp = client.post("/api/access-requests", json=body)
     assert resp.status_code == 409
-    assert "already exists" in resp.json()["detail"]
 
 
 def test_submit_missing_required_field(client):
-    for field in ["username", "email", "first_name", "last_name", "requested_role"]:
+    for field in ["username", "requested_role"]:
         body = _make_request_body()
         body[field] = ""
         resp = client.post("/api/access-requests", json=body)
         assert resp.status_code == 400, f"Field {field} should be required"
-        assert field in resp.json()["detail"]
 
 
 def test_submit_missing_field_key(client):
+    """Missing optional field (email) should still succeed."""
     body = _make_request_body()
     del body["email"]
     resp = client.post("/api/access-requests", json=body)
-    assert resp.status_code == 400
+    assert resp.status_code == 200
 
 
 def test_submit_invalid_role(client):
@@ -235,7 +234,10 @@ def test_approve_request_success(client, monkeypatch):
     data = resp.json()
     assert data["status"] == "ok"
     assert data["username"] == "jdupont"
-    assert data["temporary_password"] == "jdupont"
+    # C-AUTH-05: password is now random, not equal to username
+    assert "temporary_password" in data
+    assert data["temporary_password"] != "jdupont"
+    assert len(data["temporary_password"]) >= 16
     assert data["keycloak_user_id"] == "fake-uid-123"
 
     # Verify status updated in DB

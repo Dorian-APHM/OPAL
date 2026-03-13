@@ -104,7 +104,8 @@ def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", req.cdm_name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
 
     try:
         results = run_domain_analysis(
@@ -117,7 +118,7 @@ def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends
         )
     except Exception as e:
         logger.exception("Analysis failed for %s/%s", req.cdm_name, req.domain)
-        raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Analysis failed due to an internal error")
     finally:
         conn.close()
 
@@ -162,7 +163,8 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", req.cdm_name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
 
     results_list = []
     errors = []
@@ -185,7 +187,7 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
                 })
             except Exception as e:
                 logger.exception("Batch analysis failed for %s/%s", req.cdm_name, domain)
-                errors.append({"domain": domain, "error": str(e)})
+                errors.append({"domain": domain, "error": "Analysis failed due to an internal error"})
     finally:
         conn.close()
 
@@ -259,7 +261,8 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
         try:
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
         except Exception as e:
-            progress_q.put({"type": "error", "message": str(e)})
+            logger.exception("Stream analysis: cannot connect to CDM '%s'", cdm_name)
+            progress_q.put({"type": "error", "message": "Cannot connect to CDM database"})
             progress_q.put(None)  # sentinel
             _active_analyses.pop(analysis_id, None)
             return
@@ -306,7 +309,7 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
                         _active_analyses[analysis_id]["completed"] = completed
                         _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
                     progress_q.put({"type": "progress", "domain": domain, "status": "error",
-                                    "error": str(e), "completed": completed, "total": total})
+                                    "error": "Analysis failed due to an internal error", "completed": completed, "total": total})
         finally:
             conn.close()
             _active_analyses.pop(analysis_id, None)

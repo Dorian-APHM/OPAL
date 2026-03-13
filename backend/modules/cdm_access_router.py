@@ -12,10 +12,28 @@ from sqlalchemy.orm import Session
 
 from db.app_db import get_db
 from db.models import CdmAccess, CdmGroupAccess, CdmConfig, UserGroupMember
-from auth.permissions import has_any_full_visibility
+from auth.permissions import has_any_full_visibility, can_manage_access as _can_manage, can_clear_all_grants as _can_clear
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cdm-access", tags=["cdm-access"])
+
+
+def _require_manage_access(request: Request):
+    """Raise 403 if the current user's roles don't have can_manage_access."""
+    user = getattr(request.state, "user", {})
+    roles = user.get("roles", [])
+    if not any(_can_manage(r) for r in roles):
+        raise HTTPException(status_code=403, detail="Forbidden: insufficient permissions to manage CDM access")
+    return user
+
+
+def _require_clear_all(request: Request):
+    """Raise 403 if the current user's roles don't have can_clear_all_grants."""
+    user = getattr(request.state, "user", {})
+    roles = user.get("roles", [])
+    if not any(_can_clear(r) for r in roles):
+        raise HTTPException(status_code=403, detail="Forbidden: insufficient permissions to clear all CDM grants")
+    return user
 
 
 def _user_has_cdm_access(cdm_name: str, username: str, db: Session) -> bool:
@@ -92,8 +110,10 @@ class RevokeGroupAccessRequest(BaseModel):
 
 @router.get("/")
 def list_access(
+    request: Request,
     cdm_name: str | None = None,
     username: str | None = None,
+    user=Depends(_require_manage_access),
     db: Session = Depends(get_db),
 ):
     """List CDM access grants (user + group), optionally filtered."""
@@ -167,8 +187,8 @@ def get_accessible_cdms(
 
 
 @router.post("/grant")
-def grant_access(req: GrantAccessRequest, request: Request, db: Session = Depends(get_db)):
-    """Grant a user access to a CDM (admin only)."""
+def grant_access(req: GrantAccessRequest, request: Request, user=Depends(_require_manage_access), db: Session = Depends(get_db)):
+    """Grant a user access to a CDM (requires can_manage_access)."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -192,8 +212,8 @@ def grant_access(req: GrantAccessRequest, request: Request, db: Session = Depend
 
 
 @router.post("/grant-group")
-def grant_group_access(req: GrantGroupAccessRequest, request: Request, db: Session = Depends(get_db)):
-    """Grant a user group access to a CDM (admin only).
+def grant_group_access(req: GrantGroupAccessRequest, request: Request, user=Depends(_require_manage_access), db: Session = Depends(get_db)):
+    """Grant a user group access to a CDM (requires can_manage_access).
     All members of the group will have access. Membership is resolved dynamically.
     """
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
@@ -224,8 +244,8 @@ def grant_group_access(req: GrantGroupAccessRequest, request: Request, db: Sessi
 
 
 @router.post("/revoke")
-def revoke_access(req: RevokeAccessRequest, db: Session = Depends(get_db)):
-    """Revoke a user's access to a CDM (admin only)."""
+def revoke_access(req: RevokeAccessRequest, request: Request, user=Depends(_require_manage_access), db: Session = Depends(get_db)):
+    """Revoke a user's access to a CDM (requires can_manage_access)."""
     access = db.query(CdmAccess).filter(
         CdmAccess.cdm_name == req.cdm_name,
         CdmAccess.username == req.username,
@@ -238,8 +258,8 @@ def revoke_access(req: RevokeAccessRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/revoke-group")
-def revoke_group_access(req: RevokeGroupAccessRequest, db: Session = Depends(get_db)):
-    """Revoke a group's access to a CDM (admin only)."""
+def revoke_group_access(req: RevokeGroupAccessRequest, request: Request, user=Depends(_require_manage_access), db: Session = Depends(get_db)):
+    """Revoke a group's access to a CDM (requires can_manage_access)."""
     access = db.query(CdmGroupAccess).filter(
         CdmGroupAccess.cdm_name == req.cdm_name,
         CdmGroupAccess.group_name == req.group_name,
@@ -252,8 +272,8 @@ def revoke_group_access(req: RevokeGroupAccessRequest, db: Session = Depends(get
 
 
 @router.delete("/cdm/{cdm_name}")
-def clear_cdm_access(cdm_name: str, db: Session = Depends(get_db)):
-    """Remove all access controls for a CDM (makes it open to all)."""
+def clear_cdm_access(cdm_name: str, request: Request, user=Depends(_require_clear_all), db: Session = Depends(get_db)):
+    """Remove all access controls for a CDM (requires can_clear_all_grants)."""
     deleted_users = db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete()
     deleted_groups = db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete()
     db.commit()
