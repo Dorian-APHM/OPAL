@@ -1,17 +1,71 @@
 """
 CDM management API endpoints — CRUD for CDM connections.
 """
+import ipaddress
+import re
+import socket
+
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 
 from db.app_db import get_db
 from db.models import CdmConfig, AnalysisSettings
-from db.omop_connector import test_omop_connection
+from db.omop_connector import test_omop_connection, invalidate_pool
 from utils.crypto import encrypt_password, decrypt_password
 from config import DEFAULT_OMOP_SCHEMA
 
 router = APIRouter(prefix="/api/cdm", tags=["cdm"])
+
+
+def _validate_db_host(host: str) -> str:
+    """Validate db_host to prevent SSRF attacks.
+
+    Rejects loopback, link-local, metadata endpoints, and other dangerous targets.
+    """
+    host = host.strip()
+    if not host:
+        raise ValueError("db_host must not be empty")
+
+    # Reject common dangerous hostnames
+    dangerous_hostnames = {"localhost", "metadata.google.internal", "instance-data"}
+    if host.lower() in dangerous_hostnames:
+        raise ValueError(f"Hostname '{host}' is not allowed")
+
+    # Try to parse as IP address directly
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            raise ValueError(f"IP address '{host}' is not allowed (loopback/link-local/multicast)")
+        # Block cloud metadata IP (169.254.169.254)
+        if str(addr) == "169.254.169.254":
+            raise ValueError(f"IP address '{host}' is not allowed (cloud metadata endpoint)")
+        return host
+    except ValueError as e:
+        if "is not allowed" in str(e):
+            raise
+        # Not an IP — treat as hostname, continue validation
+
+    # Validate hostname format (RFC 1123)
+    hostname_re = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$")
+    if not hostname_re.match(host):
+        raise ValueError(f"Invalid hostname format: '{host}'")
+
+    # Resolve hostname and check resolved IP
+    try:
+        resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, _, _, _, sockaddr in resolved:
+            ip_str = sockaddr[0]
+            addr = ipaddress.ip_address(ip_str)
+            if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+                raise ValueError(f"Hostname '{host}' resolves to forbidden address {ip_str}")
+            if str(addr) == "169.254.169.254":
+                raise ValueError(f"Hostname '{host}' resolves to cloud metadata endpoint")
+    except socket.gaierror:
+        # Cannot resolve — allow it (may be reachable later from the backend container)
+        pass
+
+    return host
 
 
 class CdmCreateRequest(BaseModel):
@@ -23,6 +77,10 @@ class CdmCreateRequest(BaseModel):
     db_password: str = Field(..., min_length=1, max_length=1000)
     omop_schema: str = Field(default=DEFAULT_OMOP_SCHEMA, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+    @validator("db_host")
+    def validate_host(cls, v):
+        return _validate_db_host(v)
+
 
 class CdmTestRequest(BaseModel):
     db_host: str = Field(..., min_length=1, max_length=255)
@@ -30,6 +88,10 @@ class CdmTestRequest(BaseModel):
     db_name: str = Field(..., min_length=1, max_length=255)
     db_user: str = Field(..., min_length=1, max_length=255)
     db_password: str = Field(..., min_length=1, max_length=1000)
+
+    @validator("db_host")
+    def validate_host(cls, v):
+        return _validate_db_host(v)
 
 
 class CdmUpdateRequest(BaseModel):
@@ -39,6 +101,12 @@ class CdmUpdateRequest(BaseModel):
     db_user: str | None = Field(default=None, max_length=255)
     db_password: str | None = Field(default=None, max_length=1000)
     omop_schema: str | None = Field(default=None, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    @validator("db_host")
+    def validate_host(cls, v):
+        if v is not None:
+            return _validate_db_host(v)
+        return v
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -126,6 +194,9 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, db: Session = Depends(get_d
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
 
+    # Snapshot old connection params before update (for pool invalidation)
+    old_host, old_port, old_dbname, old_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
+
     if req.db_host is not None:
         cdm.db_host = req.db_host
     if req.db_port is not None:
@@ -140,6 +211,10 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, db: Session = Depends(get_d
         cdm.omop_schema = req.omop_schema
 
     db.commit()
+
+    # Invalidate the old pool so next request creates a fresh one
+    invalidate_pool(old_host, old_port, old_dbname, old_user)
+
     return {"message": f"CDM '{cdm_name}' updated successfully"}
 
 
@@ -149,6 +224,9 @@ def delete_cdm(cdm_name: str, db: Session = Depends(get_db)):
     cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
+
+    # Invalidate pool before deleting config
+    invalidate_pool(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user)
 
     db.delete(cdm)
     db.commit()

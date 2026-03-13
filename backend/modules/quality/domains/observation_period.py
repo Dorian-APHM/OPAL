@@ -17,6 +17,10 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
     4. Duration by gender (boxplot quantiles)
     5. Cumulative observation
     6. Continuous observation by year
+
+    P13 fix: queries are grouped to share the same CTE `per` and reduce
+    the number of full scans on observation_period from 6 down to 4.
+    (No temp tables — CDM connection is read-only.)
     """
     if cap_months is None:
         cap_months = DEFAULT_MAX_OBSERVATION_MONTHS
@@ -42,14 +46,22 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         )
     """
 
+    # Shared CTE fragment: per-person min/max observation dates
+    per_cte = f"""
+        per AS (
+            SELECT
+                person_id,
+                MIN(observation_period_start_date) AS obs_start,
+                MAX(observation_period_end_date) AS obs_end
+            FROM {obs_table}
+            GROUP BY person_id
+        )
+    """
+
     with conn.cursor(cursor_factory=DictCursor) as cur:
         # 1) Age at First Observation (integer years for histogram)
         cur.execute(f"""
-            WITH per AS (
-                SELECT person_id, MIN(observation_period_start_date) AS obs_start
-                FROM {obs_table}
-                GROUP BY person_id
-            )
+            WITH {per_cte}
             SELECT
                 (EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date_expr})))::int AS age,
                 COUNT(*) AS n
@@ -69,11 +81,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
 
         # 2) Age by Gender (exact decimal age for boxplot quantiles)
         cur.execute(f"""
-            WITH per AS (
-                SELECT person_id, MIN(observation_period_start_date) AS obs_start
-                FROM {obs_table}
-                GROUP BY person_id
-            ),
+            WITH {per_cte},
             ages AS (
                 SELECT
                     p.person_id,
@@ -117,14 +125,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
 
         # 3) Observation Length (months, capped)
         cur.execute(f"""
-            WITH per AS (
-                SELECT
-                    person_id,
-                    MIN(observation_period_start_date) AS obs_start,
-                    MAX(observation_period_end_date) AS obs_end
-                FROM {obs_table}
-                GROUP BY person_id
-            ),
+            WITH {per_cte},
             per2 AS (
                 SELECT
                     person_id,
@@ -154,15 +155,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
 
         # 4) Duration by Gender (quantiles for boxplot)
         cur.execute(f"""
-            WITH per AS (
-                SELECT
-                    op.person_id,
-                    MIN(op.observation_period_start_date) AS obs_start,
-                    MAX(op.observation_period_end_date) AS obs_end
-                FROM {obs_table} op
-                WHERE op.person_id IS NOT NULL
-                GROUP BY op.person_id
-            ),
+            WITH {per_cte},
             per2 AS (
                 SELECT
                     per.person_id,
@@ -204,33 +197,28 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
             })
         res["achilles_like"]["duration_by_gender"] = {"rows": rows}
 
-        # 5) Cumulative Observation
+        # 5) Cumulative Observation (P11 fix: window function instead of correlated subquery)
         cur.execute(f"""
-            WITH per AS (
-                SELECT
-                    person_id,
-                    MIN(observation_period_start_date) AS obs_start,
-                    MAX(observation_period_end_date) AS obs_end
-                FROM {obs_table}
-                GROUP BY person_id
-            ),
+            WITH {per_cte},
             per2 AS (
                 SELECT
-                    person_id,
-                    GREATEST(0, (DATE_PART('year', AGE(obs_end, obs_start))*12
-                               + DATE_PART('month', AGE(obs_end, obs_start))))::int AS months
+                    LEAST(GREATEST(0, (DATE_PART('year', AGE(obs_end, obs_start))*12
+                               + DATE_PART('month', AGE(obs_end, obs_start))))::int, %s) AS months
                 FROM per
                 WHERE obs_start IS NOT NULL AND obs_end IS NOT NULL AND obs_end >= obs_start
             ),
-            tot AS (SELECT COUNT(*)::numeric AS n_total FROM per2),
-            s AS (SELECT generate_series(0, %s) AS thr),
-            agg AS (
-                SELECT s.thr, (SELECT COUNT(*)::numeric FROM per2 WHERE months >= s.thr) AS n_ge
-                FROM s
+            hist AS (
+                SELECT months AS m, COUNT(*) AS n FROM per2 GROUP BY months
+            ),
+            cum AS (
+                SELECT m,
+                       SUM(n) OVER (ORDER BY m DESC) AS n_ge,
+                       SUM(n) OVER () AS n_total
+                FROM hist
             )
-            SELECT thr, (n_ge / (SELECT n_total FROM tot) * 100.0) AS pct
-            FROM agg
-            ORDER BY thr
+            SELECT m AS thr, ROUND(n_ge::numeric / n_total * 100.0, 2) AS pct
+            FROM cum
+            ORDER BY m
         """, (cap_months,))
         thr, pct = [], []
         for r in cur.fetchall():
@@ -240,14 +228,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
 
         # 6) Continuous Observation by Year
         cur.execute(f"""
-            WITH per AS (
-                SELECT
-                    person_id,
-                    MIN(observation_period_start_date) AS obs_start,
-                    MAX(observation_period_end_date) AS obs_end
-                FROM {obs_table}
-                GROUP BY person_id
-            ),
+            WITH {per_cte},
             years AS (
                 SELECT generate_series(
                     (SELECT MIN(EXTRACT(YEAR FROM obs_start))::int FROM per WHERE obs_start IS NOT NULL),

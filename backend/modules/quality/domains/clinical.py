@@ -10,20 +10,27 @@ from config import (
     DEFAULT_TOP_CONCEPTS,
     DEFAULT_MAX_RECORDS_PER_PERSON,
 )
+from utils.sql_safety import safe_identifier
 
 
 def _get_global_stats(cur, full_table: str, person_id: str) -> dict:
-    """Total rows and distinct persons for a clinical table."""
+    """Total rows and distinct persons for a clinical table.
+
+    Split into two queries so PostgreSQL can use an index-only scan on
+    person_id for the distinct count (when an index exists).
+    """
+    cur.execute(f"SELECT COUNT(*) AS total_rows FROM {full_table}")
+    total_rows = int(cur.fetchone()["total_rows"] or 0)
+
     cur.execute(f"""
-        SELECT
-            COUNT(*) AS total_rows,
-            COUNT(DISTINCT {person_id}) AS distinct_persons
-        FROM {full_table}
+        SELECT COUNT(*) AS distinct_persons
+        FROM (SELECT DISTINCT {person_id} FROM {full_table}) t
     """)
-    row = cur.fetchone()
+    distinct_persons = int(cur.fetchone()["distinct_persons"] or 0)
+
     return {
-        "total_rows": int(row["total_rows"] or 0),
-        "distinct_persons": int(row["distinct_persons"] or 0),
+        "total_rows": total_rows,
+        "distinct_persons": distinct_persons,
     }
 
 
@@ -74,20 +81,41 @@ def _get_records_per_person(cur, full_table: str, person_id: str, max_bin: int) 
 
 def _get_top_concepts(cur, full_table: str, concept_id: str,
                       source_value: str, concept_table: str, limit: int) -> list:
-    """Top N concepts by record count."""
+    """Top N concepts by record count.
+
+    Uses a LATERAL subquery to cap source_values at 10 per concept,
+    avoiding a full STRING_AGG(DISTINCT) over potentially thousands
+    of values per concept (P7 fix).
+    """
     cur.execute(f"""
         SELECT
-            t.{concept_id} AS concept_id,
-            c.concept_name,
-            STRING_AGG(DISTINCT t.{source_value}, ', ' ORDER BY t.{source_value}) AS source_value,
-            COUNT(*) AS n_records,
-            COUNT(DISTINCT t.person_id) AS n_persons
-        FROM {full_table} t
-        JOIN {concept_table} c ON t.{concept_id} = c.concept_id
-        WHERE t.{concept_id} != 0
-        GROUP BY t.{concept_id}, c.concept_name
-        ORDER BY n_records DESC
-        LIMIT %s
+            top.concept_id,
+            top.concept_name,
+            sv.source_value,
+            top.n_records,
+            top.n_persons
+        FROM (
+            SELECT
+                t.{concept_id} AS concept_id,
+                c.concept_name,
+                COUNT(*) AS n_records,
+                COUNT(DISTINCT t.person_id) AS n_persons
+            FROM {full_table} t
+            JOIN {concept_table} c ON t.{concept_id} = c.concept_id
+            WHERE t.{concept_id} != 0
+            GROUP BY t.{concept_id}, c.concept_name
+            ORDER BY n_records DESC
+            LIMIT %s
+        ) top
+        LEFT JOIN LATERAL (
+            SELECT STRING_AGG(DISTINCT sub.{source_value}, ', ' ORDER BY sub.{source_value}) AS source_value
+            FROM (
+                SELECT DISTINCT {source_value}
+                FROM {full_table}
+                WHERE {concept_id} = top.concept_id
+                LIMIT 10
+            ) sub
+        ) sv ON true
     """, (limit,))
     return [
         {
@@ -103,25 +131,16 @@ def _get_top_concepts(cur, full_table: str, concept_id: str,
 
 def _get_mapping_stats(cur, full_table: str, source_value: str, concept_id: str,
                        top_unmapped: int, source_name_col: str | None = None) -> dict:
-    """Mapping quality statistics: terms, rows, and top unmapped terms."""
-    # Term-level stats
-    cur.execute(f"""
-        SELECT
-            COUNT(DISTINCT {source_value}) AS total_terms,
-            COUNT(DISTINCT CASE WHEN {concept_id} != 0 THEN {source_value} END) AS mapped_terms
-        FROM {full_table}
-    """)
-    row = cur.fetchone()
-    total_terms = int(row["total_terms"] or 0)
-    mapped_terms = int(row["mapped_terms"] or 0)
-    unmapped_terms = total_terms - mapped_terms
-    pct_terms_mapped = (mapped_terms / total_terms * 100) if total_terms > 0 else None
+    """Mapping quality statistics: terms, rows, and top unmapped terms.
 
-    # Row-level stats
+    Term-level and row-level stats are computed in a single scan (P8 fix).
+    """
     cur.execute(f"""
         SELECT
             COUNT(*) AS total_rows,
-            COUNT(CASE WHEN {concept_id} != 0 THEN 1 END) AS mapped_rows
+            COUNT(CASE WHEN {concept_id} != 0 THEN 1 END) AS mapped_rows,
+            COUNT(DISTINCT {source_value}) AS total_terms,
+            COUNT(DISTINCT CASE WHEN {concept_id} != 0 THEN {source_value} END) AS mapped_terms
         FROM {full_table}
     """)
     row = cur.fetchone()
@@ -129,6 +148,10 @@ def _get_mapping_stats(cur, full_table: str, source_value: str, concept_id: str,
     mapped_rows = int(row["mapped_rows"] or 0)
     unmapped_rows = total_rows - mapped_rows
     pct_rows_mapped = (mapped_rows / total_rows * 100) if total_rows > 0 else None
+    total_terms = int(row["total_terms"] or 0)
+    mapped_terms = int(row["mapped_terms"] or 0)
+    unmapped_terms = total_terms - mapped_terms
+    pct_terms_mapped = (mapped_terms / total_terms * 100) if total_terms > 0 else None
 
     # Top unmapped terms
     if source_name_col:
@@ -188,14 +211,15 @@ def run_clinical_domain_analysis(
         raise ValueError(f"Unknown clinical domain: {domain_name}")
 
     cfg = DOMAIN_CONFIG[domain_name]
-    table = cfg["table"]
-    person_id = cfg["person_id"]
-    date_col = cfg["date_col"]
-    concept_id = cfg["concept_id"]
-    source_value = cfg["source_value"]
-    source_name_col = cfg.get("source_name")
-    concept_table = f"{omop_schema}.concept"
-    full_table = f"{omop_schema}.{table}"
+    table = safe_identifier(cfg["table"])
+    person_id = safe_identifier(cfg["person_id"])
+    date_col = safe_identifier(cfg["date_col"])
+    concept_id = safe_identifier(cfg["concept_id"])
+    source_value = safe_identifier(cfg["source_value"])
+    source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+    schema = safe_identifier(omop_schema)
+    concept_table = f"{schema}.concept"
+    full_table = f"{schema}.{table}"
 
     res = {
         "domain": domain_name,

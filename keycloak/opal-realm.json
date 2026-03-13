@@ -55,6 +55,17 @@
             "claim.name": "roles",
             "jsonType.label": "String"
           }
+        },
+        {
+          "name": "opal-audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "opal-frontend",
+            "id.token.claim": "true",
+            "access.token.claim": "true"
+          }
         }
       ]
     }
@@ -71,7 +82,7 @@
         {
           "type": "password",
           "value": "admin",
-          "temporary": false
+          "temporary": true
         }
       ],
       "realmRoles": ["admin"]

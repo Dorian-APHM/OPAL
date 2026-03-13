@@ -16,6 +16,7 @@ from db.models import CdmConfig, AnalysisSettings
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA
+from utils.sql_safety import safe_identifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/concepts", tags=["concepts"])
@@ -33,11 +34,12 @@ def _get_conn(db: Session, cdm_name: str):
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    schema = _get_omop_schema(db, cdm)
+    schema = safe_identifier(_get_omop_schema(db, cdm))
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", cdm_name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return conn, schema
 
 
@@ -60,10 +62,13 @@ def search_concepts(
             params = []
 
             if q:
-                # Support searching by concept_id (integer) or text
+                q = q.strip()
+                # Support searching by concept_id (integer), concept_code, or text
                 if q.isdigit():
-                    conditions.append("c.concept_id = %s")
-                    params.append(int(q))
+                    conditions.append(
+                        "(c.concept_id = %s OR c.concept_code = %s OR c.concept_code ILIKE %s)"
+                    )
+                    params.extend([int(q), q, f"%{q}%"])
                 else:
                     conditions.append(
                         "(c.concept_name ILIKE %s OR c.concept_code ILIKE %s)"
@@ -83,12 +88,14 @@ def search_concepts(
 
             where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
+            # P22 fix: COUNT(*) OVER() in a single query instead of 2 separate scans
             cur.execute(
                 f"""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.domain_id, c.vocabulary_id, c.concept_class_id,
                        c.standard_concept, c.valid_start_date::text, c.valid_end_date::text,
-                       c.invalid_reason
+                       c.invalid_reason,
+                       COUNT(*) OVER() AS _total_count
                 FROM {schema}.concept c
                 {where}
                 ORDER BY c.concept_name
@@ -96,14 +103,9 @@ def search_concepts(
                 """,
                 params + [limit, offset],
             )
-            concepts = [dict(r) for r in cur.fetchall()]
-
-            # Get total count
-            cur.execute(
-                f"SELECT COUNT(*) AS cnt FROM {schema}.concept c {where}",
-                params,
-            )
-            total = cur.fetchone()["cnt"]
+            rows = cur.fetchall()
+            total = rows[0]["_total_count"] if rows else 0
+            concepts = [{k: v for k, v in dict(r).items() if k != "_total_count"} for r in rows]
 
         return {"concepts": concepts, "total": total, "limit": limit, "offset": offset}
     finally:
@@ -253,10 +255,10 @@ def get_concept_source_values(
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             for domain_name, cfg in DOMAIN_CONFIG.items():
-                table = cfg["table"]
-                concept_col = cfg["concept_id"]
-                source_col = cfg["source_value"]
-                source_concept_col = cfg.get("source_concept_id")
+                table = safe_identifier(cfg["table"])
+                concept_col = safe_identifier(cfg["concept_id"])
+                source_col = safe_identifier(cfg["source_value"])
+                source_concept_col = safe_identifier(cfg["source_concept_id"]) if cfg.get("source_concept_id") else None
 
                 # Build WHERE clause: match standard concept_id OR source_concept_id
                 where_parts = [f"{concept_col} = %s"]
@@ -321,10 +323,10 @@ def search_source_value(
             union_parts = []
             params = []
             for domain_name, cfg in domains_to_search.items():
-                table = cfg["table"]
-                concept_col = cfg["concept_id"]
-                source_col = cfg["source_value"]
-                source_name_col = cfg.get("source_name")
+                table = safe_identifier(cfg["table"])
+                concept_col = safe_identifier(cfg["concept_id"])
+                source_col = safe_identifier(cfg["source_value"])
+                source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
                 where_clause = f"t.{source_col} ILIKE %s"
                 query_params = [domain_name, f"%{q}%"]
                 if source_name_col:
@@ -372,9 +374,9 @@ def search_source_value(
 
         return {"results": results, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
-        logger.error("Source value search failed: %s", e)
+        logger.exception("Source value search failed")
         conn.rollback()
-        return {"results": [], "total": 0, "limit": limit, "offset": offset, "error": str(e)}
+        return {"results": [], "total": 0, "limit": limit, "offset": offset, "error": "An internal error occurred"}
     finally:
         conn.close()
 
@@ -404,10 +406,10 @@ def export_source_value_search(
             union_parts = []
             params = []
             for domain_name, cfg in domains_to_search.items():
-                table = cfg["table"]
-                concept_col = cfg["concept_id"]
-                source_col = cfg["source_value"]
-                source_name_col = cfg.get("source_name")
+                table = safe_identifier(cfg["table"])
+                concept_col = safe_identifier(cfg["concept_id"])
+                source_col = safe_identifier(cfg["source_value"])
+                source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
                 where_clause = f"t.{source_col} ILIKE %s"
                 query_params = [domain_name, f"%{q}%"]
                 if source_name_col:
@@ -491,8 +493,8 @@ def get_concept_counts(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Query standard concept_id columns (all indexed → fast)
             for cfg in DOMAIN_CONFIG.values():
-                table = cfg["table"]
-                concept_col = cfg["concept_id"]
+                table = safe_identifier(cfg["table"])
+                concept_col = safe_identifier(cfg["concept_id"])
                 try:
                     cur.execute(
                         f"SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
@@ -534,8 +536,8 @@ def get_concept_source_counts(
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             for cfg in domains_to_search.values():
-                table = cfg["table"]
-                source_concept_col = cfg.get("source_concept_id")
+                table = safe_identifier(cfg["table"])
+                source_concept_col = safe_identifier(cfg["source_concept_id"]) if cfg.get("source_concept_id") else None
                 if not source_concept_col:
                     continue
                 try:

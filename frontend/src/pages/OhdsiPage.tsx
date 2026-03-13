@@ -122,14 +122,15 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   }, [loadFiles]);
 
   // SSE log streaming with auto-reconnect and offset tracking
-  const startSSE = useCallback((service: string) => {
+  const startSSE = useCallback(async (service: string) => {
     // Close existing
     if (eventSourcesRef.current[service]) {
       eventSourcesRef.current[service].close();
     }
 
     const offset = logOffsetRef.current[service] || 0;
-    const es = new EventSource(ohdsiApi.logsUrl(service, offset));
+    const url = await ohdsiApi.logsUrl(service, offset);
+    const es = new EventSource(url);
     eventSourcesRef.current[service] = es;
 
     es.onmessage = (event) => {

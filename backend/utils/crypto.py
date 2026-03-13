@@ -18,11 +18,11 @@ def get_or_create_key() -> bytes:
             with open(SECRET_KEY_FILE, "rb") as f:
                 return f.read()
         except PermissionError:
-            os.chmod(SECRET_KEY_FILE, 0o644)
+            os.chmod(SECRET_KEY_FILE, 0o600)
             with open(SECRET_KEY_FILE, "rb") as f:
                 return f.read()
     key = Fernet.generate_key()
-    fd = os.open(str(SECRET_KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    fd = os.open(str(SECRET_KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(key)
     return key

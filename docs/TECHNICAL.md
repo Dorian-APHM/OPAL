@@ -33,7 +33,7 @@ Ce document decrit l'architecture interne, les choix de conception, le modele de
 
 - **Separation stricte** : la base applicative (`opal-db`) et les CDM externes sont deux mondes distincts
 - **Lecture seule** : les CDM sont accedes en lecture seule via `psycopg2` brut (pas d'ORM)
-- **Stateless** : chaque requete ouvre et ferme sa propre connexion CDM (pas de pool)
+- **Pool de connexions** : chaque CDM dispose d'un `ThreadedConnectionPool` psycopg2 (min=2, max=20 par defaut, configurable via env vars)
 - **Versioning** : snapshots d'analyse et versions de cohortes sont immuables
 - **Chiffrement** : mots de passe CDM chiffres Fernet au repos
 
@@ -120,9 +120,14 @@ Toute la configuration provient de variables d'environnement avec des valeurs pa
 
 ```python
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://opal:opal@opal-db:5432/opal")
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "")          # REQUIRED — generate with: openssl rand -hex 32
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "...")    # Internal Docker URL (backend → Keycloak)
+KEYCLOAK_ISSUER_URL = os.getenv("KEYCLOAK_ISSUER_URL", KEYCLOAK_URL)  # Public URL (browser → Keycloak)
+KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "opal-frontend")
 ```
+
+> **Note** : `KEYCLOAK_ISSUER_URL` doit correspondre a l'URL par laquelle les navigateurs accedent a Keycloak (ex: `http://myserver:8080`). Elle sert a verifier le champ `iss` des tokens JWT. `KEYCLOAK_URL` est l'URL interne Docker utilisee par le backend.
 
 Le dictionnaire `DOMAIN_CONFIG` mappe chaque domaine OMOP a sa table et ses colonnes :
 
@@ -151,23 +156,32 @@ DOMAIN_CONFIG = {
 #### Connecteur OMOP (`db/omop_connector.py`)
 
 - Connexions `psycopg2` pures (pas d'ORM)
-- Ouverture a la demande par requete
-- Mot de passe dechiffre a chaque connexion
-- Pattern context manager pour garantir la fermeture
-- `RealDictCursor` pour des resultats en dictionnaires
+- **Pool de connexions** par CDM (`ThreadedConnectionPool`, min=2, max=20)
+- Pool identifie par `host:port/dbname@user`, cree a la premiere requete
+- `conn.close()` remet la connexion au pool (wrapper `PooledConnection` transparent)
+- `rollback()` automatique au retour au pool pour nettoyer l'etat de session
+- Pool invalide automatiquement si le mot de passe CDM change
+- Eviction des pools inactifs >30min (thread daemon)
+- Fermeture propre de tous les pools au shutdown FastAPI
+- `test_omop_connection()` reste en connexion directe (pas de pool)
 
 ```python
-def get_cdm_connection(cdm_name: str, db: Session):
-    config = db.query(CdmConfig).filter_by(name=cdm_name).first()
-    password = decrypt_password(config.db_password_enc)
-    conn = psycopg2.connect(
-        host=config.db_host, port=config.db_port,
-        dbname=config.db_name, user=config.db_user,
-        password=password, connect_timeout=10
-    )
-    conn.set_session(readonly=True)
-    return conn
+# Le wrapper PooledConnection est transparent pour les routers :
+conn = get_omop_connection(host, port, dbname, user, password)
+try:
+    cur = conn.cursor()
+    cur.execute("SELECT ...")
+finally:
+    conn.close()  # remet au pool au lieu de fermer
 ```
+
+Configuration via variables d'environnement :
+
+| Variable | Defaut | Description |
+|----------|--------|-------------|
+| `OMOP_POOL_MIN_CONN` | `2` | Connexions idle maintenues par CDM |
+| `OMOP_POOL_MAX_CONN` | `20` | Maximum de connexions simultanees par CDM |
+| `OMOP_POOL_IDLE_TIMEOUT` | `1800` | Secondes avant eviction d'un pool inactif |
 
 ---
 
@@ -400,12 +414,25 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
                               └─────────────────────────┘
 ```
 
+### Index composites et contraintes
+
+| Table | Index / Contrainte | Colonnes |
+|-------|-------------------|----------|
+| `analysis_snapshots` | Index composite | `(cdm_name, domain)` |
+| `analysis_snapshots` | Index composite | `(cdm_name, domain, version)` |
+| `analysis_snapshots` | UniqueConstraint | `(cdm_name, domain, version)` |
+| `cohort_versions` | Index composite | `(cohort_id, version)` |
+| `cohort_versions` | UniqueConstraint | `(cohort_id, version)` |
+| `mapping_decisions` | Index composite | `(cdm_name, domain)` |
+| `mapping_decisions` | Index composite | `(cdm_name, domain, source_value)` |
+| `notifications` | Index composite | `(username, read)` |
+
 ### Conventions
 
 - Pas de systeme de migrations : `create_all()` est idempotent
 - Les resultats d'analyse sont stockes en JSON dans `analysis_snapshots.results`
 - Les criteres de cohorte sont stockes en JSON dans `cohort_versions.criteria_json`
-- Index sur `(cdm_name, domain)` pour les snapshots et decisions de mapping
+- Index composites sur les colonnes frequemment filtrees ensemble (voir tableau ci-dessus)
 - Contrainte d'unicite sur `cdm_configs.name` et `analysis_settings.cdm_name`
 
 ### Tables OMOP accedees (lecture seule)
@@ -457,6 +484,19 @@ def decrypt_password(encrypted: str) -> str:
     return f.decrypt(encrypted.encode()).decode()
 ```
 
+### Mode d'authentification
+
+Le comportement depend des variables `ENVIRONMENT` et `AUTH_ENABLED` :
+
+| `ENVIRONMENT` | `AUTH_ENABLED` | Comportement |
+|---|---|---|
+| `development` | `false` | Acces total sans login (warning en log a chaque requete, username = `dev-user`) |
+| `development` | `true` | Authentification Keycloak normale |
+| `production` | `true` | Authentification Keycloak normale |
+| `production` | `false` | **Refus de demarrer** (RuntimeError) |
+
+> En production, il est impossible de desactiver l'authentification. Le backend refuse de demarrer si `AUTH_ENABLED=false` et `ENVIRONMENT=production`.
+
 ### Authentification Keycloak
 
 **Protocole** : OpenID Connect avec PKCE (S256)
@@ -464,21 +504,37 @@ def decrypt_password(encrypted: str) -> str:
 **Architecture** :
 - Le frontend utilise `keycloak-js` pour le flux OIDC
 - Le backend valide les JWT localement via JWKS (pas d'appel reseau a chaque requete)
-- La validation JWKS evite le probleme de mismatch d'issuer (Docker hostname vs browser hostname)
 
 **Validation du token** :
 ```python
+expected_issuer = f"{KEYCLOAK_ISSUER_URL}/realms/{KEYCLOAK_REALM}"
 payload = jwt.decode(
     token,
     signing_key.key,
     algorithms=["RS256"],
+    audience=KEYCLOAK_CLIENT_ID,       # verify aud = "opal-frontend"
+    issuer=expected_issuer,            # verify iss = public Keycloak URL
     options={
-        "verify_iss": False,   # evite le mismatch Docker/browser
+        "verify_iss": True,
         "verify_exp": True,
-        "verify_aud": False,
+        "verify_aud": True,
     },
 )
 ```
+
+> Le mismatch Docker/browser pour l'issuer est resolu par `KEYCLOAK_ISSUER_URL` (URL publique) distincte de `KEYCLOAK_URL` (URL interne Docker). L'audience est injectee dans les tokens via un `oidc-audience-mapper` configure dans le client Keycloak.
+
+### Tickets SSE (connexions EventSource)
+
+L'API `EventSource` du navigateur ne supporte pas les headers custom (`Authorization`). Pour les endpoints SSE (ex: logs OHDSI en streaming), un systeme de **tickets a usage unique** est utilise :
+
+1. Le frontend appelle `POST /api/auth/sse-ticket` (authentifie via Bearer token)
+2. Le backend genere un ticket UUID valide **30 secondes**, stocke en memoire
+3. Le frontend ouvre `new EventSource('/api/ohdsi/logs/service?ticket=<ticket>')`
+4. Le middleware consomme le ticket (usage unique) et restaure l'identite utilisateur
+5. Toute reutilisation du meme ticket retourne 401
+
+> Ce mecanisme evite de transmettre le JWT dans l'URL, ou il serait visible dans les logs serveur, l'historique navigateur et les headers Referer.
 
 ### RBAC (Role-Based Access Control)
 
@@ -497,6 +553,31 @@ ROLE_ROUTE_ACCESS = {
     "medecin": ["/api/mapping", "/api/cohorts", "/api/concepts", "/api/i18n", "/api/health"],
 }
 ```
+
+### Mots de passe temporaires (creation d'utilisateurs)
+
+Lorsqu'un administrateur cree un utilisateur (approbation de demande d'acces ou ajout direct), le backend genere un **mot de passe aleatoire** de 22 caracteres (`secrets.token_urlsafe(16)`) :
+
+- Le mot de passe est marque `"temporary": true` dans Keycloak → l'utilisateur devra le changer a sa premiere connexion
+- Le mot de passe aleatoire est retourne **une seule fois** dans la reponse API (`temporary_password`) pour que l'admin puisse le communiquer a l'utilisateur
+- En mode LDAP (`KEYCLOAK_LDAP_ENABLED=true`), aucun mot de passe n'est genere car l'authentification est deleguee au LDAP
+
+> **Securite** : les mots de passe temporaires ne sont jamais derives du nom d'utilisateur ni d'informations previsibles.
+
+### Defense en profondeur (endpoint-level role checks)
+
+En plus du middleware qui filtre les routes via `permissions.yaml`, chaque endpoint sensible verifie les roles au niveau du code (defense en profondeur) :
+
+| Endpoints | Verification | Roles autorises |
+|---|---|---|
+| `/api/admin/*` (users, roles, access-requests) | `_require_admin()` | admin uniquement |
+| `/api/audit/*` (logs, stats, export) | `_require_admin()` | admin uniquement |
+| `/api/cdm-access/grant`, `/revoke`, `/grant-group`, `/revoke-group` | `_require_manage_access()` | roles avec `can_manage_access: true` (admin, data-manager) |
+| `/api/cdm-access/cdm/{name}` (clear all) | `_require_clear_all()` | roles avec `can_clear_all_grants: true` (admin) |
+| `/api/groups` (POST, PUT, DELETE, members) | `require_roles("admin", "data-manager")` | admin, data-manager |
+| `/api/groups` (GET) | aucune restriction | tous les utilisateurs authentifies |
+
+> Meme si le middleware est contourne ou mal configure, les endpoints refusent les appels non autorises avec une **403 Forbidden**.
 
 ### Protection contre les injections
 
@@ -520,22 +601,25 @@ Router (FastAPI)
     │
     ├── Dechiffre le mot de passe (Fernet)
     │
-    ├── Ouvre connexion psycopg2
-    │   - connect_timeout=10
-    │   - readonly=True
-    │   - RealDictCursor
+    ├── Checkout connexion depuis le pool CDM
+    │   - Pool cree a la 1ere requete (ThreadedConnectionPool)
+    │   - connect_timeout=10, statement_timeout=5min
+    │   - rollback() au checkout pour etat propre
     │
     ├── Execute la requete SQL
     │
-    └── Ferme la connexion
+    └── conn.close() → retour au pool (pas de fermeture reelle)
 ```
 
 ### Caracteristiques
 
-- **Pas de pool de connexions** : chaque requete ouvre et ferme sa connexion
-- **Lecture seule** : `conn.set_session(readonly=True)` sauf pour l'ecriture STCM
-- **Timeout** : 10 secondes de connexion
-- **Isolation** : chaque CDM a ses propres identifiants stockes
+- **Pool de connexions par CDM** : `ThreadedConnectionPool` (min=2, max=20, configurable)
+- **Wrapper transparent** : `PooledConnection` intercepte `close()` pour faire un `putconn()`
+- **Invalidation** : pool ferme et recree si mot de passe CDM change ou CDM supprime
+- **Eviction** : pools inactifs >30min fermes automatiquement (thread daemon)
+- **Lecture seule** : transactions read-only sauf pour l'ecriture STCM
+- **Timeout** : 10 secondes de connexion, 5 minutes par requete
+- **Isolation** : chaque CDM a ses propres identifiants et son propre pool
 
 ### Ecriture dans le CDM (opt-in)
 
@@ -576,6 +660,13 @@ router.py ──> engine.py ──> domains/{domain}.py
 3. Le module domaine genere les requetes SQL adaptees
 4. Les resultats sont structures en JSON et sauvegardes comme snapshot versionne
 5. Le versioning est automatique : `MAX(version) + 1` pour le couple `(cdm_name, domain)`
+
+### Optimisations SQL
+
+- **Dashboard** : stats de base + mapping fusionnees en 1 seule requete par domaine (4 agregats dans un seul scan)
+- **Domaines cliniques** : `COUNT(*)` et `COUNT(DISTINCT)` separes en 2 requetes pour profiter des index-only scans ; `STRING_AGG` des source_values limitee a 10 via `LATERAL` subquery ; stats mapping (terms + rows) calculees en 1 seul scan avec 4 agregats conditionnels
+- **Observation Period** : CTE `per` (MIN/MAX dates par patient) factorisee en fragment SQL reutilise dans les 6 analyses ; observation cumulative calculee via fenetre `SUM() OVER (ORDER BY m DESC)` au lieu d'une sous-requete correlee O(N * cap_months)
+- **Conformite** : checks par table clinique fusionnes en 1 requete avec `COUNT(*) FILTER (WHERE ...)` au lieu de 4 scans separes
 
 ### Metriques par domaine clinique
 
@@ -682,6 +773,11 @@ cte_c1 AS (
 
 La requete finale est un `SELECT DISTINCT person_id FROM ...` combinant tous les CTEs.
 
+### Optimisations
+
+- **Occurrence fenêtree** : la contrainte `N events within X days` utilise une window function `COUNT(*) OVER (PARTITION BY person_id ORDER BY event_date RANGE BETWEEN CURRENT ROW AND INTERVAL 'X days' FOLLOWING)` au lieu d'une sous-requete correlee O(N²)
+- **Liste des cohortes** : les dernieres versions sont chargees en 1 seule requete (subquery JOIN sur `MAX(version)`) au lieu de N+1
+
 ---
 
 ## 9. Moteur de suggestions de mapping
@@ -773,6 +869,13 @@ ORDER BY freq DESC
 ### Reference codebooks
 
 Les codebooks de reference enrichissent les descriptions des codes source. Lors d'une suggestion, si un codebook est charge pour le domaine, la description du code est ajoutee au `source_name` pour ameliorer la pertinence des recherches fuzzy et keyword.
+
+### Optimisations
+
+- **Dashboard mapping** : dernier snapshot par domaine charge en 1 requete (`DISTINCT ON`) au lieu de N+1
+- **Strategy stats** : agregation (approval rate, avg confidence) poussee en SQL (`GROUP BY`, `CASE`, `AVG`) au lieu de charger tous les objets ORM en memoire
+- **SapBERT batch** : charge uniquement les mappings des termes a traiter (`IN (source_codes)`) au lieu de tout le domaine (~100K+ lignes)
+- **Apply mapping** : batch INSERT via `execute_values()` en 1 round-trip au lieu de N inserts sequentiels
 
 ---
 
@@ -940,18 +1043,82 @@ pytest tests/test_api.py::test_function -v  # Un test specifique
 
 ## 14. Deploiement en production
 
-### Checklist
+### Installation pas-a-pas
 
-- [ ] Generer un `SECRET_KEY` fort : `openssl rand -hex 32`
-- [ ] Changer le mot de passe PostgreSQL par defaut
-- [ ] Activer Keycloak : `AUTH_ENABLED=true`
-- [ ] Changer le mot de passe admin Keycloak
-- [ ] Configurer un reverse proxy TLS (Traefik, Caddy, Nginx)
-- [ ] Ne pas exposer les ports 8000, 5432, 5434
-- [ ] Configurer `CORS_ORIGINS` pour le domaine de production
-- [ ] Monter les volumes sur du stockage persistant
-- [ ] Configurer des sauvegardes regulieres de `opal-db`
-- [ ] Configurer la rotation des logs d'audit
+#### 1. Preparer la configuration
+
+```bash
+cd /chemin/vers/opal
+cp .env.example .env
+```
+
+Editer `.env` avec les valeurs de production :
+
+```bash
+# OBLIGATOIRE — securite
+ENVIRONMENT=production
+SECRET_KEY=$(openssl rand -hex 32)     # cle de chiffrement des mots de passe CDM
+KEYCLOAK_ADMIN=opal-admin              # compte admin de la console Keycloak
+KEYCLOAK_ADMIN_PASSWORD=MotDePasse!Fort123   # mot de passe fort, PAS admin/admin
+POSTGRES_PASSWORD=MotDePassePostgres   # mot de passe de la base applicative
+
+# OBLIGATOIRE — authentification
+AUTH_ENABLED=true                      # obligatoire en production (le backend refuse de demarrer sinon)
+KEYCLOAK_ISSUER_URL=http://monserveur:8080   # URL publique de Keycloak (vue par les navigateurs)
+
+# OBLIGATOIRE — reseau
+CORS_ORIGINS=http://monserveur:3000    # URL(s) d'acces a OPAL, separees par des virgules
+```
+
+> **ENVIRONMENT=production** active les controles de securite au demarrage :
+> - `AUTH_ENABLED` doit etre `true` (sinon le backend refuse de demarrer)
+> - Les warnings de securite sont logges si des valeurs par defaut sont detectees
+
+> **KEYCLOAK_ISSUER_URL** doit correspondre exactement a l'URL que les navigateurs utilisent pour acceder a Keycloak. Elle sert a verifier le champ `iss` des tokens JWT. Si elle ne matche pas, tous les utilisateurs seront rejetes en 401.
+
+> **SECRET_KEY** chiffre les mots de passe CDM en base. Si vous la perdez ou la changez, il faudra re-saisir tous les mots de passe CDM dans OPAL.
+
+#### 2. Lancer les services
+
+```bash
+docker compose up -d
+```
+
+Au premier demarrage :
+- Keycloak importe automatiquement le realm `opal` (roles, client, mappers)
+- Un utilisateur OPAL `admin` est cree avec un mot de passe temporaire `admin`
+- La base applicative est creee automatiquement
+
+#### 3. Premier login
+
+1. Ouvrir `http://monserveur:3000` → redirection vers Keycloak
+2. Se connecter avec `admin` / `admin`
+3. Keycloak demande de changer le mot de passe (car `temporary: true`)
+4. Choisir un mot de passe fort → acces a OPAL
+
+#### 4. Configurer Keycloak (console admin)
+
+Acceder a `http://monserveur:8080` avec les credentials definis dans `.env` (`KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`).
+
+Depuis la console :
+- Configurer le LDAP si necessaire (synchronisation des comptes hospitaliers)
+- Creer des utilisateurs supplementaires avec les roles OPAL (`admin`, `data-manager`, `chercheur`, `medecin`)
+- Ajuster la politique de mots de passe (Realm settings → Authentication → Password policy)
+
+### Checklist de securite
+
+- [ ] `ENVIRONMENT=production`
+- [ ] `AUTH_ENABLED=true`
+- [ ] `SECRET_KEY` genere avec `openssl rand -hex 32`
+- [ ] `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` changes (pas `admin/admin`)
+- [ ] `KEYCLOAK_ISSUER_URL` pointe vers l'URL publique de Keycloak
+- [ ] `POSTGRES_PASSWORD` change (pas `opal`)
+- [ ] `CORS_ORIGINS` restreint aux URLs de production
+- [ ] Reverse proxy TLS configure (Traefik, Caddy, Nginx)
+- [ ] Ports internes non exposes (8000, 5432, 5434)
+- [ ] Volumes montes sur du stockage persistant
+- [ ] Sauvegardes regulieres de `opal-db` configurees
+- [ ] Rotation des logs d'audit configuree
 
 ### Architecture production recommandee
 

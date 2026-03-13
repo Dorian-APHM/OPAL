@@ -8,18 +8,10 @@ import logging
 import re
 
 from config import DOMAIN_CONFIG
+from utils.sql_safety import safe_identifier as _validate_identifier
 
-# Strict pattern for OMOP schema names: only alphanumeric and underscores
-_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Strict ISO date pattern
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _validate_identifier(name: str) -> str:
-    """Validate and return a safe SQL identifier (schema/table/column name)."""
-    if not _SAFE_IDENTIFIER_RE.match(name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
-    return name
 
 
 def _validate_date_string(date_str: str) -> str:
@@ -808,15 +800,26 @@ def _build_criterion_cte(
             ctes.append(inner_sql)
             cte_names.append(inner_name)
 
+            # P57 fix: use window function instead of correlated subquery O(N²)
+            windowed_name = next_cte_name("occ_win")
+            windowed_sql = (
+                f"{windowed_name} AS (\n"
+                f"  SELECT person_id, event_date,\n"
+                f"    COUNT(*) OVER (\n"
+                f"      PARTITION BY person_id ORDER BY event_date\n"
+                f"      RANGE BETWEEN CURRENT ROW AND INTERVAL '{int(occ_window_days)} days' FOLLOWING\n"
+                f"    ) AS cnt\n"
+                f"  FROM {inner_name}\n"
+                f")"
+            )
+            ctes.append(windowed_sql)
+            cte_names.append(windowed_name)
+
             cte_sql = (
                 f"{cte_name} AS (\n"
-                f"  SELECT DISTINCT a.person_id, a.event_date\n"
-                f"  FROM {inner_name} a\n"
-                f"  WHERE (\n"
-                f"    SELECT COUNT(*) FROM {inner_name} b\n"
-                f"    WHERE b.person_id = a.person_id\n"
-                f"      AND b.event_date BETWEEN a.event_date AND a.event_date + INTERVAL '{int(occ_window_days)} days'\n"
-                f"  ) {occ_op} {int(occ_count)}\n"
+                f"  SELECT DISTINCT person_id, event_date\n"
+                f"  FROM {windowed_name}\n"
+                f"  WHERE cnt {occ_op} {int(occ_count)}\n"
                 f")"
             )
         else:
