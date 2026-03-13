@@ -56,12 +56,12 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Entry point**: `main.py` — Creates FastAPI app, registers CORS middleware, optional Keycloak auth, and all routers.
 
-**Configuration**: `config.py` — All settings via environment variables. Key vars: `DATABASE_URL`, `SECRET_KEY`, `AUTH_ENABLED`, `CORS_ORIGINS`. Contains `DOMAIN_CONFIG` dict mapping OMOP domains to their table/column names.
+**Configuration**: `config.py` — All settings via environment variables. Key vars: `DATABASE_URL`, `SECRET_KEY`, `AUTH_ENABLED`, `KEYCLOAK_URL`, `KEYCLOAK_ISSUER_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD`, `CORS_ORIGINS`. Contains `DOMAIN_CONFIG` dict mapping OMOP domains to their table/column names. See `.env.example` for full reference.
 
 **Database layer** (`db/`):
-- `app_db.py` — SQLAlchemy engine/session for the internal app database
-- `models.py` — 21 models: `CdmConfig`, `AnalysisSnapshot`, `AnalysisSettings`, `Cohort`, `CohortVersion`, `MappingDecision`, `ReferenceCodebook`, `SapbertMapping`, `ConceptSet`, `IncidenceAnalysis`, `EstimationAnalysis`, `CdmAccess`, `CdmGroupAccess`, `UserFavorite`, `SavedQuery`, `Notification`, `CohortTemplate`, `CohortShare`, `UserGroup`, `UserGroupMember`, `AccessRequest`
-- `omop_connector.py` — Dynamic `psycopg2` connections to external CDMs (not SQLAlchemy)
+- `app_db.py` — SQLAlchemy engine/session for the internal app database (pool_size, max_overflow, pool_recycle configurable via env vars)
+- `models.py` — 21 models with composite indexes on frequently-filtered columns: `AnalysisSnapshot(cdm_name, domain, version)`, `CohortVersion(cohort_id, version)`, `MappingDecision(cdm_name, domain, source_value)`, `Notification(username, read)`
+- `omop_connector.py` — Per-CDM `ThreadedConnectionPool` for external OMOP CDM connections. `PooledConnection` wrapper makes `close()` return to pool transparently. Pools auto-evicted after 30min idle, invalidated on CDM update/delete.
 
 **Modules** (`modules/`) — 18 routers:
 - `cdm_router.py` — CDM registration CRUD, connection testing, settings management (`/api/cdm/`)
@@ -85,7 +85,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Security**: `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`.
 
-**i18n**: `i18n/en.json` and `i18n/fr.json` — English and French translations served via `/api/i18n/{lang}`.
+**i18n**: `i18n/en.json` and `i18n/fr.json` — Translations cached at module load time (not read per-request). Served via `/api/i18n/{lang}`.
 
 ### Frontend (`frontend/`)
 
@@ -102,7 +102,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 ### Key Design Decisions
 
 - External CDMs are accessed **read-only** via raw `psycopg2` (not SQLAlchemy). The only write to CDM is optional `source_to_concept_map` updates during mapping apply.
-- CDM connections are opened on-demand per request (stateless, no connection pooling to external DBs).
+- CDM connections use a **per-CDM `ThreadedConnectionPool`** (min=2, max=20). `PooledConnection` wrapper intercepts `close()` to return to pool. Pools auto-evicted after 30min idle, invalidated on CDM credential update/delete.
 - All app state (configs, snapshots, cohorts, mapping decisions) lives in the internal PostgreSQL.
 - Quality analysis snapshots are versioned for temporal comparison.
 - Cohort criteria use a JSON structure that gets converted to SQL by `sql_builder.py`.

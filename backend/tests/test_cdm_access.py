@@ -12,7 +12,7 @@ def test_list_access_empty(client):
 def test_grant_access(client):
     # First create a CDM
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
 
@@ -31,7 +31,7 @@ def test_grant_access(client):
 
 def test_grant_duplicate(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     client.post("/api/cdm-access/grant", json={"cdm_name": "test_cdm", "username": "u1"})
@@ -41,7 +41,7 @@ def test_grant_duplicate(client):
 
 def test_revoke_access(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     client.post("/api/cdm-access/grant", json={"cdm_name": "test_cdm", "username": "u1"})
@@ -64,7 +64,7 @@ def test_grant_nonexistent_cdm(client):
 def test_get_accessible_cdms(client):
     """Admin user should see all CDMs."""
     client.post("/api/cdm/", json={
-        "name": "cdm_a", "db_host": "localhost", "db_port": 5432,
+        "name": "cdm_a", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "a", "db_user": "u", "db_password": "p",
     })
     resp = client.get("/api/cdm-access/cdms-for-user")
@@ -74,7 +74,7 @@ def test_get_accessible_cdms(client):
 
 def test_clear_cdm_access(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     client.post("/api/cdm-access/grant", json={"cdm_name": "test_cdm", "username": "u1"})
@@ -90,7 +90,7 @@ def test_clear_cdm_access(client):
 def test_grant_group_access(client):
     # Create CDM
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     # Create group
@@ -111,7 +111,7 @@ def test_grant_group_access(client):
 
 def test_grant_group_duplicate(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     client.post("/api/groups/", json={"name": "team1"})
@@ -122,7 +122,7 @@ def test_grant_group_duplicate(client):
 
 def test_grant_group_nonexistent_group(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     resp = client.post("/api/cdm-access/grant-group", json={
@@ -133,7 +133,7 @@ def test_grant_group_nonexistent_group(client):
 
 def test_revoke_group_access(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     client.post("/api/groups/", json={"name": "team1"})
@@ -152,7 +152,7 @@ def test_revoke_group_access(client):
 
 def test_clear_cdm_access_includes_groups(client):
     client.post("/api/cdm/", json={
-        "name": "test_cdm", "db_host": "localhost", "db_port": 5432,
+        "name": "test_cdm", "db_host": "db.example.com", "db_port": 5432,
         "db_name": "test_db", "db_user": "test_user", "db_password": "test_pass",
     })
     client.post("/api/groups/", json={"name": "team1"})

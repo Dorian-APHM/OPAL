@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from db.app_db import get_db
 from db.models import UserGroup, UserGroupMember
 from utils.notifications import notify as _notify
+from auth.keycloak import require_roles
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
@@ -49,9 +50,8 @@ def list_groups(db: Session = Depends(get_db)):
 
 
 @router.post("/")
-def create_group(req: GroupCreateRequest, request: Request, db: Session = Depends(get_db)):
-    """Create a user group."""
-    user = _get_user(request)
+def create_group(req: GroupCreateRequest, request: Request, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Create a user group (admin/data-manager only)."""
     username = user.get("preferred_username", "system")
 
     existing = db.query(UserGroup).filter(UserGroup.name == req.name).first()
@@ -92,9 +92,8 @@ def get_group(group_name: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{group_name}")
-def update_group(group_name: str, req: GroupUpdateRequest, request: Request, db: Session = Depends(get_db)):
-    """Update a group. If members list is provided, it replaces all current members."""
-    user = _get_user(request)
+def update_group(group_name: str, req: GroupUpdateRequest, request: Request, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Update a group (admin/data-manager only). If members list is provided, it replaces all current members."""
     username = user.get("preferred_username", "system")
 
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
@@ -114,8 +113,8 @@ def update_group(group_name: str, req: GroupUpdateRequest, request: Request, db:
 
 
 @router.delete("/{group_name}")
-def delete_group(group_name: str, db: Session = Depends(get_db)):
-    """Delete a group and all its members."""
+def delete_group(group_name: str, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Delete a group and all its members (admin/data-manager only)."""
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
     if not group:
         raise HTTPException(status_code=404, detail=f"Group '{group_name}' not found")
@@ -127,9 +126,8 @@ def delete_group(group_name: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{group_name}/members")
-def add_member(group_name: str, req: GroupMemberRequest, request: Request, db: Session = Depends(get_db)):
-    """Add a member to a group."""
-    user = _get_user(request)
+def add_member(group_name: str, req: GroupMemberRequest, request: Request, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Add a member to a group (admin/data-manager only)."""
     username = user.get("preferred_username", "system")
 
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
@@ -156,8 +154,8 @@ def add_member(group_name: str, req: GroupMemberRequest, request: Request, db: S
 
 
 @router.delete("/{group_name}/members/{member_username}")
-def remove_member(group_name: str, member_username: str, db: Session = Depends(get_db)):
-    """Remove a member from a group."""
+def remove_member(group_name: str, member_username: str, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Remove a member from a group (admin/data-manager only)."""
     deleted = db.query(UserGroupMember).filter(
         UserGroupMember.group_name == group_name,
         UserGroupMember.username == member_username,

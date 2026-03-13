@@ -5,9 +5,10 @@ FastAPI application entry point.
 import json
 import logging
 import os
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -17,6 +18,7 @@ from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
 from audit.logger import AUDIT_LOG_DIR
 from db.app_db import engine, get_db
 from db.models import Base
+from db.omop_connector import close_all_pools, evict_idle_pools
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +33,40 @@ app = FastAPI(
     description="OMOP Platform for Analytics & Lineage",
     version="1.0.0",
 )
+
+
+# ---------------------------------------------------------------------------
+# OMOP connection pool lifecycle
+# ---------------------------------------------------------------------------
+import threading as _threading
+
+
+def _pool_evictor():
+    """Background thread that evicts idle OMOP connection pools every 5 min."""
+    while not _evictor_stop.is_set():
+        _evictor_stop.wait(300)
+        if not _evictor_stop.is_set():
+            evict_idle_pools()
+
+
+_evictor_stop = _threading.Event()
+_evictor_thread: _threading.Thread | None = None
+
+
+@app.on_event("startup")
+def _start_pool_evictor():
+    global _evictor_thread
+    _evictor_thread = _threading.Thread(target=_pool_evictor, daemon=True, name="pool-evictor")
+    _evictor_thread.start()
+    logger.info("OMOP pool evictor started")
+
+
+@app.on_event("shutdown")
+def _shutdown_pools():
+    _evictor_stop.set()
+    if _evictor_thread:
+        _evictor_thread.join(timeout=5)
+    close_all_pools()
 
 # Global exception handlers
 @app.exception_handler(ValueError)
@@ -134,14 +170,19 @@ app.include_router(groups_router)
 I18N_DIR = Path(__file__).parent / "i18n"
 
 
+# P28 fix: cache translations at startup (only changes on deploy)
+_i18n_cache: dict[str, dict] = {}
+for _lang_file in I18N_DIR.glob("*.json"):
+    with open(_lang_file, "r", encoding="utf-8") as _f:
+        _i18n_cache[_lang_file.stem] = json.load(_f)
+
+
 @app.get("/api/i18n/{lang}")
 def get_translations(lang: str):
     """Return translation strings for a given language."""
-    filepath = I18N_DIR / f"{lang}.json"
-    if not filepath.exists():
+    if lang not in _i18n_cache:
         return JSONResponse(status_code=404, content={"detail": f"Language '{lang}' not found"})
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return _i18n_cache[lang]
 
 
 @app.get("/api/auth/me")
@@ -157,6 +198,17 @@ def auth_me(request: Request):
     }
 
 
+@app.post("/api/auth/sse-ticket")
+def create_sse_ticket_endpoint(request: Request):
+    """Create a one-time-use ticket for SSE connections (replaces ?token= in URL)."""
+    from auth.keycloak import create_sse_ticket
+    user = getattr(request.state, "user", None)
+    if not user or user.get("sub") in ("anonymous", "dev-user"):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    ticket = create_sse_ticket(user)
+    return {"ticket": ticket}
+
+
 @app.get("/api/auth/permissions")
 def auth_permissions(request: Request):
     """Return the resolved permissions for the current user based on their roles.
@@ -170,6 +222,15 @@ def auth_permissions(request: Request):
     return build_frontend_permissions(roles)
 
 
+def _require_admin(request: Request):
+    """Raise 403 if the current user doesn't have the admin role."""
+    user = getattr(request.state, "user", {})
+    roles = user.get("roles", [])
+    if "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Forbidden: admin role required")
+    return user
+
+
 @app.get("/api/audit/logs")
 def get_audit_logs(
     request: Request,
@@ -180,6 +241,7 @@ def get_audit_logs(
     action: str | None = None,
     page: int = 1,
     page_size: int = 50,
+    admin_user=Depends(_require_admin),
 ):
     """Return audit log entries with filtering and pagination (admin only)."""
     from audit.logger import AUDIT_LOG_DIR
@@ -229,7 +291,7 @@ def get_audit_logs(
 
 
 @app.get("/api/audit/stats")
-def get_audit_stats(request: Request, date_from: str | None = None, date_to: str | None = None):
+def get_audit_stats(request: Request, date_from: str | None = None, date_to: str | None = None, admin_user=Depends(_require_admin)):
     """Return audit log summary stats for a date range."""
     from audit.logger import AUDIT_LOG_DIR
     import json as _json
@@ -267,7 +329,7 @@ def get_audit_stats(request: Request, date_from: str | None = None, date_to: str
 
 
 @app.get("/api/audit/dates")
-def get_audit_dates(request: Request):
+def get_audit_dates(request: Request, admin_user=Depends(_require_admin)):
     """Return list of dates that have audit log files."""
     from audit.logger import AUDIT_LOG_DIR
     dates = sorted(
@@ -284,12 +346,14 @@ def export_audit_csv(
     date_to: str | None = None,
     user: str | None = None,
     action: str | None = None,
+    admin_user=Depends(_require_admin),
 ):
     """Export audit logs as CSV."""
     import csv
     import io
     import json as _json
     from datetime import date as _dt, timedelta
+    from audit.logger import AUDIT_LOG_DIR
 
     d_from = _dt.fromisoformat(date_from) if date_from else _dt.today()
     d_to = _dt.fromisoformat(date_to) if date_to else d_from
@@ -334,7 +398,7 @@ def export_audit_csv(
 # ──── Admin: User Management (Keycloak proxy) ────
 
 @app.get("/api/admin/users")
-def list_users(request: Request):
+def list_users(request: Request, admin_user=Depends(_require_admin)):
     """List Keycloak users with their roles (admin only)."""
     import requests as http_requests
     token = _get_keycloak_admin_token()
@@ -377,8 +441,8 @@ def list_users(request: Request):
 
 
 @app.post("/api/admin/users/{user_id}/roles")
-def assign_role(user_id: str, request: Request, body: dict):
-    """Assign a role to a Keycloak user."""
+def assign_role(user_id: str, request: Request, body: dict, admin_user=Depends(_require_admin)):
+    """Assign a role to a Keycloak user (admin only)."""
     import requests as http_requests
     role_name = body.get("role")
     if not role_name:
@@ -413,8 +477,8 @@ def assign_role(user_id: str, request: Request, body: dict):
 
 
 @app.delete("/api/admin/users/{user_id}/roles/{role_name}")
-def remove_role(user_id: str, role_name: str, request: Request):
-    """Remove a role from a Keycloak user."""
+def remove_role(user_id: str, role_name: str, request: Request, admin_user=Depends(_require_admin)):
+    """Remove a role from a Keycloak user (admin only)."""
     import requests as http_requests
     token = _get_keycloak_admin_token()
     if not token:
@@ -443,8 +507,8 @@ def remove_role(user_id: str, role_name: str, request: Request):
 
 
 @app.put("/api/admin/users/{user_id}/toggle")
-def toggle_user(user_id: str, request: Request, body: dict):
-    """Enable or disable a Keycloak user."""
+def toggle_user(user_id: str, request: Request, body: dict, admin_user=Depends(_require_admin)):
+    """Enable or disable a Keycloak user (admin only)."""
     import requests as http_requests
     enabled = body.get("enabled", True)
     token = _get_keycloak_admin_token()
@@ -470,8 +534,18 @@ def _get_keycloak_admin_token() -> str | None:
     import requests as http_requests
     import os
 
-    admin_user = os.getenv("KEYCLOAK_ADMIN", "admin")
-    admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
+    admin_user = os.getenv("KEYCLOAK_ADMIN", "")
+    admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "")
+
+    if not admin_user or not admin_pass:
+        logger.error("KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD not configured")
+        return None
+
+    if admin_user == "admin" and admin_pass == "admin":
+        logger.warning(
+            "SECURITY: Keycloak admin credentials are set to default 'admin/admin'. "
+            "Change KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD in your .env file for production."
+        )
 
     try:
         resp = http_requests.post(
@@ -540,7 +614,7 @@ def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
 
 
 @app.get("/api/admin/access-requests")
-def list_access_requests(request: Request, status_filter: str = "pending", db=Depends(get_db)):
+def list_access_requests(request: Request, status_filter: str = "pending", admin_user=Depends(_require_admin), db=Depends(get_db)):
     """List access requests (admin only)."""
     from db.models import AccessRequest
 
@@ -568,8 +642,8 @@ def list_access_requests(request: Request, status_filter: str = "pending", db=De
 
 
 @app.post("/api/admin/access-requests/{request_id}/approve")
-def approve_access_request(request_id: int, request: Request, db=Depends(get_db)):
-    """Approve an access request: create Keycloak user with temporary password."""
+def approve_access_request(request_id: int, request: Request, admin_user=Depends(_require_admin), db=Depends(get_db)):
+    """Approve an access request: create Keycloak user with temporary password (admin only)."""
     import requests as http_requests
     from datetime import datetime, timezone
     from db.models import AccessRequest
@@ -612,10 +686,11 @@ def approve_access_request(request_id: int, request: Request, db=Depends(get_db)
             "lastName": ar.last_name,
             "enabled": True,
         }
+        temp_password = secrets.token_urlsafe(16)
         if not use_ldap:
             user_payload["credentials"] = [{
                 "type": "password",
-                "value": ar.username,
+                "value": temp_password,
                 "temporary": True,
             }]
         try:
@@ -664,15 +739,15 @@ def approve_access_request(request_id: int, request: Request, db=Depends(get_db)
         "keycloak_user_id": kc_user_id,
     }
     if not use_ldap:
-        result["temporary_password"] = ar.username
+        result["temporary_password"] = temp_password
     else:
         result["auth_method"] = "ldap"
     return result
 
 
 @app.post("/api/admin/users/add")
-async def add_user_direct(request: Request):
-    """Admin adds a user directly by matricule + role (no access request needed)."""
+async def add_user_direct(request: Request, admin_user=Depends(_require_admin)):
+    """Admin adds a user directly by matricule + role (admin only)."""
     import requests as http_requests
 
     body = await request.json()
@@ -705,10 +780,12 @@ async def add_user_direct(request: Request):
         pass
 
     # Create if not found
+    temp_password = None
     if not kc_user_id:
+        temp_password = secrets.token_urlsafe(16)
         user_payload = {"username": username, "enabled": True}
         if not use_ldap:
-            user_payload["credentials"] = [{"type": "password", "value": username, "temporary": True}]
+            user_payload["credentials"] = [{"type": "password", "value": temp_password, "temporary": True}]
         try:
             resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
             resp.raise_for_status()
@@ -733,12 +810,15 @@ async def add_user_direct(request: Request):
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": f"Utilisateur cree mais echec assignation role: {e}"})
 
-    return {"status": "ok", "username": username, "role": role, "keycloak_user_id": kc_user_id}
+    result = {"status": "ok", "username": username, "role": role, "keycloak_user_id": kc_user_id}
+    if temp_password and not use_ldap:
+        result["temporary_password"] = temp_password
+    return result
 
 
 @app.post("/api/admin/access-requests/{request_id}/reject")
-def reject_access_request(request_id: int, request: Request, db=Depends(get_db)):
-    """Reject an access request."""
+def reject_access_request(request_id: int, request: Request, admin_user=Depends(_require_admin), db=Depends(get_db)):
+    """Reject an access request (admin only)."""
     from datetime import datetime, timezone
     from db.models import AccessRequest
 

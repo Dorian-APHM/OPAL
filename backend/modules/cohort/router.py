@@ -90,7 +90,8 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", cdm.name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return cdm, conn
 
 
@@ -153,7 +154,7 @@ def search_concepts(req: ConceptSearchRequest, db: Session = Depends(get_db)):
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as e:
         logger.exception("Concept search failed")
-        raise HTTPException(status_code=500, detail=f"Concept search error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during concept search")
     finally:
         conn.close()
 
@@ -176,7 +177,8 @@ def list_vocabularies(cdm_name: str, db: Session = Depends(get_db)):
             """)
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vocabulary listing error: {e}")
+        logger.exception("Vocabulary listing failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while listing vocabularies")
     finally:
         conn.close()
 
@@ -239,14 +241,32 @@ def list_cohorts(cdm_name: str | None = None, request: Request = None, db: Sessi
 
     cohorts = query.order_by(Cohort.updated_at.desc()).all()
 
+    # P48 fix: fetch latest versions for all cohorts in a single query
+    cohort_ids = [c.id for c in cohorts]
+    latest_versions_map: dict[int, tuple] = {}
+    if cohort_ids:
+        from sqlalchemy import and_
+        # Subquery: max version per cohort
+        max_ver_sq = (
+            db.query(CohortVersion.cohort_id, func.max(CohortVersion.version).label("max_ver"))
+            .filter(CohortVersion.cohort_id.in_(cohort_ids))
+            .group_by(CohortVersion.cohort_id)
+            .subquery()
+        )
+        latest_rows = (
+            db.query(CohortVersion)
+            .join(max_ver_sq, and_(
+                CohortVersion.cohort_id == max_ver_sq.c.cohort_id,
+                CohortVersion.version == max_ver_sq.c.max_ver,
+            ))
+            .all()
+        )
+        for lv in latest_rows:
+            latest_versions_map[lv.cohort_id] = (lv.version, lv.patient_count)
+
     result = []
     for c in cohorts:
-        latest = (
-            db.query(CohortVersion)
-            .filter(CohortVersion.cohort_id == c.id)
-            .order_by(CohortVersion.version.desc())
-            .first()
-        )
+        ver, pcount = latest_versions_map.get(c.id, (0, None))
         result.append({
             "id": c.id,
             "cdm_name": c.cdm_name,
@@ -256,8 +276,8 @@ def list_cohorts(cdm_name: str | None = None, request: Request = None, db: Sessi
             "shared_with_all": bool(c.shared_with_all),
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
-            "latest_version": latest.version if latest else 0,
-            "patient_count": latest.patient_count if latest else None,
+            "latest_version": ver,
+            "patient_count": pcount,
         })
     return {"cohorts": result}
 
@@ -391,11 +411,17 @@ def get_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/{cohort_id}")
-def update_cohort(cohort_id: int, req: CohortUpdateRequest, db: Session = Depends(get_db)):
+def update_cohort(cohort_id: int, req: CohortUpdateRequest, request: Request, db: Session = Depends(get_db)):
     """Update a cohort. If criteria change, creates a new version."""
     cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
     if not cohort:
         raise HTTPException(status_code=404, detail="Cohort not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    if not _can_access_cohort(db, cohort, username, user_roles):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
 
     if req.name is not None:
         cohort.name = req.name
@@ -478,7 +504,7 @@ def cohort_count(req: CohortCountRequest, db: Session = Depends(get_db)):
             count = row["patient_count"] if row else 0
     except Exception as e:
         logger.exception("Cohort count failed")
-        raise HTTPException(status_code=500, detail=f"Cohort count error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during cohort count")
     finally:
         conn.close()
 
@@ -516,7 +542,7 @@ def cohort_count_approximate(req: CohortCountRequest, db: Session = Depends(get_
         }
     except Exception as e:
         logger.exception("Approximate count failed")
-        raise HTTPException(status_code=500, detail=f"Count error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during count")
     finally:
         conn.close()
 
@@ -552,11 +578,11 @@ def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
                         "step": step["step"],
                         "label": step["label"],
                         "count": None,
-                        "error": str(e),
+                        "error": "An internal error occurred",
                     })
     except Exception as e:
         logger.exception("Attrition analysis failed")
-        raise HTTPException(status_code=500, detail=f"Attrition error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during attrition analysis")
     finally:
         conn.close()
 
@@ -582,7 +608,7 @@ def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
                         p[k] = v.isoformat()
     except Exception as e:
         logger.exception("Cohort sampling failed")
-        raise HTTPException(status_code=500, detail=f"Sampling error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during sampling")
     finally:
         conn.close()
 
@@ -609,7 +635,7 @@ def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_d
                         p[k] = None
     except Exception as e:
         logger.exception("Detailed sampling failed")
-        raise HTTPException(status_code=500, detail=f"Detailed sampling error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during detailed sampling")
     finally:
         conn.close()
 
@@ -674,7 +700,7 @@ def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
         output.seek(0)
     except Exception as e:
         logger.exception("Direct export failed")
-        raise HTTPException(status_code=500, detail=f"Export error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during export")
     finally:
         conn.close()
 
@@ -772,7 +798,7 @@ def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
                         row[k] = str(v)
     except Exception as e:
         logger.exception("Raw SQL execution failed")
-        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during SQL execution")
     finally:
         conn.close()
 
@@ -811,7 +837,8 @@ def export_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
             columns = [desc[0] for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+        logger.exception("SQL query execution failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred during SQL execution")
     finally:
         conn.close()
 
@@ -882,7 +909,7 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
             _active_characterizations[task_id]["status"] = "completed"
         except Exception as e:
             logger.exception("Characterization failed")
-            _active_characterizations[task_id]["error"] = str(e)
+            _active_characterizations[task_id]["error"] = "An internal error occurred during characterization"
             _active_characterizations[task_id]["status"] = "error"
         finally:
             conn.close()
@@ -1012,7 +1039,7 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
             db.commit()
         except Exception as e:
             logger.exception("On-the-fly characterization failed during comparison")
-            raise HTTPException(status_code=500, detail=f"Characterization error: {e}")
+            raise HTTPException(status_code=500, detail="An internal error occurred during characterization")
         finally:
             conn.close()
 
@@ -1023,11 +1050,17 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
 
 
 @router.put("/{cohort_id}/characterization")
-def save_characterization(cohort_id: int, payload: dict, db: Session = Depends(get_db)):
+def save_characterization(cohort_id: int, payload: dict, request: Request, db: Session = Depends(get_db)):
     """Save characterization results to the latest version of a cohort."""
     cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
     if not cohort:
         raise HTTPException(status_code=404, detail="Cohort not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    if not _can_access_cohort(db, cohort, username, user_roles):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
 
     latest = (
         db.query(CohortVersion)
@@ -1098,7 +1131,7 @@ def execute_cohort(cohort_id: int, db: Session = Depends(get_db)):
             count = row["patient_count"] if row else 0
     except Exception as e:
         logger.exception("Cohort execution failed")
-        raise HTTPException(status_code=500, detail=f"Execution error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during cohort execution")
     finally:
         conn.close()
 
@@ -1167,7 +1200,8 @@ def export_cohort(
                 writer.writerow([row["person_id"]])
         output.seek(0)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Export error: {e}")
+        logger.exception("Cohort export failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred during export")
     finally:
         conn.close()
 
@@ -1307,7 +1341,7 @@ def patient_journey(
         raise
     except Exception as e:
         logger.exception("Patient journey query failed")
-        raise HTTPException(status_code=500, detail=f"Journey query error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during journey query")
     finally:
         conn.close()
 

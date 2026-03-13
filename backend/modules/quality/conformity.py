@@ -70,15 +70,29 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
 
         # ── 2. Person table checks ──
         if "person" in existing_tables:
-            # Persons with no observation period
+            # Merge person checks into fewer queries (P14 fix)
             cur.execute(f"""
-                SELECT COUNT(*) FROM {schema}.person p
-                LEFT JOIN {schema}.observation_period op ON op.person_id = p.person_id
-                WHERE op.person_id IS NULL
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE gender_concept_id = 0 OR gender_concept_id IS NULL) AS unmapped_gender,
+                    COUNT(*) FILTER (WHERE year_of_birth > EXTRACT(YEAR FROM CURRENT_DATE)) AS future_births
+                FROM {schema}.person
             """)
-            orphan_persons = cur.fetchone()[0]
-            cur.execute(f"SELECT COUNT(*) FROM {schema}.person")
-            total_persons = cur.fetchone()[0]
+            row = cur.fetchone()
+            total_persons = row[0]
+            unmapped_gender = row[1]
+            future_births = row[2]
+
+            # Persons with no observation period (requires join, separate query)
+            if "observation_period" in existing_tables:
+                cur.execute(f"""
+                    SELECT COUNT(*) FROM {schema}.person p
+                    LEFT JOIN {schema}.observation_period op ON op.person_id = p.person_id
+                    WHERE op.person_id IS NULL
+                """)
+                orphan_persons = cur.fetchone()[0]
+            else:
+                orphan_persons = total_persons
 
             pct_orphan = round((orphan_persons / total_persons * 100), 2) if total_persons > 0 else 0
             status = "pass" if pct_orphan < 1 else ("warning" if pct_orphan < 10 else "fail")
@@ -91,12 +105,6 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "value": {"count": orphan_persons, "pct": pct_orphan},
             })
 
-            # Future birth years
-            cur.execute(f"""
-                SELECT COUNT(*) FROM {schema}.person
-                WHERE year_of_birth > EXTRACT(YEAR FROM CURRENT_DATE)
-            """)
-            future_births = cur.fetchone()[0]
             checks.append({
                 "id": "future_birth_years",
                 "category": "Plausibility",
@@ -106,11 +114,6 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "value": future_births,
             })
 
-            # gender_concept_id = 0 (unmapped gender)
-            cur.execute(f"""
-                SELECT COUNT(*) FROM {schema}.person WHERE gender_concept_id = 0 OR gender_concept_id IS NULL
-            """)
-            unmapped_gender = cur.fetchone()[0]
             pct_gender = round((unmapped_gender / total_persons * 100), 2) if total_persons > 0 else 0
             status = "pass" if pct_gender < 1 else ("warning" if pct_gender < 5 else "fail")
             checks.append({
@@ -124,15 +127,20 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
 
         # ── 3. Observation period checks ──
         if "observation_period" in existing_tables:
-            # Overlapping observation periods
+            # Merge both obs period checks into one query (P14 fix)
             cur.execute(f"""
-                SELECT COUNT(*) FROM (
-                    SELECT person_id FROM {schema}.observation_period
-                    GROUP BY person_id
-                    HAVING COUNT(*) > 1
-                ) t
+                SELECT
+                    (SELECT COUNT(*) FROM (
+                        SELECT person_id FROM {schema}.observation_period
+                        GROUP BY person_id HAVING COUNT(*) > 1
+                    ) t) AS multi_obs,
+                    (SELECT COUNT(*) FROM {schema}.observation_period
+                     WHERE observation_period_end_date > CURRENT_DATE + INTERVAL '1 day') AS future_obs
             """)
-            multi_obs = cur.fetchone()[0]
+            row = cur.fetchone()
+            multi_obs = row[0]
+            future_obs = row[1]
+
             checks.append({
                 "id": "multiple_obs_periods",
                 "category": "Conformance",
@@ -141,13 +149,6 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "detail": f"{multi_obs:,} persons have multiple observation periods" if multi_obs else "",
                 "value": multi_obs,
             })
-
-            # Future observation end dates
-            cur.execute(f"""
-                SELECT COUNT(*) FROM {schema}.observation_period
-                WHERE observation_period_end_date > CURRENT_DATE + INTERVAL '1 day'
-            """)
-            future_obs = cur.fetchone()[0]
             checks.append({
                 "id": "future_obs_end_dates",
                 "category": "Plausibility",
@@ -157,21 +158,70 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "value": future_obs,
             })
 
-        # ── 4. Clinical tables: concept_id = 0 checks ──
-        clinical_tables = {
-            "condition_occurrence": "condition_concept_id",
-            "drug_exposure": "drug_concept_id",
-            "measurement": "measurement_concept_id",
-            "procedure_occurrence": "procedure_concept_id",
-            "observation": "observation_concept_id",
+        # ── 4/5/6. Clinical tables: merged concept_id, date, and visit FK checks (P14 fix) ──
+        # Unified config: each clinical table with its concept_col, date_col, visit_fk_col
+        clinical_checks_config = {
+            "condition_occurrence": {
+                "concept_col": "condition_concept_id",
+                "date_col": "condition_start_date",
+                "visit_fk_col": "visit_occurrence_id",
+            },
+            "drug_exposure": {
+                "concept_col": "drug_concept_id",
+                "date_col": "drug_exposure_start_date",
+                "visit_fk_col": "visit_occurrence_id",
+            },
+            "measurement": {
+                "concept_col": "measurement_concept_id",
+                "date_col": "measurement_date",
+                "visit_fk_col": "visit_occurrence_id",
+            },
+            "procedure_occurrence": {
+                "concept_col": "procedure_concept_id",
+                "date_col": "procedure_date",
+                "visit_fk_col": None,
+            },
+            "observation": {
+                "concept_col": "observation_concept_id",
+                "date_col": None,
+                "visit_fk_col": None,
+            },
         }
+        has_visits = "visit_occurrence" in existing_tables
 
-        for table, concept_col in clinical_tables.items():
+        for table, cfg in clinical_checks_config.items():
             if table not in existing_tables:
                 continue
+
+            concept_col = cfg["concept_col"]
+            date_col = cfg["date_col"]
+            visit_fk_col = cfg["visit_fk_col"]
+
             try:
-                cur.execute(f"SELECT COUNT(*) FROM {schema}.{table}")
-                total = cur.fetchone()[0]
+                # Build a single query with FILTER clauses for all checks on this table
+                filters = [f"COUNT(*) AS total"]
+                filters.append(f"COUNT(*) FILTER (WHERE {concept_col} = 0) AS unmapped")
+
+                if date_col:
+                    filters.append(
+                        f"COUNT(*) FILTER (WHERE {date_col} > CURRENT_DATE + INTERVAL '1 day') AS future_dates"
+                    )
+
+                if visit_fk_col and has_visits:
+                    filters.append(
+                        f"COUNT(*) FILTER (WHERE {visit_fk_col} IS NOT NULL"
+                        f" AND NOT EXISTS (SELECT 1 FROM {schema}.visit_occurrence v"
+                        f" WHERE v.visit_occurrence_id = t.{visit_fk_col})) AS orphans"
+                    )
+
+                select_clause = ",\n                       ".join(filters)
+                cur.execute(f"SELECT {select_clause} FROM {schema}.{table} t")
+                row = cur.fetchone()
+
+                total = row[0]
+                unmapped = row[1]
+                idx = 2
+
                 if total == 0:
                     checks.append({
                         "id": f"unmapped_concepts_{table}",
@@ -183,8 +233,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                     })
                     continue
 
-                cur.execute(f"SELECT COUNT(*) FROM {schema}.{table} WHERE {concept_col} = 0")
-                unmapped = cur.fetchone()[0]
+                # Concept check
                 pct = round((unmapped / total * 100), 2) if total > 0 else 0
                 status = "pass" if pct < 5 else ("warning" if pct < 20 else "fail")
                 checks.append({
@@ -195,59 +244,23 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                     "detail": f"{unmapped:,} / {total:,} records ({pct}%) have concept_id=0",
                     "value": {"count": unmapped, "pct": pct, "total": total},
                 })
-            except Exception as e:
-                logger.warning("Check failed for %s: %s", table, e)
 
-        # ── 5. Future dates ──
-        date_checks = {
-            "condition_occurrence": "condition_start_date",
-            "drug_exposure": "drug_exposure_start_date",
-            "measurement": "measurement_date",
-            "procedure_occurrence": "procedure_date",
-            "visit_occurrence": "visit_start_date",
-        }
+                # Future dates check
+                if date_col:
+                    future = row[idx]
+                    idx += 1
+                    checks.append({
+                        "id": f"future_dates_{table}",
+                        "category": "Plausibility",
+                        "description": f"{table}: records with future dates",
+                        "status": "pass" if future == 0 else ("warning" if future < 100 else "fail"),
+                        "detail": f"{future:,} records have dates in the future" if future else "",
+                        "value": future,
+                    })
 
-        for table, date_col in date_checks.items():
-            if table not in existing_tables:
-                continue
-            try:
-                cur.execute(f"""
-                    SELECT COUNT(*) FROM {schema}.{table}
-                    WHERE {date_col} > CURRENT_DATE + INTERVAL '1 day'
-                """)
-                future = cur.fetchone()[0]
-                checks.append({
-                    "id": f"future_dates_{table}",
-                    "category": "Plausibility",
-                    "description": f"{table}: records with future dates",
-                    "status": "pass" if future == 0 else ("warning" if future < 100 else "fail"),
-                    "detail": f"{future:,} records have dates in the future" if future else "",
-                    "value": future,
-                })
-            except Exception as e:
-                logger.warning("Date check failed for %s: %s", table, e)
-
-        # ── 6. Visit orphans (clinical records without matching visit) ──
-        visit_fk_checks = {
-            "condition_occurrence": "visit_occurrence_id",
-            "drug_exposure": "visit_occurrence_id",
-            "measurement": "visit_occurrence_id",
-        }
-
-        if "visit_occurrence" in existing_tables:
-            for table, fk_col in visit_fk_checks.items():
-                if table not in existing_tables:
-                    continue
-                try:
-                    cur.execute(f"""
-                        SELECT COUNT(*) FROM {schema}.{table} t
-                        WHERE t.{fk_col} IS NOT NULL
-                        AND NOT EXISTS (
-                            SELECT 1 FROM {schema}.visit_occurrence v
-                            WHERE v.visit_occurrence_id = t.{fk_col}
-                        )
-                    """)
-                    orphans = cur.fetchone()[0]
+                # Visit orphan check
+                if visit_fk_col and has_visits:
+                    orphans = row[idx]
                     checks.append({
                         "id": f"visit_orphans_{table}",
                         "category": "Conformance",
@@ -256,8 +269,28 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                         "detail": f"{orphans:,} records reference non-existent visits" if orphans else "",
                         "value": orphans,
                     })
-                except Exception as e:
-                    logger.warning("Visit FK check failed for %s: %s", table, e)
+
+            except Exception as e:
+                logger.warning("Conformity check failed for %s: %s", table, e)
+
+        # ── Visit occurrence future dates (standalone, no concept/FK checks) ──
+        if "visit_occurrence" in existing_tables:
+            try:
+                cur.execute(f"""
+                    SELECT COUNT(*) FROM {schema}.visit_occurrence
+                    WHERE visit_start_date > CURRENT_DATE + INTERVAL '1 day'
+                """)
+                future = cur.fetchone()[0]
+                checks.append({
+                    "id": "future_dates_visit_occurrence",
+                    "category": "Plausibility",
+                    "description": "visit_occurrence: records with future dates",
+                    "status": "pass" if future == 0 else ("warning" if future < 100 else "fail"),
+                    "detail": f"{future:,} records have dates in the future" if future else "",
+                    "value": future,
+                })
+            except Exception as e:
+                logger.warning("Date check failed for visit_occurrence: %s", e)
 
     # Calculate score
     total_checks = len(checks)

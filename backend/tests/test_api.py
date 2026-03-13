@@ -52,7 +52,7 @@ def test_list_cdms_empty(client):
 def test_create_cdm(client):
     resp = client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -66,7 +66,7 @@ def test_create_duplicate_cdm(client):
     # First create
     client.post("/api/cdm/", json={
         "name": "dup_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -75,7 +75,7 @@ def test_create_duplicate_cdm(client):
     # Duplicate
     resp = client.post("/api/cdm/", json={
         "name": "dup_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -87,7 +87,7 @@ def test_create_duplicate_cdm(client):
 def test_list_cdms_after_create(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -98,13 +98,13 @@ def test_list_cdms_after_create(client):
     cdms = resp.json()["cdms"]
     assert len(cdms) == 1
     assert cdms[0]["name"] == "test_cdm"
-    assert cdms[0]["db_host"] == "localhost"
+    assert cdms[0]["db_host"] == "db.example.com"
 
 
 def test_get_cdm_settings_defaults(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -120,7 +120,7 @@ def test_get_cdm_settings_defaults(client):
 def test_update_cdm_settings(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -149,7 +149,7 @@ def test_analyze_unknown_cdm(client):
 def test_analyze_unknown_domain(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -165,7 +165,7 @@ def test_analyze_unknown_domain(client):
 def test_snapshots_empty(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -179,7 +179,7 @@ def test_snapshots_empty(client):
 def test_latest_snapshot_404(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",
@@ -205,7 +205,7 @@ def test_export_unknown_table_type(client):
 def test_delete_cdm(client):
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "test_db",
         "db_user": "test_user",

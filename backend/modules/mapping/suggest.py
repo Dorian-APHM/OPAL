@@ -15,6 +15,8 @@ import re
 
 from psycopg2.extras import DictCursor
 
+from utils.sql_safety import safe_identifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +38,7 @@ def suggest_mappings(
     Strategies 1-3 (exact, relationship, ingredient) always run (fast).
     Strategies 4-5 (fuzzy, keyword, contextual) can be toggled via flags.
     """
+    omop_schema = safe_identifier(omop_schema)
     suggestions = []
     seen_concept_ids = set()
 

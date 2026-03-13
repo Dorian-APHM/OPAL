@@ -44,35 +44,36 @@ def test_list_users_success(client, monkeypatch):
 
     monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
 
-    kc_users = [
-        {
-            "id": "uid-1",
-            "username": "alice",
-            "email": "alice@example.com",
-            "firstName": "Alice",
-            "lastName": "Smith",
-            "enabled": True,
-            "createdTimestamp": 1700000000000,
-        },
-        {
-            "id": "uid-2",
-            "username": "bob",
-            "email": "bob@example.com",
-            "firstName": "Bob",
-            "lastName": "Jones",
-            "enabled": False,
-            "createdTimestamp": 1700000001000,
-        },
-    ]
+    alice = {
+        "id": "uid-1",
+        "username": "alice",
+        "email": "alice@example.com",
+        "firstName": "Alice",
+        "lastName": "Smith",
+        "enabled": True,
+        "createdTimestamp": 1700000000000,
+    }
+    bob = {
+        "id": "uid-2",
+        "username": "bob",
+        "email": "bob@example.com",
+        "firstName": "Bob",
+        "lastName": "Jones",
+        "enabled": False,
+        "createdTimestamp": 1700000001000,
+    }
 
+    # The endpoint iterates over roles and fetches users per role
     def mock_get(url, **kwargs):
-        if "/users?" in url:
-            return MockResponse(json_data=kc_users)
-        if "/role-mappings/realm" in url:
-            if "uid-1" in url:
-                return MockResponse(json_data=[{"name": "admin"}])
-            return MockResponse(json_data=[{"name": "chercheur"}])
-        return MockResponse(json_data={})
+        if "/roles/admin/users" in url:
+            return MockResponse(json_data=[alice])
+        if "/roles/chercheur/users" in url:
+            return MockResponse(json_data=[bob])
+        if "/roles/data-manager/users" in url:
+            return MockResponse(json_data=[])
+        if "/roles/medecin/users" in url:
+            return MockResponse(json_data=[])
+        return MockResponse(json_data=[])
 
     monkeypatch.setattr(http_requests, "get", mock_get)
 
@@ -80,11 +81,13 @@ def test_list_users_success(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["users"]) == 2
-    assert data["users"][0]["username"] == "alice"
-    assert data["users"][0]["roles"] == ["admin"]
-    assert data["users"][0]["enabled"] is True
-    assert data["users"][1]["username"] == "bob"
-    assert data["users"][1]["roles"] == ["chercheur"]
+    # Sort by username for deterministic assertion
+    users_sorted = sorted(data["users"], key=lambda u: u["username"])
+    assert users_sorted[0]["username"] == "alice"
+    assert users_sorted[0]["roles"] == ["admin"]
+    assert users_sorted[0]["enabled"] is True
+    assert users_sorted[1]["username"] == "bob"
+    assert users_sorted[1]["roles"] == ["chercheur"]
 
 
 def test_list_users_keycloak_error(client, monkeypatch):
