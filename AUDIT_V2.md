@@ -29,7 +29,31 @@ Les items marques **(V2)** existaient deja dans le PLAN_AMELIORATION.md initial 
 
 ## 1. SECURITE
 
-### 1.1 [P0] SQL injection restante dans `suggest.py` via f-string sur schema
+### 1.1 [P0] Path Traversal dans `ohdsi/router.py` — lecture de fichiers arbitraires
+
+**Fichiers** : `backend/modules/ohdsi/router.py:284-295`
+
+```python
+@router.get("/files/{path:path}")
+def list_or_download_files(path: str = ""):
+    output_dir = Path(OHDSI_OUTPUT_DIR)
+    target = output_dir / path if path else output_dir
+    if target.is_file():
+        return FileResponse(str(target), filename=target.name)
+```
+
+**Probleme** : Le parametre `path` n'est pas valide contre le directory traversal. `GET /api/ohdsi/files/../../etc/passwd` permet de lire n'importe quel fichier du serveur. `Path("/data/ohdsi") / "../../etc/passwd"` resout vers `/etc/passwd`.
+
+**Solution** :
+```python
+target = (output_dir / path).resolve()
+if not str(target).startswith(str(output_dir.resolve())):
+    raise HTTPException(status_code=403, detail="Access denied")
+```
+
+---
+
+### 1.2a [P0] SQL injection restante dans `suggest.py` via f-string sur schema
 
 **Fichiers** :
 - `backend/modules/mapping/suggest.py:130` — `f"SELECT ... FROM {schema}.concept c ..."`
@@ -125,7 +149,48 @@ Les items marques **(V2)** existaient deja dans le PLAN_AMELIORATION.md initial 
 
 ---
 
-### 1.8 [P1] (V2) Rate limiting insuffisant sur endpoints couteux
+### 1.8 [P1] IDOR — Concept sets modifiables/supprimables par n'importe qui
+
+**Fichiers** :
+- `backend/modules/concept_set/router.py:115-139`
+
+**Probleme** : `update_concept_set()` et `delete_concept_set()` n'ont pas de verification de propriete. N'importe quel utilisateur peut modifier/supprimer les concept sets d'un autre.
+
+**Solution** : Ajouter verification `cs.created_by == current_user` ou role admin.
+
+---
+
+### 1.9 [P1] IDOR — Cohort templates supprimables par n'importe qui
+
+**Fichiers** : `backend/modules/cohort_templates_router.py:256-264`
+
+**Probleme** : `delete_template()` ne verifie ni la propriete ni le role. N'importe qui peut supprimer un template partage.
+
+**Solution** : Ajouter check ownership ou `require_roles("admin", "data-manager")`.
+
+---
+
+### 1.10 [P1] Missing auth sur annulation d'analyse
+
+**Fichiers** : `backend/modules/quality/router.py:359-368`
+
+**Probleme** : `cancel_analysis(analysis_id)` ne verifie pas que l'utilisateur est celui qui a lance l'analyse. N'importe qui peut annuler l'analyse d'un autre en connaissant/devinant l'UUID.
+
+**Solution** : Stocker le username dans `_active_analyses[id]` et verifier a l'annulation.
+
+---
+
+### 1.11 [P1] Conteneurs OHDSI en `network_mode="host"`
+
+**Fichiers** : `backend/modules/ohdsi/router.py:126`
+
+**Probleme** : Les conteneurs Docker OHDSI partagent le namespace reseau de l'hote, leur permettant d'acceder a tous les services internes (base app, Keycloak admin, etc.).
+
+**Solution** : Utiliser un reseau Docker dedie (`network_mode="opal_internal"`).
+
+---
+
+### 1.12 [P1] (V2) Rate limiting insuffisant sur endpoints couteux
 
 **Fichiers** : `backend/main.py`, `backend/modules/quality/router.py`, `backend/modules/cohort/router.py`
 
@@ -205,7 +270,47 @@ def _csv_safe(val):
 
 ---
 
-### 1.14 [P3] Permissions de fichier trop ouvertes pour audit logs
+### 1.18 [P2] `page_size` non borne sur endpoint audit logs
+
+**Fichiers** : `backend/main.py:268`
+
+**Probleme** : `page_size: int = 50` sans limite superieure. `page_size=999999999` force le serveur a charger et serialiser une reponse JSON enorme.
+
+**Solution** : `page_size: int = Query(default=50, ge=1, le=500)`.
+
+---
+
+### 1.19 [P2] Content-Disposition header injection
+
+**Fichiers** : `backend/modules/quality/router.py:590,776,813`
+
+**Probleme** : Les noms de CDM sont interpoles dans le header `Content-Disposition` sans sanitization. Un CDM name contenant des newlines ou guillemets peut injecter des headers HTTP.
+
+**Solution** : `safe_name = re.sub(r'[^\w\-.]', '_', cdm_name)`.
+
+---
+
+### 1.20 [P2] ILIKE sans echappement des wildcards
+
+**Fichiers** : `backend/modules/search_router.py:48,161,178`
+
+**Probleme** : Les termes de recherche sont interpoles dans `ILIKE` sans echapper `%` et `_`. Une recherche pour `%` retourne tout.
+
+**Solution** : `escaped = search_term.replace('%', '\\%').replace('_', '\\_')`.
+
+---
+
+### 1.21 [P2] Audit logger enregistre des donnees sensibles dans les query params
+
+**Fichiers** : `backend/audit/logger.py`
+
+**Probleme** : Les query parameters sont logges tel quel, pouvant inclure des mots de passe (test connexion), tokens, ou donnees PHI.
+
+**Solution** : Filtrer les parametres sensibles avant logging (`password`, `token`, `ticket`).
+
+---
+
+### 1.22 [P3] Permissions de fichier trop ouvertes pour audit logs
 
 **Fichiers** : `backend/audit/logger.py`
 
@@ -215,7 +320,7 @@ def _csv_safe(val):
 
 ---
 
-### 1.15 [P3] Docker Compose expose la DB sur l'hote
+### 1.23 [P3] Docker Compose expose la DB sur l'hote
 
 **Fichiers** : `docker-compose.yml`
 
@@ -851,11 +956,11 @@ for c in cohorts:
 
 | Priorite | Securite | Performance | Architecture | Fonctionnalites | Tests | DevOps | Frontend | Total |
 |----------|----------|-------------|-------------|----------------|-------|--------|----------|-------|
-| **P0** | 3 | 0 | 0 | 0 | 0 | 0 | 0 | **3** |
-| **P1** | 7 | 8 | 2 | 2 | 2 | 2 | 0 | **23** |
-| **P2** | 3 | 9 | 3 | 3 | 3 | 2 | 3 | **26** |
-| **P3** | 2 | 3 | 1 | 2 | 1 | 2 | 2 | **13** |
-| **Total** | **15** | **20** | **6** | **7** | **6** | **6** | **5** | **65** |
+| **P0** | 4 | 0 | 0 | 0 | 0 | 0 | 0 | **4** |
+| **P1** | 11 | 8 | 2 | 2 | 2 | 2 | 0 | **27** |
+| **P2** | 7 | 9 | 3 | 3 | 3 | 2 | 3 | **30** |
+| **P3** | 3 | 3 | 1 | 2 | 1 | 2 | 2 | **14** |
+| **Total** | **25** | **20** | **6** | **7** | **6** | **6** | **5** | **75** |
 
 ### Items V2 (du PLAN_AMELIORATION.md initial, non resolus ou necessitant un 2e passage)
 - 1.8 — Rate limiting insuffisant (partiellement corrige, couverture incomplete)
