@@ -73,11 +73,15 @@ def create_query(req: SaveQueryRequest, request: Request, db: Session = Depends(
 
 
 @router.put("/{query_id}")
-def update_query(query_id: int, req: UpdateQueryRequest, db: Session = Depends(get_db)):
+def update_query(query_id: int, req: UpdateQueryRequest, request: Request, db: Session = Depends(get_db)):
     """Update a saved query."""
     sq = db.query(SavedQuery).filter(SavedQuery.id == query_id).first()
     if not sq:
         raise HTTPException(status_code=404, detail="Query not found")
+    user = getattr(request.state, "user", {})
+    current_user = user.get("preferred_username", "system")
+    if sq.created_by != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to update this query")
     if req.name is not None:
         sq.name = req.name
     if req.sql is not None:
@@ -89,11 +93,15 @@ def update_query(query_id: int, req: UpdateQueryRequest, db: Session = Depends(g
 
 
 @router.delete("/{query_id}")
-def delete_query(query_id: int, db: Session = Depends(get_db)):
+def delete_query(query_id: int, request: Request, db: Session = Depends(get_db)):
     """Delete a saved query."""
     sq = db.query(SavedQuery).filter(SavedQuery.id == query_id).first()
     if not sq:
         raise HTTPException(status_code=404, detail="Query not found")
+    user = getattr(request.state, "user", {})
+    current_user = user.get("preferred_username", "system")
+    if sq.created_by != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this query")
     db.delete(sq)
     db.commit()
     return {"status": "ok"}

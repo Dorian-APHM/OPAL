@@ -1,7 +1,7 @@
 """
 HTML report builder — generates a self-contained quality report.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 import html as html_mod
 
 
@@ -119,7 +119,7 @@ def build_html_report(cdm_name: str, snapshots_data: dict, lang: str = "en") -> 
         lang: Language for labels ('en' or 'fr').
     """
     L = _LABELS.get(lang, _LABELS["en"])
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     sections = []
 
@@ -373,7 +373,7 @@ def build_comparison_html_report(
         lang: Language for labels.
     """
     L = _LABELS.get(lang, _LABELS["en"])
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     sections = []
     for comp in comparisons:

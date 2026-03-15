@@ -18,6 +18,7 @@ from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA
 from utils.sql_safety import safe_identifier
+from utils.csv_safety import csv_safe
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/concepts", tags=["concepts"])
@@ -481,9 +482,9 @@ def export_source_value_search(
                          "mapped_vocabulary_id", "mapped_standard_concept"])
         for r in rows:
             writer.writerow([
-                r["source_value"], r["domain"], r["n_records"], r["n_persons"],
-                r.get("mapped_concept_id", ""), r.get("mapped_concept_name", ""),
-                r.get("mapped_vocabulary_id", ""), r.get("mapped_standard_concept", ""),
+                csv_safe(r["source_value"]), csv_safe(r["domain"]), r["n_records"], r["n_persons"],
+                r.get("mapped_concept_id", ""), csv_safe(r.get("mapped_concept_name", "")),
+                csv_safe(r.get("mapped_vocabulary_id", "")), csv_safe(r.get("mapped_standard_concept", "")),
             ])
 
         output.seek(0)
