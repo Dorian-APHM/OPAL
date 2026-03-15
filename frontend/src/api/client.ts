@@ -34,6 +34,8 @@ import type {
   GroupSummary,
   GroupDetail,
   CohortShareInfo,
+  PathwaysResult,
+  PathwaysEventCohort,
 } from '../types';
 
 const api = axios.create({
@@ -262,6 +264,20 @@ export const cohortApi = {
     api.get<{ person: PatientJourneyInfo; events: PatientJourneyEvent[] }>(
       `/cohorts/patient/${personId}/journey`, { params: { cdm_name: cdmName } }
     ),
+  // Pathways Analysis
+  pathways: (cdmName: string, criteria: CohortCriteria, eventCohorts: PathwaysEventCohort[], options?: {
+    max_depth?: number; min_cell_count?: number; combo_window?: number;
+  }) =>
+    api.post<{ task_id: string; status: string }>('/cohorts/pathways', {
+      cdm_name: cdmName, criteria, event_cohorts: eventCohorts, ...(options || {}),
+    }),
+  pathwaysStatus: (taskId: string) =>
+    api.get<{
+      task_id: string; status: string; result?: PathwaysResult;
+      error?: string; completed?: number; total?: number; current_step?: string;
+    }>(`/cohorts/pathways/status/${taskId}`),
+  pathwaysCancel: (taskId: string) =>
+    api.post(`/cohorts/pathways/cancel/${taskId}`),
 };
 
 // Mapping endpoints

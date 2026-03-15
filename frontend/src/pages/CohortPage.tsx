@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
-  Star, Share2, Globe, Users, UserPlus, X,
+  Star, Share2, Globe, Users, UserPlus, X, GitBranch,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -17,6 +17,7 @@ import QueryCanvas from '../components/cohort/QueryCanvas';
 import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
+import PathwaysPanel from '../components/cohort/PathwaysPanel';
 import PatientJourney from '../components/cohort/PatientJourney';
 import ConceptSetPage from './ConceptSetPage';
 import IncidencePage from './IncidencePage';
@@ -546,6 +547,21 @@ export default function CohortPage({ selectedCdm }: Props) {
                   <CohortComparisonPanel
                     cdmName={selectedCdm || ''}
                     cohorts={cohorts}
+                  />
+                ),
+              },
+              {
+                key: 'pathways',
+                label: (
+                  <div className="flex items-center gap-1">
+                    <GitBranch className="h-3.5 w-3.5" />
+                    <span>{t('cohort.pathways', 'Pathways')}</span>
+                  </div>
+                ),
+                children: (
+                  <PathwaysPanel
+                    cdmName={selectedCdm || ''}
+                    criteria={toBackendCriteria(criteria)}
                   />
                 ),
               },
