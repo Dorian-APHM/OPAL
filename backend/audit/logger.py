@@ -122,9 +122,12 @@ def write_audit_log(entry: dict[str, Any]) -> None:
         if isinstance(now, str):
             now = datetime.fromisoformat(now)
         log_file = _get_log_file(now)
+        is_new = not log_file.exists()
         line = json.dumps(entry, ensure_ascii=False, default=str)
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+        if is_new:
+            os.chmod(log_file, 0o640)
     except Exception:
         logger.exception("Failed to write audit log entry")
 
@@ -170,9 +173,14 @@ class AuditMiddleware(BaseHTTPMiddleware):
         }
 
         # Add query params for context (cdm_name, domain, etc.)
+        # Mask sensitive values to avoid leaking credentials in audit logs
+        _SENSITIVE_KEYS = {"password", "token", "ticket", "secret", "secret_key", "db_password"}
         params = dict(request.query_params)
         if params:
-            entry["params"] = params
+            entry["params"] = {
+                k: "***" if k.lower() in _SENSITIVE_KEYS else v
+                for k, v in params.items()
+            }
 
         write_audit_log(entry)
 

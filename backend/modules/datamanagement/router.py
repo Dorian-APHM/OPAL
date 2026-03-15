@@ -109,6 +109,7 @@ class ExtractRequest(BaseModel):
 # ──── Background task registry ────
 _active_extractions: dict[str, dict] = {}
 _extractions_lock = threading.Lock()
+_MAX_ACTIVE_EXTRACTIONS = 100
 
 
 # ──── Endpoints ────
@@ -262,6 +263,13 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
 
     task_id = str(uuid.uuid4())
     with _extractions_lock:
+        # Evict completed/error tasks if at capacity
+        if len(_active_extractions) >= _MAX_ACTIVE_EXTRACTIONS:
+            stale = [k for k, v in _active_extractions.items() if v["status"] in ("completed", "error")]
+            for k in stale:
+                del _active_extractions[k]
+        if len(_active_extractions) >= _MAX_ACTIVE_EXTRACTIONS:
+            raise HTTPException(status_code=429, detail="Too many concurrent extractions")
         _active_extractions[task_id] = {
             "status": "running",
             "cdm_name": cdm_name,

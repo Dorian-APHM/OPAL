@@ -33,6 +33,7 @@ router = APIRouter(prefix="/api/quality", tags=["quality"])
 # Key: analysis_id (str), Value: {"cancelled": bool, "conn": psycopg2 connection or None}
 _active_analyses: dict[str, dict] = {}
 _active_analyses_lock = threading.Lock()
+_MAX_ACTIVE_ANALYSES = 100
 
 
 class AnalysisRequest(BaseModel):
@@ -247,6 +248,11 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
     user = getattr(request.state, "user", {})
     trigger_username = user.get("preferred_username", "")
 
+    # Enforce cap on concurrent analyses
+    with _active_analyses_lock:
+        if len(_active_analyses) >= _MAX_ACTIVE_ANALYSES:
+            raise HTTPException(status_code=429, detail="Too many concurrent analyses")
+
     # Register this analysis for cancel support
     import queue as _queue
     import threading as _threading
@@ -263,7 +269,7 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
         the analysis survives client disconnects and page navigations.
         """
         with _active_analyses_lock:
-            _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": []}
+            _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": [], "username": trigger_username}
 
         try:
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
@@ -371,16 +377,24 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
 
 @router.post("/analyze/cancel/{analysis_id}")
-def cancel_analysis(analysis_id: str):
+def cancel_analysis(analysis_id: str, request: Request):
     """Cancel a running streaming analysis.
 
     Sets the cancelled flag so the generator stops between domains.
     Also attempts to cancel the active PostgreSQL query.
+    Only the user who launched the analysis (or an admin) can cancel it.
     """
     with _active_analyses_lock:
         entry = _active_analyses.get(analysis_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", [])
+    owner = entry.get("username", "")
+    if owner and username != owner and "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Only the analysis owner or admin can cancel")
 
     with _active_analyses_lock:
         entry["cancelled"] = True
@@ -446,7 +460,7 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
 
     analysis_id = f"conf-{_uuid.uuid4().hex[:8]}"
     with _active_analyses_lock:
-        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"]}
+        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"], "username": trigger_username}
 
     def _worker():
         from modules.quality.conformity import run_conformity_checks
@@ -506,12 +520,20 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
 
 
 @router.post("/conformity/cancel/{analysis_id}")
-def cancel_conformity(analysis_id: str):
+def cancel_conformity(analysis_id: str, request: Request):
     """Cancel a running conformity check."""
     with _active_analyses_lock:
         entry = _active_analyses.get(analysis_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", [])
+    owner = entry.get("username", "")
+    if owner and username != owner and "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Only the analysis owner or admin can cancel")
+
     with _active_analyses_lock:
         entry["cancelled"] = True
     conn = entry.get("conn")
