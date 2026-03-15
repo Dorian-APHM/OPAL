@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from psycopg2.extras import RealDictCursor
+from psycopg2 import sql as psysql
 
 from db.app_db import get_db
 from db.models import CdmConfig, AnalysisSettings
@@ -41,6 +42,11 @@ def _get_conn(db: Session, cdm_name: str):
         logger.exception("Cannot connect to CDM '%s'", cdm_name)
         raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return conn, schema
+
+
+def _ident(name: str) -> psysql.Identifier:
+    """Return a psycopg2 sql.Identifier for safe SQL interpolation."""
+    return psysql.Identifier(safe_identifier(name))
 
 
 @router.get("/search")
@@ -86,11 +92,12 @@ def search_concepts(
             if standard_only:
                 conditions.append("c.standard_concept = 'S'")
 
-            where = "WHERE " + " AND ".join(conditions) if conditions else ""
+            where = psysql.SQL("WHERE ") + psysql.SQL(" AND ").join(
+                [psysql.SQL(c) for c in conditions]
+            ) if conditions else psysql.SQL("")
 
             # P22 fix: COUNT(*) OVER() in a single query instead of 2 separate scans
-            cur.execute(
-                f"""
+            query = psysql.SQL("""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.domain_id, c.vocabulary_id, c.concept_class_id,
                        c.standard_concept, c.valid_start_date::text, c.valid_end_date::text,
@@ -100,9 +107,8 @@ def search_concepts(
                 {where}
                 ORDER BY c.concept_name
                 LIMIT %s OFFSET %s
-                """,
-                params + [limit, offset],
-            )
+            """).format(schema=_ident(schema), where=where)
+            cur.execute(query, params + [limit, offset])
             rows = cur.fetchall()
             total = rows[0]["_total_count"] if rows else 0
             concepts = [{k: v for k, v in dict(r).items() if k != "_total_count"} for r in rows]
@@ -124,14 +130,14 @@ def get_concept_details(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Main concept
             cur.execute(
-                f"""
+                psysql.SQL("""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.domain_id, c.vocabulary_id, c.concept_class_id,
                        c.standard_concept, c.valid_start_date::text, c.valid_end_date::text,
                        c.invalid_reason
                 FROM {schema}.concept c
                 WHERE c.concept_id = %s
-                """,
+                """).format(schema=_ident(schema)),
                 [concept_id],
             )
             concept = cur.fetchone()
@@ -140,7 +146,7 @@ def get_concept_details(
 
             # Relationships (outgoing)
             cur.execute(
-                f"""
+                psysql.SQL("""
                 SELECT cr.relationship_id,
                        c2.concept_id AS related_concept_id,
                        c2.concept_name AS related_concept_name,
@@ -153,7 +159,7 @@ def get_concept_details(
                   AND cr.invalid_reason IS NULL
                 ORDER BY cr.relationship_id, c2.concept_name
                 LIMIT 200
-                """,
+                """).format(schema=_ident(schema)),
                 [concept_id],
             )
             relationships = [dict(r) for r in cur.fetchall()]
@@ -162,12 +168,12 @@ def get_concept_details(
             synonyms = []
             try:
                 cur.execute(
-                    f"""
+                    psysql.SQL("""
                     SELECT concept_synonym_name, language_concept_id
                     FROM {schema}.concept_synonym
                     WHERE concept_id = %s
                     ORDER BY concept_synonym_name
-                    """,
+                    """).format(schema=_ident(schema)),
                     [concept_id],
                 )
                 synonyms = [dict(r) for r in cur.fetchall()]
@@ -195,7 +201,7 @@ def get_concept_hierarchy(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Ancestors
             cur.execute(
-                f"""
+                psysql.SQL("""
                 SELECT ca.ancestor_concept_id AS concept_id,
                        c.concept_name, c.concept_code,
                        c.vocabulary_id, c.concept_class_id,
@@ -207,14 +213,14 @@ def get_concept_hierarchy(
                   AND ca.ancestor_concept_id != %s
                 ORDER BY ca.min_levels_of_separation
                 LIMIT 100
-                """,
+                """).format(schema=_ident(schema)),
                 [concept_id, concept_id],
             )
             ancestors = [dict(r) for r in cur.fetchall()]
 
             # Descendants
             cur.execute(
-                f"""
+                psysql.SQL("""
                 SELECT ca.descendant_concept_id AS concept_id,
                        c.concept_name, c.concept_code,
                        c.vocabulary_id, c.concept_class_id,
@@ -226,7 +232,7 @@ def get_concept_hierarchy(
                   AND ca.descendant_concept_id != %s
                 ORDER BY ca.min_levels_of_separation
                 LIMIT 200
-                """,
+                """).format(schema=_ident(schema)),
                 [concept_id, concept_id],
             )
             descendants = [dict(r) for r in cur.fetchall()]
@@ -261,27 +267,34 @@ def get_concept_source_values(
                 source_concept_col = safe_identifier(cfg["source_concept_id"]) if cfg.get("source_concept_id") else None
 
                 # Build WHERE clause: match standard concept_id OR source_concept_id
-                where_parts = [f"{concept_col} = %s"]
+                where_parts = [psysql.SQL("{} = %s").format(_ident(concept_col))]
                 params: list = [domain_name, concept_id]
                 if source_concept_col:
-                    where_parts.append(f"{source_concept_col} = %s")
+                    where_parts.append(psysql.SQL("{} = %s").format(_ident(source_concept_col)))
                     params.append(concept_id)
-                where_clause = " OR ".join(where_parts)
+                where_clause = psysql.SQL(" OR ").join(where_parts)
 
                 try:
                     cur.execute(
-                        f"""
+                        psysql.SQL("""
                         SELECT %s AS domain,
                                {source_col} AS source_value,
                                COUNT(*) AS n_records,
                                COUNT(DISTINCT person_id) AS n_persons
                         FROM {schema}.{table}
                         WHERE ({where_clause})
-                          AND {source_col} IS NOT NULL
-                        GROUP BY {source_col}
+                          AND {source_col_2} IS NOT NULL
+                        GROUP BY {source_col_3}
                         ORDER BY COUNT(*) DESC
                         LIMIT 50
-                        """,
+                        """).format(
+                            source_col=_ident(source_col),
+                            schema=_ident(schema),
+                            table=_ident(table),
+                            where_clause=where_clause,
+                            source_col_2=_ident(source_col),
+                            source_col_3=_ident(source_col),
+                        ),
                         params,
                     )
                     rows = cur.fetchall()
@@ -327,14 +340,14 @@ def search_source_value(
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                where_clause = f"t.{source_col} ILIKE %s"
+                where_clause = psysql.SQL("t.{} ILIKE %s").format(_ident(source_col))
                 query_params = [domain_name, f"%{q}%"]
                 if source_name_col:
-                    where_clause += f" OR t.{source_name_col} ILIKE %s"
+                    where_clause = psysql.SQL("{} OR t.{} ILIKE %s").format(where_clause, _ident(source_name_col))
                     query_params.append(f"%{q}%")
-                source_name_select = f"t.{source_name_col}" if source_name_col else "NULL"
-                source_name_group = f", t.{source_name_col}" if source_name_col else ""
-                union_parts.append(f"""
+                source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
+                source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
+                union_parts.append(psysql.SQL("""
                     SELECT %s AS domain,
                            t.{source_col} AS source_value,
                            {source_name_select} AS source_name,
@@ -349,25 +362,33 @@ def search_source_value(
                     WHERE {where_clause}
                     GROUP BY t.{source_col}{source_name_group}, t.{concept_col},
                              c.concept_name, c.vocabulary_id, c.standard_concept
-                """)
+                """).format(
+                    source_col=_ident(source_col),
+                    source_name_select=source_name_select,
+                    concept_col=_ident(concept_col),
+                    schema=_ident(schema),
+                    table=_ident(table),
+                    where_clause=where_clause,
+                    source_name_group=source_name_group,
+                ))
                 params.extend(query_params)
 
             if not union_parts:
                 return {"results": [], "total": 0, "limit": limit, "offset": offset}
 
-            full_query = " UNION ALL ".join(union_parts)
+            full_query = psysql.SQL(" UNION ALL ").join(union_parts)
 
             # Get total count
-            cur.execute(f"SELECT COUNT(*) AS cnt FROM ({full_query}) sub", params)
+            cur.execute(psysql.SQL("SELECT COUNT(*) AS cnt FROM ({}) sub").format(full_query), params)
             total = cur.fetchone()["cnt"]
 
             # Get paginated results
             cur.execute(
-                f"""
-                SELECT * FROM ({full_query}) sub
+                psysql.SQL("""
+                SELECT * FROM ({}) sub
                 ORDER BY n_records DESC
                 LIMIT %s OFFSET %s
-                """,
+                """).format(full_query),
                 params + [limit, offset],
             )
             results = [dict(r) for r in cur.fetchall()]
@@ -410,14 +431,14 @@ def export_source_value_search(
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                where_clause = f"t.{source_col} ILIKE %s"
+                where_clause = psysql.SQL("t.{} ILIKE %s").format(_ident(source_col))
                 query_params = [domain_name, f"%{q}%"]
                 if source_name_col:
-                    where_clause += f" OR t.{source_name_col} ILIKE %s"
+                    where_clause = psysql.SQL("{} OR t.{} ILIKE %s").format(where_clause, _ident(source_name_col))
                     query_params.append(f"%{q}%")
-                source_name_select = f"t.{source_name_col}" if source_name_col else "NULL"
-                source_name_group = f", t.{source_name_col}" if source_name_col else ""
-                union_parts.append(f"""
+                source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
+                source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
+                union_parts.append(psysql.SQL("""
                     SELECT %s AS domain,
                            t.{source_col} AS source_value,
                            {source_name_select} AS source_name,
@@ -432,15 +453,23 @@ def export_source_value_search(
                     WHERE {where_clause}
                     GROUP BY t.{source_col}{source_name_group}, t.{concept_col},
                              c.concept_name, c.vocabulary_id, c.standard_concept
-                """)
+                """).format(
+                    source_col=_ident(source_col),
+                    source_name_select=source_name_select,
+                    concept_col=_ident(concept_col),
+                    schema=_ident(schema),
+                    table=_ident(table),
+                    where_clause=where_clause,
+                    source_name_group=source_name_group,
+                ))
                 params.extend(query_params)
 
             if not union_parts:
                 raise HTTPException(status_code=404, detail="No domains to search")
 
-            full_query = " UNION ALL ".join(union_parts)
+            full_query = psysql.SQL(" UNION ALL ").join(union_parts)
             cur.execute(
-                f"SELECT * FROM ({full_query}) sub ORDER BY n_records DESC",
+                psysql.SQL("SELECT * FROM ({}) sub ORDER BY n_records DESC").format(full_query),
                 params,
             )
             rows = [dict(r) for r in cur.fetchall()]
@@ -497,9 +526,15 @@ def get_concept_counts(
                 concept_col = safe_identifier(cfg["concept_id"])
                 try:
                     cur.execute(
-                        f"SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
-                        f"COUNT(DISTINCT person_id) AS n_persons "
-                        f"FROM {schema}.{table} WHERE {concept_col} = ANY(%s) GROUP BY {concept_col}",
+                        psysql.SQL(
+                            "SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
+                            "COUNT(DISTINCT person_id) AS n_persons "
+                            "FROM {schema}.{table} WHERE {concept_col} = ANY(%s) GROUP BY {concept_col}"
+                        ).format(
+                            concept_col=_ident(concept_col),
+                            schema=_ident(schema),
+                            table=_ident(table),
+                        ),
                         [ids],
                     )
                     for r in cur.fetchall():
@@ -542,10 +577,16 @@ def get_concept_source_counts(
                     continue
                 try:
                     cur.execute(
-                        f"SELECT {source_concept_col} AS concept_id, COUNT(*) AS n_records, "
-                        f"COUNT(DISTINCT person_id) AS n_persons "
-                        f"FROM {schema}.{table} WHERE {source_concept_col} = ANY(%s) "
-                        f"GROUP BY {source_concept_col}",
+                        psysql.SQL(
+                            "SELECT {col} AS concept_id, COUNT(*) AS n_records, "
+                            "COUNT(DISTINCT person_id) AS n_persons "
+                            "FROM {schema}.{table} WHERE {col} = ANY(%s) "
+                            "GROUP BY {col}"
+                        ).format(
+                            col=_ident(source_concept_col),
+                            schema=_ident(schema),
+                            table=_ident(table),
+                        ),
                         [ids],
                     )
                     for r in cur.fetchall():
@@ -572,13 +613,13 @@ def list_concept_domains(
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"""
+                psysql.SQL("""
                 SELECT domain_id, COUNT(*) AS count
                 FROM {schema}.concept
                 WHERE domain_id IS NOT NULL
                 GROUP BY domain_id
                 ORDER BY count DESC
-                """
+                """).format(schema=_ident(schema))
             )
             return {"domains": [dict(r) for r in cur.fetchall()]}
     finally:
@@ -595,13 +636,13 @@ def list_vocabularies(
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"""
+                psysql.SQL("""
                 SELECT vocabulary_id, COUNT(*) AS count
                 FROM {schema}.concept
                 WHERE vocabulary_id IS NOT NULL
                 GROUP BY vocabulary_id
                 ORDER BY count DESC
-                """
+                """).format(schema=_ident(schema))
             )
             return {"vocabularies": [dict(r) for r in cur.fetchall()]}
     finally:

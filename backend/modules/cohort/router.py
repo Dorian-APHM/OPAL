@@ -559,27 +559,54 @@ def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
     try:
         steps = build_attrition_sql(req.criteria, schema)
         from psycopg2.extras import DictCursor
-        results = []
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            for step in steps:
+
+        # Build a single CTE-based query for all steps to reduce round-trips
+        if len(steps) > 1:
+            cte_parts = []
+            for i, step in enumerate(steps):
+                cte_parts.append(f"step_{i} AS ({step['sql']})")
+            cte_query = "WITH " + ", ".join(cte_parts) + " SELECT " + ", ".join(
+                f"(SELECT * FROM step_{i}) AS count_{i}" for i in range(len(steps))
+            )
+            results = []
+            with conn.cursor(cursor_factory=DictCursor) as cur:
                 try:
-                    cur.execute(step["sql"])
+                    cur.execute(cte_query)
                     row = cur.fetchone()
-                    count = row[0] if row else 0
-                    results.append({
-                        "step": step["step"],
-                        "label": step["label"],
-                        "count": count,
-                    })
-                except Exception as e:
-                    logger.warning("Attrition step %d failed: %s", step["step"], e)
+                    for i, step in enumerate(steps):
+                        count = row[i] if row else None
+                        results.append({
+                            "step": step["step"],
+                            "label": step["label"],
+                            "count": count,
+                        })
+                except Exception:
+                    # Fallback to individual queries if CTE fails
                     conn.rollback()
-                    results.append({
-                        "step": step["step"],
-                        "label": step["label"],
-                        "count": None,
-                        "error": "An internal error occurred",
-                    })
+                    results = []
+                    for step in steps:
+                        try:
+                            cur.execute(step["sql"])
+                            row = cur.fetchone()
+                            count = row[0] if row else 0
+                            results.append({"step": step["step"], "label": step["label"], "count": count})
+                        except Exception as e:
+                            logger.warning("Attrition step %d failed: %s", step["step"], e)
+                            conn.rollback()
+                            results.append({"step": step["step"], "label": step["label"], "count": None, "error": "An internal error occurred"})
+        else:
+            results = []
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                for step in steps:
+                    try:
+                        cur.execute(step["sql"])
+                        row = cur.fetchone()
+                        count = row[0] if row else 0
+                        results.append({"step": step["step"], "label": step["label"], "count": count})
+                    except Exception as e:
+                        logger.warning("Attrition step %d failed: %s", step["step"], e)
+                        conn.rollback()
+                        results.append({"step": step["step"], "label": step["label"], "count": None, "error": "An internal error occurred"})
     except Exception as e:
         logger.exception("Attrition analysis failed")
         raise HTTPException(status_code=500, detail="An internal error occurred during attrition analysis")
