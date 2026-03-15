@@ -732,15 +732,130 @@ Et creer l'endpoint `/api/health` dans `main.py` (verifier DB + pool status).
 
 ---
 
+## 8. COMPLEMENT — Findings supplementaires (agent performance)
+
+Les items suivants ont ete identifies par un audit de performance complementaire et ajoutent des findings supplementaires.
+
+### 8.1 [P0] SQL injection dans `concept_set/router.py` — placeholders manuels
+
+**Fichiers** :
+- `backend/modules/concept_set/router.py:167` — `",".join(str(int(i)) for i in expand_ids)` interpole dans SQL
+- `backend/modules/concept_set/router.py:202` — meme pattern sur `concept_ids`
+
+**Probleme** : Les concept_ids sont interpoles via f-string dans les requetes SQL. Bien que `int()` protege partiellement, le pattern est un anti-pattern qui invite aux erreurs de copier-coller. Le schema (`omop_schema`) est aussi interpole via f-string sans `safe_identifier`.
+
+**Solution** : Utiliser `WHERE ancestor_concept_id = ANY(%s)` avec un parametre tuple/list, comme dans `concept/router.py`.
+
+---
+
+### 8.2 [P1] Thread safety — task dicts sans lock
+
+**Fichiers** :
+- `backend/modules/quality/router.py:31` — `_active_analyses`
+- `backend/modules/mapping/router.py:31` — `_active_suggestions`
+- `backend/modules/cohort/router.py:897` — `_active_characterizations`
+- `backend/modules/datamanagement/router.py:109` — `_active_extractions`
+
+**Probleme** : Ces dicts sont ecrits par des threads background et lus par des threads de requete sans aucun lock. Comparer avec `ohdsi/router.py:61` qui utilise correctement `threading.Lock`.
+
+**Solution** : Ajouter un `threading.Lock` par dict.
+
+---
+
+### 8.3 [P1] Extractions stockent les CSV complets en memoire
+
+**Fichiers** : `backend/modules/datamanagement/router.py:331-349`
+
+**Probleme** : Le CSV d'extraction est construit dans un `StringIO` puis stocke comme string dans `_active_extractions[task_id]["data"]`. Pour une extraction de 100K+ lignes avec beaucoup de colonnes, c'est des dizaines de MB par tache, jamais nettoyes.
+
+**Solution** : Ecrire les extractions dans un fichier temporaire sur disque. Stocker le chemin dans le dict. Streamer depuis le fichier au download. Supprimer apres telechargement ou expiration TTL.
+
+---
+
+### 8.4 [P1] Audit logs charges integralement en memoire
+
+**Fichiers** : `backend/main.py:289-304`
+
+**Probleme** : L'endpoint `/api/audit/logs` lit des fichiers JSONL entiers en memoire, parse toutes les lignes, puis filtre et pagine en Python. Les logs d'audit grandissent sans limite.
+
+**Solution** : Utiliser `itertools.islice` pour une pagination basee sur le comptage de lignes sans charger le fichier entier. Ou indexer les entrees d'audit dans la base applicative.
+
+---
+
+### 8.5 [P1] Dashboard qualite — requetes sequentielles par domaine
+
+**Fichiers** : `backend/modules/quality/domains/dashboard.py:29-87`
+
+**Probleme** : Itere sur `DOMAIN_CONFIG` (14+ domaines) avec un `SELECT COUNT(*)` par table de domaine. Soit ~28 requetes sequentielles par appel.
+
+**Solution** : Construire un `UNION ALL` unique sur toutes les tables avec un label domaine. Executer une seule fois.
+
+---
+
+### 8.6 [P2] `observation_period.py` — 6 requetes repetant le meme CTE
+
+**Fichiers** : `backend/modules/quality/domains/observation_period.py:50-59`
+
+**Probleme** : 6 `execute()` calls qui re-declarent chacune le meme CTE `per_cte`. Le commentaire dit "P13 fix: reduced from 6 to 4 scans" mais il y a encore 6 appels.
+
+**Solution** : Combiner en 2-3 requetes avec plusieurs colonnes de resultat par requete.
+
+---
+
+### 8.7 [P2] `bulk_decision` — charge toutes les decisions puis inserts individuels
+
+**Fichiers** : `backend/modules/mapping/router.py:767-801`
+
+**Probleme** : Charge toutes les decisions existantes d'un CDM+domaine dans un set Python, puis boucle pour creer des `MappingDecision` un par un.
+
+**Solution** : Utiliser `INSERT ... ON CONFLICT DO UPDATE` (upsert) avec `executemany` ou operations bulk SQLAlchemy.
+
+---
+
+### 8.8 [P2] N+1 dans `datamanagement/router.py:list_cohorts_for_extraction()`
+
+**Fichiers** : `backend/modules/datamanagement/router.py:127-133`
+
+```python
+for c in cohorts:
+    latest = db.query(CohortVersion).filter(...).order_by(...).first()
+```
+
+**Probleme** : Pour N cohortes, N requetes individuelles pour obtenir la derniere version (meme pattern que le N+1 corrige dans `cohort/router.py`).
+
+**Solution** : Appliquer le meme fix subquery que dans `list_cohorts`.
+
+---
+
+### 8.9 [P3] Pas de compression des reponses (GZip)
+
+**Fichiers** : `backend/main.py`
+
+**Probleme** : Pas de middleware de compression. Les reponses JSON volumineuses (snapshots qualite, resultats concept search) sont envoyees non compressees.
+
+**Solution** : `app.add_middleware(GZipMiddleware, minimum_size=1000)`.
+
+---
+
+### 8.10 [P3] Handlers synchrones pour appels HTTP Keycloak
+
+**Fichiers** : `backend/main.py:440-461`
+
+**Probleme** : Les appels HTTP vers Keycloak sont synchrones (`requests.post/get`) dans des handlers synchrones. Chaque appel bloque un thread du pool.
+
+**Solution** : Convertir en `async def` avec `httpx.AsyncClient` pour les endpoints Keycloak. Priorite basse car le threadpool par defaut (40 threads) est suffisant pour une charge moderee.
+
+---
+
 ## RESUME
 
 | Priorite | Securite | Performance | Architecture | Fonctionnalites | Tests | DevOps | Frontend | Total |
 |----------|----------|-------------|-------------|----------------|-------|--------|----------|-------|
-| **P0** | 2 | 0 | 0 | 0 | 0 | 0 | 0 | **2** |
-| **P1** | 7 | 3 | 2 | 2 | 2 | 2 | 0 | **18** |
-| **P2** | 3 | 6 | 3 | 3 | 3 | 2 | 3 | **23** |
-| **P3** | 2 | 1 | 1 | 2 | 1 | 2 | 2 | **11** |
-| **Total** | **14** | **10** | **6** | **7** | **6** | **6** | **5** | **54** |
+| **P0** | 3 | 0 | 0 | 0 | 0 | 0 | 0 | **3** |
+| **P1** | 7 | 8 | 2 | 2 | 2 | 2 | 0 | **23** |
+| **P2** | 3 | 9 | 3 | 3 | 3 | 2 | 3 | **26** |
+| **P3** | 2 | 3 | 1 | 2 | 1 | 2 | 2 | **13** |
+| **Total** | **15** | **20** | **6** | **7** | **6** | **6** | **5** | **65** |
 
 ### Items V2 (du PLAN_AMELIORATION.md initial, non resolus ou necessitant un 2e passage)
 - 1.8 — Rate limiting insuffisant (partiellement corrige, couverture incomplete)
