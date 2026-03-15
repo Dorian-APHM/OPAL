@@ -16,6 +16,8 @@ import psycopg2
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from pydantic import BaseModel, Field
+
 from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
 from utils.crypto import DecryptionError
 from utils.rate_limit import limiter
@@ -245,6 +247,14 @@ def auth_permissions(request: Request):
     return build_frontend_permissions(roles)
 
 
+class AssignRoleRequest(BaseModel):
+    role: str = Field(..., min_length=1, max_length=100)
+
+
+class ToggleUserRequest(BaseModel):
+    enabled: bool
+
+
 def _require_admin(request: Request):
     """Raise 403 if the current user doesn't have the admin role."""
     user = getattr(request.state, "user", {})
@@ -284,25 +294,28 @@ def get_audit_logs(
             d -= timedelta(days=1)
 
     entries = []
+    total = 0
     for dt_str in dates:
         log_file = AUDIT_LOG_DIR / f"{dt_str}.jsonl"
         if not log_file.exists():
             continue
-        for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-            if not line:
-                continue
-            try:
-                entry = _json.loads(line)
-                if user and entry.get("user") != user:
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
                     continue
-                if action and not entry.get("action", "").startswith(action):
+                try:
+                    entry = _json.loads(line)
+                    if user and entry.get("user") != user:
+                        continue
+                    if action and not entry.get("action", "").startswith(action):
+                        continue
+                    total += 1
+                    entries.append(entry)
+                except _json.JSONDecodeError:
                     continue
-                entries.append(entry)
-            except _json.JSONDecodeError:
-                continue
 
     entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
-    total = len(entries)
     start = (page - 1) * page_size
     return {
         "entries": entries[start:start + page_size],
@@ -332,16 +345,18 @@ def get_audit_stats(request: Request, date_from: str | None = None, date_to: str
     while d <= d_to:
         log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
         if log_file.exists():
-            for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-                if not line:
-                    continue
-                try:
-                    entry = _json.loads(line)
-                    user_counts[entry.get("user", "unknown")] += 1
-                    action_counts[entry.get("action", "unknown")] += 1
-                    total += 1
-                except _json.JSONDecodeError:
-                    continue
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = _json.loads(line)
+                        user_counts[entry.get("user", "unknown")] += 1
+                        action_counts[entry.get("action", "unknown")] += 1
+                        total += 1
+                    except _json.JSONDecodeError:
+                        continue
         d += timedelta(days=1)
 
     return {
@@ -386,18 +401,20 @@ def export_audit_csv(
     while d <= d_to:
         log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
         if log_file.exists():
-            for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-                if not line:
-                    continue
-                try:
-                    entry = _json.loads(line)
-                    if user and entry.get("user") != user:
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
                         continue
-                    if action and not entry.get("action", "").startswith(action):
+                    try:
+                        entry = _json.loads(line)
+                        if user and entry.get("user") != user:
+                            continue
+                        if action and not entry.get("action", "").startswith(action):
+                            continue
+                        entries.append(entry)
+                    except _json.JSONDecodeError:
                         continue
-                    entries.append(entry)
-                except _json.JSONDecodeError:
-                    continue
         d += timedelta(days=1)
 
     output = io.StringIO()
@@ -465,12 +482,10 @@ def list_users(request: Request, admin_user=Depends(_require_admin)):
 
 
 @app.post("/api/admin/users/{user_id}/roles")
-def assign_role(user_id: str, request: Request, body: dict, admin_user=Depends(_require_admin)):
+def assign_role(user_id: str, request: Request, body: AssignRoleRequest, admin_user=Depends(_require_admin)):
     """Assign a role to a Keycloak user (admin only)."""
     import requests as http_requests
-    role_name = body.get("role")
-    if not role_name:
-        return JSONResponse(status_code=400, content={"detail": "role is required"})
+    role_name = body.role
 
     token = _get_keycloak_admin_token()
     if not token:
@@ -531,10 +546,10 @@ def remove_role(user_id: str, role_name: str, request: Request, admin_user=Depen
 
 
 @app.put("/api/admin/users/{user_id}/toggle")
-def toggle_user(user_id: str, request: Request, body: dict, admin_user=Depends(_require_admin)):
+def toggle_user(user_id: str, request: Request, body: ToggleUserRequest, admin_user=Depends(_require_admin)):
     """Enable or disable a Keycloak user (admin only)."""
     import requests as http_requests
-    enabled = body.get("enabled", True)
+    enabled = body.enabled
     token = _get_keycloak_admin_token()
     if not token:
         return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
