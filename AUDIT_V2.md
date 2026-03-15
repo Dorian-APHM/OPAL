@@ -841,6 +841,58 @@ Et creer l'endpoint `/api/health` dans `main.py` (verifier DB + pool status).
 
 Les items suivants ont ete identifies par un audit de performance complementaire et ajoutent des findings supplementaires.
 
+### 8.0 Findings supplementaires de l'audit fonctionnel
+
+#### 8.0.1 [P2] Nginx static asset location supprime les security headers
+
+**Fichiers** : `frontend/nginx.conf` — `location ~* \.(js|css|png|...)`
+
+**Probleme** : Le bloc `location` pour les assets statiques n'herite pas des `add_header` du bloc `server`. En nginx, `add_header` dans un bloc enfant ecrase ceux du parent. Les headers CSP, HSTS, X-Frame-Options ne sont pas envoyes sur les fichiers statiques.
+
+**Solution** : Repeter les headers dans le bloc `location` ou utiliser `include` pour les headers communs.
+
+---
+
+#### 8.0.2 [P2] `datetime.utcnow()` deprecie (Python 3.12+)
+
+**Fichiers** : 9 occurrences dans 4 fichiers (modeles, routers)
+
+**Probleme** : `datetime.utcnow()` est deprecie depuis Python 3.12. Il retourne un datetime naive (sans timezone).
+
+**Solution** : Remplacer par `datetime.now(timezone.utc)` (deja utilise dans `models.py:_utcnow()`).
+
+---
+
+#### 8.0.3 [P2] Pas de ForeignKey dans les modeles SQLAlchemy
+
+**Fichiers** : `backend/db/models.py`
+
+**Probleme** : Aucun modele n'utilise `ForeignKey`. Les relations (CohortVersion.cohort_id → Cohort.id, etc.) sont gerees uniquement au niveau applicatif. La base ne garantit pas l'integrite referentielle.
+
+**Solution** : Ajouter les `ForeignKey` avec `ondelete="CASCADE"` la ou c'est pertinent, dans une migration Alembic.
+
+---
+
+#### 8.0.4 [P2] Missing DELETE pour IncidenceAnalysis et EstimationAnalysis
+
+**Fichiers** : `backend/modules/incidence/router.py`, `backend/modules/estimation/router.py`
+
+**Probleme** : Ces modeles ont un CRUD incomplet — create + list + get mais pas de delete. Les analyses sauvegardees ne peuvent pas etre supprimees.
+
+**Solution** : Ajouter des endpoints DELETE avec verification de propriete.
+
+---
+
+#### 8.0.5 [P3] `LandingPage.tsx` est du code mort
+
+**Fichiers** : `frontend/src/pages/LandingPage.tsx`
+
+**Probleme** : La page existe mais n'est routee nulle part dans `App.tsx`.
+
+**Solution** : Supprimer le fichier ou l'ajouter comme route d'accueil.
+
+---
+
 ### 8.1 [P0] SQL injection dans `concept_set/router.py` — placeholders manuels
 
 **Fichiers** :
@@ -958,9 +1010,9 @@ for c in cohorts:
 |----------|----------|-------------|-------------|----------------|-------|--------|----------|-------|
 | **P0** | 4 | 0 | 0 | 0 | 0 | 0 | 0 | **4** |
 | **P1** | 11 | 8 | 2 | 2 | 2 | 2 | 0 | **27** |
-| **P2** | 7 | 9 | 3 | 3 | 3 | 2 | 3 | **30** |
-| **P3** | 3 | 3 | 1 | 2 | 1 | 2 | 2 | **14** |
-| **Total** | **25** | **20** | **6** | **7** | **6** | **6** | **5** | **75** |
+| **P2** | 8 | 9 | 5 | 4 | 3 | 2 | 3 | **34** |
+| **P3** | 3 | 3 | 1 | 2 | 1 | 2 | 3 | **15** |
+| **Total** | **26** | **20** | **8** | **8** | **6** | **6** | **6** | **80** |
 
 ### Items V2 (du PLAN_AMELIORATION.md initial, non resolus ou necessitant un 2e passage)
 - 1.8 — Rate limiting insuffisant (partiellement corrige, couverture incomplete)
