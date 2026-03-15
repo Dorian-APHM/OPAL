@@ -6,9 +6,10 @@ Uses existing saved cohorts as target (population) and outcome (event).
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from utils.rate_limit import limiter
 
 from db.app_db import get_db
 from db.models import (
@@ -214,7 +215,8 @@ class EstimationSaveRequest(BaseModel):
 
 
 @router.post("/kaplan-meier")
-def compute_kaplan_meier(body: KaplanMeierRequest, db=Depends(get_db)):
+@limiter.limit("3/minute")
+def compute_kaplan_meier(body: KaplanMeierRequest, request: Request, db=Depends(get_db)):
     conn, omop_schema = _get_cdm_conn(db, body.cdm_name)
     try:
         target_criteria, target_name = _get_cohort_criteria(db, body.target_cohort_id)
@@ -355,3 +357,14 @@ def get_estimation(analysis_id: int, db=Depends(get_db)):
         "results": json.loads(a.results_json) if a.results_json else {},
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
+
+
+@router.delete("/{analysis_id}")
+def delete_estimation_analysis(analysis_id: int, request: Request, db: Session = Depends(get_db)):
+    """Delete an estimation analysis."""
+    analysis = db.query(EstimationAnalysis).filter(EstimationAnalysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    db.delete(analysis)
+    db.commit()
+    return {"message": "Deleted"}

@@ -129,9 +129,10 @@ def get_unread_items(
 
 
 @router.post("/{notification_id}/read")
-def mark_as_read(notification_id: int, db: Session = Depends(get_db)):
+def mark_as_read(notification_id: int, request: Request, db: Session = Depends(get_db)):
     """Mark a notification as read."""
-    notif = db.query(Notification).filter(Notification.id == notification_id).first()
+    user_or, _ = _user_filter(request)
+    notif = db.query(Notification).filter(Notification.id == notification_id, user_or).first()
     if not notif:
         raise HTTPException(status_code=404, detail="Notification not found")
     notif.read = 1
@@ -177,8 +178,12 @@ def mark_all_read(
 
 
 @router.post("/create")
-def create_notification(req: CreateNotificationRequest, db: Session = Depends(get_db)):
+def create_notification(req: CreateNotificationRequest, request: Request, db: Session = Depends(get_db)):
     """Create a notification (internal/admin use)."""
+    user = getattr(request.state, "user", {})
+    user_roles = user.get("roles", [])
+    if not any(r in ("admin", "data-manager") for r in user_roles):
+        raise HTTPException(status_code=403, detail="Only admin or data-manager can create notifications")
     notif = Notification(
         username=req.username,
         type=req.type,

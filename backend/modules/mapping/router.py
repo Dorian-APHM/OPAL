@@ -7,7 +7,7 @@ validation workflow, apply mapping, and audit history.
 import csv
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -22,13 +22,16 @@ from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
 from modules.mapping.suggest import suggest_mappings, suggest_batch
+from utils.csv_safety import csv_safe
 from utils.sql_safety import safe_identifier
+from utils.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 
 # Background suggestion tasks — survive page navigation
 _active_suggestions: dict[str, dict] = {}
+_suggestions_lock = __import__('threading').Lock()
 # Stores: { task_id: { status, cdm_name, domain, results, error, cancelled } }
 
 
@@ -403,9 +406,9 @@ def export_unmapped(
     header.extend(["n_records", "n_persons"])
     writer.writerow(header)
     for r in rows:
-        row = [r["source_value"]]
+        row = [csv_safe(r["source_value"])]
         if sn_col:
-            row.append(r.get("source_name", ""))
+            row.append(csv_safe(r.get("source_name", "")))
         row.extend([r["n_records"], r["n_persons"]])
         writer.writerow(row)
     output.seek(0)
@@ -531,6 +534,7 @@ def suggest_single(req: SuggestRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/suggest/batch")
+@limiter.limit("3/minute")
 def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch mapping suggestions in a background thread.
@@ -567,10 +571,11 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     ref_map = {r.code: r.description for r in ref_rows}
 
     task_id = str(_uuid.uuid4())[:8]
-    _active_suggestions[task_id] = {
-        "status": "running", "cdm_name": req.cdm_name, "domain": req.domain,
-        "results": None, "error": None, "cancelled": False,
-    }
+    with _suggestions_lock:
+        _active_suggestions[task_id] = {
+            "status": "running", "cdm_name": req.cdm_name, "domain": req.domain,
+            "results": None, "error": None, "cancelled": False,
+        }
 
     # Capture request params for worker
     domain = req.domain
@@ -618,8 +623,9 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 if not t.get("source_name") and t["source_value"] in ref_map:
                     t["source_name"] = ref_map[t["source_value"]]
 
-            if _active_suggestions.get(task_id, {}).get("cancelled"):
-                return
+            with _suggestions_lock:
+                if _active_suggestions.get(task_id, {}).get("cancelled"):
+                    return
 
             # P46 fix: fetch SapBERT only for the terms we need (not all domain)
             all_svs = [t["source_value"] for t in terms]
@@ -663,8 +669,9 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                         "suggestions": list(sapbert_map[sv]),
                     })
 
-            if _active_suggestions.get(task_id, {}).get("cancelled"):
-                return
+            with _suggestions_lock:
+                if _active_suggestions.get(task_id, {}).get("cancelled"):
+                    return
 
             results_slow = []
             if terms_without_sapbert:
@@ -678,15 +685,17 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 result_map[r["source_value"]] = r
             results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
 
-            if task_id in _active_suggestions:
-                _active_suggestions[task_id]["status"] = "done"
-                _active_suggestions[task_id]["results"] = results
+            with _suggestions_lock:
+                if task_id in _active_suggestions:
+                    _active_suggestions[task_id]["status"] = "done"
+                    _active_suggestions[task_id]["results"] = results
 
         except Exception as e:
             logger.exception("Background batch suggestion failed")
-            if task_id in _active_suggestions:
-                _active_suggestions[task_id]["status"] = "error"
-                _active_suggestions[task_id]["error"] = "An internal error occurred during batch suggestion"
+            with _suggestions_lock:
+                if task_id in _active_suggestions:
+                    _active_suggestions[task_id]["status"] = "error"
+                    _active_suggestions[task_id]["error"] = "An internal error occurred during batch suggestion"
         finally:
             try:
                 conn.close()
@@ -700,38 +709,44 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
 @router.get("/suggest/status/{task_id}")
 def suggest_status(task_id: str):
     """Check status of a background suggestion task."""
-    entry = _active_suggestions.get(task_id)
+    with _suggestions_lock:
+        entry = _active_suggestions.get(task_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Task not found")
     resp: dict = {"task_id": task_id, "status": entry["status"], "domain": entry["domain"]}
     if entry["status"] == "done":
         resp["results"] = entry["results"]
         # Clean up after delivering results
-        _active_suggestions.pop(task_id, None)
+        with _suggestions_lock:
+            _active_suggestions.pop(task_id, None)
     elif entry["status"] == "error":
         resp["error"] = entry["error"]
-        _active_suggestions.pop(task_id, None)
+        with _suggestions_lock:
+            _active_suggestions.pop(task_id, None)
     return resp
 
 
 @router.post("/suggest/cancel/{task_id}")
 def suggest_cancel(task_id: str):
     """Cancel a running suggestion task."""
-    entry = _active_suggestions.get(task_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Task not found")
-    entry["cancelled"] = True
-    _active_suggestions.pop(task_id, None)
+    with _suggestions_lock:
+        entry = _active_suggestions.get(task_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Task not found")
+        entry["cancelled"] = True
+        _active_suggestions.pop(task_id, None)
     return {"cancelled": True, "task_id": task_id}
 
 
 @router.get("/suggest/active")
 def suggest_active():
     """List running suggestion tasks."""
+    with _suggestions_lock:
+        items = list(_active_suggestions.items())
     return {
         "active": [
             {"task_id": tid, "cdm_name": info["cdm_name"], "domain": info["domain"], "status": info["status"]}
-            for tid, info in _active_suggestions.items()
+            for tid, info in items
         ]
     }
 
@@ -956,9 +971,9 @@ def export_stcm(cdm_name: str, domain: str, db: Session = Depends(get_db)):
     ])
     for d in decisions:
         writer.writerow([
-            d.source_value, 0, f"OPAL_{domain}",
-            d.source_name or d.source_value,
-            d.target_concept_id, d.target_vocabulary_id or "SNOMED",
+            csv_safe(d.source_value), 0, f"OPAL_{domain}",
+            csv_safe(d.source_name or d.source_value),
+            d.target_concept_id, csv_safe(d.target_vocabulary_id or "SNOMED"),
             "1970-01-01", "2099-12-31", "",
         ])
     output.seek(0)
@@ -1066,10 +1081,10 @@ def export_history(cdm_name: str, domain: str | None = None, db: Session = Depen
     ])
     for d in decisions:
         writer.writerow([
-            d.id, d.domain, d.source_value, d.source_name, d.action,
-            d.target_concept_id, d.target_concept_name, d.target_vocabulary_id,
-            d.previous_concept_id, d.suggestion_source, d.confidence_score,
-            d.user, d.created_at.isoformat() if d.created_at else "",
+            d.id, csv_safe(d.domain), csv_safe(d.source_value), csv_safe(d.source_name), csv_safe(d.action),
+            d.target_concept_id, csv_safe(d.target_concept_name), csv_safe(d.target_vocabulary_id),
+            d.previous_concept_id, csv_safe(d.suggestion_source), d.confidence_score,
+            csv_safe(d.user), d.created_at.isoformat() if d.created_at else "",
         ])
     output.seek(0)
 
@@ -1131,7 +1146,7 @@ async def upload_reference(
     db.flush()
 
     # Insert new entries (deduplicate by code)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     seen_codes = set()
     count = 0
     for row in reader:
@@ -1209,7 +1224,7 @@ async def upload_sapbert(
     db.query(SapbertMapping).filter(SapbertMapping.domain == domain).delete()
     db.flush()
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     count = 0
     for row in reader:
         source_code = (row.get("source_code") or "").strip()

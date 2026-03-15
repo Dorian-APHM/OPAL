@@ -8,17 +8,17 @@ import os
 import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import FastAPI, Query, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import psycopg2
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
 from utils.crypto import DecryptionError
+from utils.rate_limit import limiter
 from audit.logger import AUDIT_LOG_DIR
 from db.app_db import engine, get_db
 from db.models import Base
@@ -30,12 +30,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-# Rate limiter (disabled when TESTING env var is set for test suites)
-limiter = Limiter(
-    key_func=get_remote_address,
-    enabled=os.getenv("TESTING", "").lower() not in ("1", "true"),
-)
 
 # Create FastAPI app
 app = FastAPI(
@@ -118,6 +112,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Accept-Language"],
 )
+
+# GZip compression for large responses
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Audit logging (must be added before auth so it wraps the full request)
 from audit.logger import AuditMiddleware
@@ -265,7 +263,7 @@ def get_audit_logs(
     user: str | None = None,
     action: str | None = None,
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = Query(default=50, ge=1, le=500),
     admin_user=Depends(_require_admin),
 ):
     """Return audit log entries with filtering and pagination (admin only)."""
@@ -404,12 +402,13 @@ def export_audit_csv(
 
     output = io.StringIO()
     writer = csv.writer(output)
+    from utils.csv_safety import csv_safe
     writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
     for e in entries:
         writer.writerow([
-            e.get("ts", ""), e.get("user", ""), ",".join(e.get("roles", [])),
-            e.get("action", ""), e.get("method", ""), e.get("path", ""),
-            e.get("status", ""), e.get("duration_ms", ""), e.get("ip", ""),
+            csv_safe(e.get("ts", "")), csv_safe(e.get("user", "")), csv_safe(",".join(e.get("roles", []))),
+            csv_safe(e.get("action", "")), csv_safe(e.get("method", "")), csv_safe(e.get("path", "")),
+            e.get("status", ""), e.get("duration_ms", ""), csv_safe(e.get("ip", "")),
         ])
     output.seek(0)
 
