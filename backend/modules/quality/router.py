@@ -5,7 +5,9 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime
+import re
+import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -20,7 +22,9 @@ from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from modules.quality.engine import get_available_domains, run_domain_analysis
 from modules.quality.comparator import compare_snapshots
+from utils.csv_safety import csv_safe
 from config import DEFAULT_OMOP_SCHEMA
+from utils.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quality", tags=["quality"])
@@ -28,6 +32,7 @@ router = APIRouter(prefix="/api/quality", tags=["quality"])
 # Track active streaming analyses for cancel support.
 # Key: analysis_id (str), Value: {"cancelled": bool, "conn": psycopg2 connection or None}
 _active_analyses: dict[str, dict] = {}
+_active_analyses_lock = threading.Lock()
 
 
 class AnalysisRequest(BaseModel):
@@ -74,7 +79,7 @@ def _save_snapshot(db: Session, cdm_name: str, domain: str, results: dict) -> An
         domain=domain,
         version=max_version + 1,
         results=results,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(snapshot)
     db.commit()
@@ -89,6 +94,7 @@ def list_domains():
 
 
 @router.post("/analyze")
+@limiter.limit("3/minute")
 def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run analysis for a single domain on a CDM."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
@@ -256,7 +262,8 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
         end.  The thread is completely independent of the SSE stream so
         the analysis survives client disconnects and page navigations.
         """
-        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": []}
+        with _active_analyses_lock:
+            _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": []}
 
         try:
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
@@ -264,10 +271,12 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
             logger.exception("Stream analysis: cannot connect to CDM '%s'", cdm_name)
             progress_q.put({"type": "error", "message": "Cannot connect to CDM database"})
             progress_q.put(None)  # sentinel
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
             return
 
-        _active_analyses[analysis_id]["conn"] = conn
+        with _active_analyses_lock:
+            _active_analyses[analysis_id]["conn"] = conn
         total = len(domains)
         completed = 0
         cancelled = False
@@ -275,8 +284,10 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
         try:
             for domain in domains:
-                if _active_analyses.get(analysis_id, {}).get("cancelled"):
-                    cancelled = True
+                with _active_analyses_lock:
+                    if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                        cancelled = True
+                if cancelled:
                     progress_q.put({"type": "cancelled", "completed": completed, "total": total})
                     break
 
@@ -298,21 +309,24 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
                     completed += 1
                     succeeded_domains.append(domain)
-                    if analysis_id in _active_analyses:
-                        _active_analyses[analysis_id]["completed"] = completed
-                        _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "success"})
+                    with _active_analyses_lock:
+                        if analysis_id in _active_analyses:
+                            _active_analyses[analysis_id]["completed"] = completed
+                            _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "success"})
                     progress_q.put({"type": "progress", "domain": domain, "status": "success",
                                     "completed": completed, "total": total})
                 except Exception as e:
                     completed += 1
-                    if analysis_id in _active_analyses:
-                        _active_analyses[analysis_id]["completed"] = completed
-                        _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
+                    with _active_analyses_lock:
+                        if analysis_id in _active_analyses:
+                            _active_analyses[analysis_id]["completed"] = completed
+                            _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
                     progress_q.put({"type": "progress", "domain": domain, "status": "error",
                                     "error": "Analysis failed due to an internal error", "completed": completed, "total": total})
         finally:
             conn.close()
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
 
         if not cancelled and succeeded_domains:
             if trigger_username:
@@ -363,11 +377,13 @@ def cancel_analysis(analysis_id: str):
     Sets the cancelled flag so the generator stops between domains.
     Also attempts to cancel the active PostgreSQL query.
     """
-    entry = _active_analyses.get(analysis_id)
+    with _active_analyses_lock:
+        entry = _active_analyses.get(analysis_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Analysis not found or already finished")
 
-    entry["cancelled"] = True
+    with _active_analyses_lock:
+        entry["cancelled"] = True
 
     # Try to cancel the running PostgreSQL query
     conn = entry.get("conn")
@@ -384,6 +400,8 @@ def cancel_analysis(analysis_id: str):
 @router.get("/analyze/active")
 def list_active_analyses():
     """List currently running analyses (batch + conformity)."""
+    with _active_analyses_lock:
+        items = list(_active_analyses.items())
     return {
         "active": [
             {
@@ -396,7 +414,7 @@ def list_active_analyses():
                 "total": info.get("total", 0),
                 "domain_status": info.get("domain_status", []),
             }
-            for aid, info in _active_analyses.items()
+            for aid, info in items
         ]
     }
 
@@ -427,7 +445,8 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
     trigger_username = user.get("preferred_username", "")
 
     analysis_id = f"conf-{_uuid.uuid4().hex[:8]}"
-    _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"]}
+    with _active_analyses_lock:
+        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"]}
 
     def _worker():
         from modules.quality.conformity import run_conformity_checks
@@ -436,19 +455,23 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
         except Exception as e:
             logger.error("Conformity: cannot connect to CDM %s: %s", cdm_name, e)
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
             return
 
-        _active_analyses[analysis_id]["conn"] = conn
+        with _active_analyses_lock:
+            _active_analyses[analysis_id]["conn"] = conn
 
         try:
-            if _active_analyses.get(analysis_id, {}).get("cancelled"):
-                return
+            with _active_analyses_lock:
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    return
 
             report = run_conformity_checks(conn, omop_schema=omop_schema)
 
-            if _active_analyses.get(analysis_id, {}).get("cancelled"):
-                return
+            with _active_analyses_lock:
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    return
 
             # Persist result as a snapshot with domain='Conformity'
             local_db = SessionLocal()
@@ -467,11 +490,14 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
                 local_db.close()
 
         except Exception as e:
-            if not _active_analyses.get(analysis_id, {}).get("cancelled"):
+            with _active_analyses_lock:
+                cancelled = _active_analyses.get(analysis_id, {}).get("cancelled")
+            if not cancelled:
                 logger.exception("Conformity check failed for %s", cdm_name)
         finally:
             conn.close()
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
 
     thread = _threading.Thread(target=_worker, daemon=True)
     thread.start()
@@ -482,10 +508,12 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
 @router.post("/conformity/cancel/{analysis_id}")
 def cancel_conformity(analysis_id: str):
     """Cancel a running conformity check."""
-    entry = _active_analyses.get(analysis_id)
+    with _active_analyses_lock:
+        entry = _active_analyses.get(analysis_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Analysis not found or already finished")
-    entry["cancelled"] = True
+    with _active_analyses_lock:
+        entry["cancelled"] = True
     conn = entry.get("conn")
     if conn and not conn.closed:
         try:
@@ -587,13 +615,15 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
     results = snapshot.results
     output = io.StringIO()
     writer = csv.writer(output)
-    filename = f"{snapshot.cdm_name}_{snapshot.domain}_v{snapshot.version}_{table_type}.csv"
+    safe_cdm = re.sub(r'[^\w\-.]', '_', snapshot.cdm_name)
+    safe_domain = re.sub(r'[^\w\-.]', '_', snapshot.domain)
+    filename = f"{safe_cdm}_{safe_domain}_v{snapshot.version}_{table_type}.csv"
 
     if table_type == "top_concepts":
         concepts = results.get("achilles_like", {}).get("top_concepts", [])
         writer.writerow(["concept_id", "concept_name", "source_value", "n_records", "n_persons"])
         for c in concepts:
-            writer.writerow([c["concept_id"], c["concept_name"], c["source_value"], c["n_records"], c["n_persons"]])
+            writer.writerow([c["concept_id"], csv_safe(c["concept_name"]), csv_safe(c["source_value"]), c["n_records"], c["n_persons"]])
 
     elif table_type == "top_unmapped":
         unmapped = results.get("mapping", {}).get("top_unmapped_terms", [])
@@ -604,9 +634,9 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
         header.append("count")
         writer.writerow(header)
         for u in unmapped:
-            row = [u["source_value"]]
+            row = [csv_safe(u["source_value"])]
             if has_name:
-                row.append(u.get("source_name", ""))
+                row.append(csv_safe(u.get("source_name", "")))
             row.append(u["count"])
             writer.writerow(row)
 
@@ -615,7 +645,7 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
         writer.writerow(["domain", "total_records", "distinct_persons", "pct_persons",
                          "total_terms", "mapped_terms", "unmapped_terms", "pct_terms_mapped"])
         for d in domains:
-            writer.writerow([d["domain"], d["total_records"], d["distinct_persons"],
+            writer.writerow([csv_safe(d["domain"]), d["total_records"], d["distinct_persons"],
                              d["pct_persons"], d["total_terms"], d["mapped_terms"],
                              d["unmapped_terms"], d["pct_terms_mapped"]])
 
@@ -623,14 +653,14 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
         rows = results.get("achilles_like", {}).get("age_by_gender", {}).get("rows", [])
         writer.writerow(["gender_name", "n", "mean_age", "p10", "p25", "median_age", "p75", "p90"])
         for r in rows:
-            writer.writerow([r["gender_name"], r["n"], r.get("mean_age"), r["p10"], r["p25"],
+            writer.writerow([csv_safe(r["gender_name"]), r["n"], r.get("mean_age"), r["p10"], r["p25"],
                              r.get("median_age"), r["p75"], r["p90"]])
 
     elif table_type == "duration_by_gender":
         rows = results.get("achilles_like", {}).get("duration_by_gender", {}).get("rows", [])
         writer.writerow(["gender_name", "n", "mean_months", "p10", "p25", "median_months", "p75", "p90"])
         for r in rows:
-            writer.writerow([r["gender_name"], r["n"], r.get("mean_months"), r["p10"], r["p25"],
+            writer.writerow([csv_safe(r["gender_name"]), r["n"], r.get("mean_months"), r["p10"], r["p25"],
                              r.get("median_months"), r["p75"], r["p90"]])
 
     else:
@@ -769,11 +799,14 @@ def generate_comparison_report(
 
     html = build_comparison_html_report(cdm_name_a, cdm_name_b, comparisons, lang=lang)
 
-    suffix = f"_{domain}" if domain else ""
+    safe_a = re.sub(r'[^\w\-.]', '_', cdm_name_a)
+    safe_b = re.sub(r'[^\w\-.]', '_', cdm_name_b)
+    safe_domain_str = re.sub(r'[^\w\-.]', '_', domain) if domain else ""
+    suffix = f"_{safe_domain_str}" if domain else ""
     return StreamingResponse(
         iter([html]),
         media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=opal_comparison_{cdm_name_a}_vs_{cdm_name_b}{suffix}.html"},
+        headers={"Content-Disposition": f"attachment; filename=opal_comparison_{safe_a}_vs_{safe_b}{suffix}.html"},
     )
 
 
@@ -807,10 +840,11 @@ def generate_report(
 
     html = build_html_report(cdm_name, snapshots_data, lang=lang)
 
+    safe_name = re.sub(r'[^\w\-.]', '_', cdm_name)
     return StreamingResponse(
         iter([html]),
         media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=opal_report_{cdm_name}.html"},
+        headers={"Content-Disposition": f"attachment; filename=opal_report_{safe_name}.html"},
     )
 
 

@@ -9,6 +9,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from utils.rate_limit import limiter
 
 from db.app_db import get_db
 from db.models import (
@@ -126,7 +127,8 @@ class IncidenceSaveRequest(BaseModel):
 
 
 @router.post("/compute")
-def compute_incidence_rate(body: IncidenceComputeRequest, db=Depends(get_db)):
+@limiter.limit("3/minute")
+def compute_incidence_rate(body: IncidenceComputeRequest, request: Request, db=Depends(get_db)):
     conn, omop_schema = _get_cdm_conn(db, body.cdm_name)
     try:
         target_sql, target_name = _get_cohort_sql(db, body.target_cohort_id, omop_schema)
@@ -215,3 +217,14 @@ def get_incidence_analysis(analysis_id: int, db=Depends(get_db)):
         "results": json.loads(a.results_json) if a.results_json else {},
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
+
+
+@router.delete("/{analysis_id}")
+def delete_incidence_analysis(analysis_id: int, request: Request, db: Session = Depends(get_db)):
+    """Delete an incidence analysis."""
+    analysis = db.query(IncidenceAnalysis).filter(IncidenceAnalysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    db.delete(analysis)
+    db.commit()
+    return {"message": "Deleted"}

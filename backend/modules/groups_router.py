@@ -4,6 +4,7 @@ User group management endpoints.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from db.app_db import get_db
 from db.models import UserGroup, UserGroupMember
@@ -35,18 +36,25 @@ def _get_user(request: Request) -> dict:
 @router.get("/")
 def list_groups(db: Session = Depends(get_db)):
     """List all user groups with member counts."""
-    groups = db.query(UserGroup).order_by(UserGroup.name).all()
-    result = []
-    for g in groups:
-        count = db.query(UserGroupMember).filter(UserGroupMember.group_name == g.name).count()
-        result.append({
-            "name": g.name,
-            "description": g.description,
-            "created_by": g.created_by,
-            "member_count": count,
-            "created_at": g.created_at.isoformat() if g.created_at else None,
-        })
-    return {"groups": result}
+    results = (
+        db.query(UserGroup, func.count(UserGroupMember.id))
+        .outerjoin(UserGroupMember, UserGroupMember.group_name == UserGroup.name)
+        .group_by(UserGroup.id)
+        .order_by(UserGroup.name)
+        .all()
+    )
+    return {
+        "groups": [
+            {
+                "name": g.name,
+                "description": g.description,
+                "created_by": g.created_by,
+                "member_count": count,
+                "created_at": g.created_at.isoformat() if g.created_at else None,
+            }
+            for g, count in results
+        ]
+    }
 
 
 @router.post("/")
