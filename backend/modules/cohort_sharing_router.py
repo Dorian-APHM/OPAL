@@ -2,7 +2,7 @@
 Cohort sharing & user group management endpoints.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -164,7 +164,12 @@ def list_cohort_shares(cohort_id: int, request: Request, db: Session = Depends(g
 # ── Admin: cohorts per user ──
 
 @router.get("/admin/by-user")
-def admin_cohorts_by_user(request: Request, db: Session = Depends(get_db)):
+def admin_cohorts_by_user(
+    request: Request,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
     """Admin/data-manager only: list all cohorts grouped by creator.
     Also shows which cohorts each user has access to via sharing.
     """
@@ -173,8 +178,9 @@ def admin_cohorts_by_user(request: Request, db: Session = Depends(get_db)):
     if not any(r in ("admin", "data-manager") for r in roles):
         raise HTTPException(status_code=403, detail="Admin or data-manager only")
 
-    cohorts = db.query(Cohort).order_by(Cohort.created_by, Cohort.updated_at.desc()).all()
-    shares = db.query(CohortShare).all()
+    cohorts = db.query(Cohort).order_by(Cohort.created_by, Cohort.updated_at.desc()).limit(limit).offset(offset).all()
+    cohort_ids = [c.id for c in cohorts]
+    shares = db.query(CohortShare).filter(CohortShare.cohort_id.in_(cohort_ids)).all() if cohort_ids else []
 
     # Build per-user view
     by_user: dict[str, dict] = {}

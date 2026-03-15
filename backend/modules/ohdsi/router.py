@@ -12,7 +12,7 @@ from pathlib import Path
 import docker
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from config import (
@@ -66,9 +66,9 @@ _lock = threading.Lock()
 # ---------------------------------------------------------------------------
 class RunRequest(BaseModel):
     cdm_name: str
-    results_schema: str = "omop_cdm"
-    vocabulary_schema: str = "omop_cdm"
-    cdm_version: str = "5.4"
+    results_schema: str = Field(default="omop_cdm", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    vocabulary_schema: str = Field(default="omop_cdm", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    cdm_version: str = Field(default="5.4", pattern=r"^[0-9]+\.[0-9]+$")
     cdm_source_name: str = ""
 
 
@@ -123,7 +123,7 @@ def _run_container(service_name: str, env_vars: dict) -> None:
             command=service_cfg["command"],
             environment=env_vars,
             volumes=volumes,
-            network_mode="host",
+            network="opal-network",
             detach=True,
             remove=False,
         )
