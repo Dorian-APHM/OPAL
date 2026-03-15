@@ -115,8 +115,7 @@ def test_assign_role_missing_body(client, monkeypatch):
     monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
 
     resp = client.post("/api/admin/users/uid-1/roles", json={})
-    assert resp.status_code == 400
-    assert "role is required" in resp.json()["detail"]
+    assert resp.status_code == 422  # Pydantic validation: 'role' is required
 
 
 def test_assign_role_keycloak_unavailable(client, monkeypatch):

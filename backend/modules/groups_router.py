@@ -34,8 +34,16 @@ def _get_user(request: Request) -> dict:
 
 
 @router.get("/")
-def list_groups(db: Session = Depends(get_db)):
-    """List all user groups with member counts."""
+def list_groups(request: Request, db: Session = Depends(get_db)):
+    """List all user groups with member counts.
+
+    Non-admin users only see groups they belong to, and member_count is hidden.
+    """
+    user = _get_user(request)
+    roles = user.get("roles", [])
+    username = user.get("preferred_username", "")
+    is_admin = any(r in ("admin", "data-manager") for r in roles)
+
     results = (
         db.query(UserGroup, func.count(UserGroupMember.id))
         .outerjoin(UserGroupMember, UserGroupMember.group_name == UserGroup.name)
@@ -43,13 +51,22 @@ def list_groups(db: Session = Depends(get_db)):
         .order_by(UserGroup.name)
         .all()
     )
+
+    if not is_admin:
+        # Filter: only groups this user belongs to
+        my_groups = {
+            m.group_name for m in
+            db.query(UserGroupMember).filter(UserGroupMember.username == username).all()
+        }
+        results = [(g, count) for g, count in results if g.name in my_groups]
+
     return {
         "groups": [
             {
                 "name": g.name,
                 "description": g.description,
                 "created_by": g.created_by,
-                "member_count": count,
+                "member_count": count if is_admin else None,
                 "created_at": g.created_at.isoformat() if g.created_at else None,
             }
             for g, count in results
