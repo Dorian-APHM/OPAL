@@ -184,13 +184,11 @@ def get_accessible_cdms(
     ).all()
 
     # Group-based grants: find groups user belongs to, then CDMs those groups can access
-    user_group_names = db.query(UserGroupMember.group_name).filter(
+    user_groups_select = db.query(UserGroupMember.group_name).filter(
         UserGroupMember.username == username,
-    ).subquery()
+    ).scalar_subquery()
     group_cdms = db.query(CdmGroupAccess.cdm_name).filter(
-        CdmGroupAccess.group_name.in_(db.query(UserGroupMember.group_name).filter(
-            UserGroupMember.username == username,
-        )),
+        CdmGroupAccess.group_name.in_(user_groups_select),
     ).all()
 
     result = sorted(set(c.cdm_name for c in direct_cdms) | set(c.cdm_name for c in group_cdms))
