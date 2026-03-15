@@ -42,10 +42,14 @@ const api = axios.create({
   baseURL: '/api',
 });
 
-// Token getter — set by AuthProvider once Keycloak is initialized
+// Token getter & refresher — set by AuthProvider once Keycloak is initialized
 let _getToken: (() => string | undefined) | null = null;
+let _refreshToken: (() => Promise<string | undefined>) | null = null;
 export function setTokenGetter(getter: () => string | undefined) {
   _getToken = getter;
+}
+export function setTokenRefresher(refresher: () => Promise<string | undefined>) {
+  _refreshToken = refresher;
 }
 
 // Attach Keycloak Bearer token to all API requests
@@ -57,22 +61,66 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Unified error response interceptor
+// Token refresh queue to avoid concurrent refresh calls
+let _isRefreshing = false;
+let _refreshQueue: Array<(token: string | undefined) => void> = [];
+
+function _processQueue(token: string | undefined) {
+  _refreshQueue.forEach((resolve) => resolve(token));
+  _refreshQueue = [];
+}
+
+// Unified error response interceptor with 401 retry
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const originalRequest = error.config;
     if (axios.isAxiosError(error) && error.response) {
       const { status, data } = error.response;
       const detail = data?.detail || data?.message || data?.error;
       if (detail && typeof detail === 'string') {
         error.message = detail;
       }
-      if (status === 401) {
+
+      // Attempt token refresh on 401 (only once per request)
+      if (status === 401 && _refreshToken && !originalRequest._retry) {
+        if (_isRefreshing) {
+          // Queue this request until token refresh completes
+          return new Promise((resolve) => {
+            _refreshQueue.push((newToken) => {
+              if (newToken) {
+                originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              }
+              resolve(api(originalRequest));
+            });
+          });
+        }
+
+        originalRequest._retry = true;
+        _isRefreshing = true;
+        try {
+          const newToken = await _refreshToken();
+          _isRefreshing = false;
+          _processQueue(newToken);
+          if (newToken) {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            return api(originalRequest);
+          }
+        } catch {
+          _isRefreshing = false;
+          _processQueue(undefined);
+        }
+        error.message = 'Session expired. Please log in again.';
+      } else if (status === 401) {
         error.message = 'Session expired. Please log in again.';
       } else if (status === 504) {
         error.message = detail || 'Query timed out. Try a simpler query.';
       } else if (status === 502) {
         error.message = detail || 'External database connection error.';
+      } else if (status === 503) {
+        error.message = detail || 'Service temporarily unavailable. Please try again.';
+      } else if (status === 429) {
+        error.message = 'Too many requests. Please slow down.';
       }
     } else if (error.code === 'ERR_NETWORK') {
       error.message = 'Network error. Please check your connection.';
@@ -80,6 +128,9 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+// Global request timeout
+api.defaults.timeout = 30000; // 30 seconds
 
 /** Get current auth token (for fetch/download calls outside axios) */
 export function getAuthToken(): string | undefined {

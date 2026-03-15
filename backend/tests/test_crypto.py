@@ -1,9 +1,10 @@
 """Tests for password encryption utilities."""
 import sys
 import os
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.crypto import encrypt_password, decrypt_password
+from utils.crypto import encrypt_password, decrypt_password, DecryptionError
 
 
 def test_encrypt_decrypt_roundtrip():
@@ -38,3 +39,9 @@ def test_encrypt_produces_different_ciphertexts():
     assert enc1 != enc2
     assert decrypt_password(enc1) == password
     assert decrypt_password(enc2) == password
+
+
+def test_decrypt_invalid_token_raises():
+    """Decrypting invalid ciphertext raises DecryptionError."""
+    with pytest.raises(DecryptionError):
+        decrypt_password("not-a-valid-fernet-token")
