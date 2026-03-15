@@ -9,7 +9,7 @@ import io
 import logging
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -32,6 +32,7 @@ from modules.cohort.sql_builder import (
 )
 from modules.cohort.characterization import run_characterization
 from modules.cohort.comparison import compare_cohorts
+from utils.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
@@ -450,7 +451,7 @@ def update_cohort(cohort_id: int, req: CohortUpdateRequest, request: Request, db
         )
         db.add(new_version)
 
-    cohort.updated_at = datetime.utcnow()
+    cohort.updated_at = datetime.now(timezone.utc)
     db.commit()
 
     return {
@@ -895,10 +896,12 @@ class CharacterizationRequest(BaseModel):
 
 # ──── Background characterization task tracking ────
 _active_characterizations: dict[str, dict] = {}
+_characterizations_lock = threading.Lock()
 
 
 @router.post("/characterize")
-def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def cohort_characterize(req: CharacterizationRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch Table 1 characterization as a background task.
     Returns a task_id for polling via /characterize/status/{task_id}.
@@ -907,23 +910,25 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
     schema = _get_omop_schema(db, cdm)
 
     task_id = str(uuid.uuid4())
-    _active_characterizations[task_id] = {
-        "status": "running",
-        "cdm_name": req.cdm_name,
-        "cohort_id": None,
-        "result": None,
-        "error": None,
-        "completed": 0,
-        "total": 0,
-        "current_step": "",
-    }
+    with _characterizations_lock:
+        _active_characterizations[task_id] = {
+            "status": "running",
+            "cdm_name": req.cdm_name,
+            "cohort_id": None,
+            "result": None,
+            "error": None,
+            "completed": 0,
+            "total": 0,
+            "current_step": "",
+        }
 
     def _progress(completed: int, total: int, step_label: str):
-        task = _active_characterizations.get(task_id)
-        if task:
-            task["completed"] = completed
-            task["total"] = total
-            task["current_step"] = step_label
+        with _characterizations_lock:
+            task = _active_characterizations.get(task_id)
+            if task:
+                task["completed"] = completed
+                task["total"] = total
+                task["current_step"] = step_label
 
     def _worker():
         try:
@@ -932,12 +937,14 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
                 visit_level=req.visit_level,
                 progress_callback=_progress,
             )
-            _active_characterizations[task_id]["result"] = result
-            _active_characterizations[task_id]["status"] = "completed"
+            with _characterizations_lock:
+                _active_characterizations[task_id]["result"] = result
+                _active_characterizations[task_id]["status"] = "completed"
         except Exception as e:
             logger.exception("Characterization failed")
-            _active_characterizations[task_id]["error"] = "An internal error occurred during characterization"
-            _active_characterizations[task_id]["status"] = "error"
+            with _characterizations_lock:
+                _active_characterizations[task_id]["error"] = "An internal error occurred during characterization"
+                _active_characterizations[task_id]["status"] = "error"
         finally:
             conn.close()
 
@@ -950,7 +957,8 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
 @router.get("/characterize/status/{task_id}")
 def characterize_status(task_id: str):
     """Poll the status of a characterization task."""
-    task = _active_characterizations.get(task_id)
+    with _characterizations_lock:
+        task = _active_characterizations.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -964,17 +972,20 @@ def characterize_status(task_id: str):
     if task["status"] == "completed":
         resp["result"] = task["result"]
         # Clean up after delivering results
-        _active_characterizations.pop(task_id, None)
+        with _characterizations_lock:
+            _active_characterizations.pop(task_id, None)
     elif task["status"] == "error":
         resp["error"] = task["error"]
-        _active_characterizations.pop(task_id, None)
+        with _characterizations_lock:
+            _active_characterizations.pop(task_id, None)
     return resp
 
 
 @router.post("/characterize/cancel/{task_id}")
 def characterize_cancel(task_id: str):
     """Cancel/clean up a characterization task."""
-    task = _active_characterizations.pop(task_id, None)
+    with _characterizations_lock:
+        task = _active_characterizations.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"status": "cancelled"}
@@ -983,7 +994,9 @@ def characterize_cancel(task_id: str):
 @router.get("/characterize/active")
 def characterize_active():
     """Return any currently running characterization task."""
-    for tid, task in _active_characterizations.items():
+    with _characterizations_lock:
+        items = list(_active_characterizations.items())
+    for tid, task in items:
         if task["status"] == "running":
             return {"task_id": tid, "status": "running", "cdm_name": task["cdm_name"]}
     return {"task_id": None, "status": "none"}
@@ -1008,10 +1021,12 @@ class PathwaysRequest(BaseModel):
 
 
 _active_pathways: dict[str, dict] = {}
+_pathways_lock = threading.Lock()
 
 
 @router.post("/pathways")
-def cohort_pathways(req: PathwaysRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def cohort_pathways(req: PathwaysRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch a pathways analysis as a background task.
     Returns a task_id for polling via /pathways/status/{task_id}.
@@ -1022,22 +1037,24 @@ def cohort_pathways(req: PathwaysRequest, db: Session = Depends(get_db)):
     schema = _get_omop_schema(db, cdm)
 
     task_id = str(uuid.uuid4())
-    _active_pathways[task_id] = {
-        "status": "running",
-        "cdm_name": req.cdm_name,
-        "result": None,
-        "error": None,
-        "completed": 0,
-        "total": 0,
-        "current_step": "",
-    }
+    with _pathways_lock:
+        _active_pathways[task_id] = {
+            "status": "running",
+            "cdm_name": req.cdm_name,
+            "result": None,
+            "error": None,
+            "completed": 0,
+            "total": 0,
+            "current_step": "",
+        }
 
     def _progress(completed: int, total: int, step_label: str):
-        task = _active_pathways.get(task_id)
-        if task:
-            task["completed"] = completed
-            task["total"] = total
-            task["current_step"] = step_label
+        with _pathways_lock:
+            task = _active_pathways.get(task_id)
+            if task:
+                task["completed"] = completed
+                task["total"] = total
+                task["current_step"] = step_label
 
     def _worker():
         try:
@@ -1051,12 +1068,14 @@ def cohort_pathways(req: PathwaysRequest, db: Session = Depends(get_db)):
                 combo_window=req.combo_window,
                 progress_callback=_progress,
             )
-            _active_pathways[task_id]["result"] = result
-            _active_pathways[task_id]["status"] = "completed"
+            with _pathways_lock:
+                _active_pathways[task_id]["result"] = result
+                _active_pathways[task_id]["status"] = "completed"
         except Exception as e:
             logger.exception("Pathways analysis failed")
-            _active_pathways[task_id]["error"] = "An internal error occurred during pathways analysis"
-            _active_pathways[task_id]["status"] = "error"
+            with _pathways_lock:
+                _active_pathways[task_id]["error"] = "An internal error occurred during pathways analysis"
+                _active_pathways[task_id]["status"] = "error"
         finally:
             conn.close()
 
@@ -1069,7 +1088,8 @@ def cohort_pathways(req: PathwaysRequest, db: Session = Depends(get_db)):
 @router.get("/pathways/status/{task_id}")
 def pathways_status(task_id: str):
     """Poll the status of a pathways analysis task."""
-    task = _active_pathways.get(task_id)
+    with _pathways_lock:
+        task = _active_pathways.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1082,17 +1102,20 @@ def pathways_status(task_id: str):
     }
     if task["status"] == "completed":
         resp["result"] = task["result"]
-        _active_pathways.pop(task_id, None)
+        with _pathways_lock:
+            _active_pathways.pop(task_id, None)
     elif task["status"] == "error":
         resp["error"] = task["error"]
-        _active_pathways.pop(task_id, None)
+        with _pathways_lock:
+            _active_pathways.pop(task_id, None)
     return resp
 
 
 @router.post("/pathways/cancel/{task_id}")
 def pathways_cancel(task_id: str):
     """Cancel/clean up a pathways analysis task."""
-    task = _active_pathways.pop(task_id, None)
+    with _pathways_lock:
+        task = _active_pathways.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"status": "cancelled"}
@@ -1163,7 +1186,7 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
                 )
                 if not req.visit_level:
                     ver_a.characterization_json = char_a
-                    ver_a.characterized_at = datetime.utcnow()
+                    ver_a.characterized_at = datetime.now(timezone.utc)
             if not char_b or force_rerun:
                 char_b = run_characterization(
                     conn, ver_b.criteria_json, schema,
@@ -1171,7 +1194,7 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
                 )
                 if not req.visit_level:
                     ver_b.characterization_json = char_b
-                    ver_b.characterized_at = datetime.utcnow()
+                    ver_b.characterized_at = datetime.now(timezone.utc)
             db.commit()
         except Exception as e:
             logger.exception("On-the-fly characterization failed during comparison")
@@ -1208,7 +1231,7 @@ def save_characterization(cohort_id: int, payload: dict, request: Request, db: S
         raise HTTPException(status_code=404, detail="No version found")
 
     latest.characterization_json = payload.get("characterization")
-    latest.characterized_at = datetime.utcnow()
+    latest.characterized_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "saved", "cohort_id": cohort_id, "version": latest.version}
 

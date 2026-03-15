@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from psycopg2.extras import DictCursor
 
 from db.app_db import get_db, SessionLocal
@@ -107,6 +108,7 @@ class ExtractRequest(BaseModel):
 
 # ──── Background task registry ────
 _active_extractions: dict[str, dict] = {}
+_extractions_lock = threading.Lock()
 
 
 # ──── Endpoints ────
@@ -117,20 +119,30 @@ def list_cohorts_for_extraction(
     db: Session = Depends(get_db),
 ):
     """List saved cohorts available for data extraction."""
-    cohorts = (
-        db.query(Cohort)
+    # Subquery: get the max version per cohort_id
+    max_ver_subq = (
+        db.query(
+            CohortVersion.cohort_id,
+            func.max(CohortVersion.version).label("max_version"),
+        )
+        .group_by(CohortVersion.cohort_id)
+        .subquery()
+    )
+    # Join cohorts with their latest version in a single query
+    rows = (
+        db.query(Cohort, CohortVersion)
+        .outerjoin(max_ver_subq, Cohort.id == max_ver_subq.c.cohort_id)
+        .outerjoin(
+            CohortVersion,
+            (CohortVersion.cohort_id == Cohort.id)
+            & (CohortVersion.version == max_ver_subq.c.max_version),
+        )
         .filter(Cohort.cdm_name == cdm_name)
         .order_by(Cohort.updated_at.desc())
         .all()
     )
     result = []
-    for c in cohorts:
-        latest = (
-            db.query(CohortVersion)
-            .filter(CohortVersion.cohort_id == c.id)
-            .order_by(CohortVersion.version.desc())
-            .first()
-        )
+    for c, latest in rows:
         has_same_visit = False
         if latest and latest.criteria_json:
             has_same_visit = _cohort_has_same_visit(latest.criteria_json)
@@ -249,20 +261,21 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     username = user.get("preferred_username", "anonymous")
 
     task_id = str(uuid.uuid4())
-    _active_extractions[task_id] = {
-        "status": "running",
-        "cdm_name": cdm_name,
-        "cohort_name": cohort_name,
-        "cohort_id": req.cohort_id,
-        "username": username,
-        "completed": 0,
-        "total": 3,  # count + preview + full CSV
-        "current_step": "",
-        "result": None,
-        "csv_data": None,
-        "csv_filename": None,
-        "error": None,
-    }
+    with _extractions_lock:
+        _active_extractions[task_id] = {
+            "status": "running",
+            "cdm_name": cdm_name,
+            "cohort_name": cohort_name,
+            "cohort_id": req.cohort_id,
+            "username": username,
+            "completed": 0,
+            "total": 3,  # count + preview + full CSV
+            "current_step": "",
+            "result": None,
+            "csv_data": None,
+            "csv_filename": None,
+            "error": None,
+        }
 
     # Serialise request params for the thread
     cohort_id = req.cohort_id
@@ -271,11 +284,12 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     preview_limit = req.preview_limit
 
     def _progress(completed: int, total: int, step_label: str):
-        task = _active_extractions.get(task_id)
-        if task:
-            task["completed"] = completed
-            task["total"] = total
-            task["current_step"] = step_label
+        with _extractions_lock:
+            task = _active_extractions.get(task_id)
+            if task:
+                task["completed"] = completed
+                task["total"] = total
+                task["current_step"] = step_label
 
     def _worker():
         conn = None
@@ -351,19 +365,20 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
 
             filename = f"dataset_{cohort_name.replace(' ', '_')}_{cohort_id}.csv"
 
-            task = _active_extractions.get(task_id)
-            if task:
-                task["result"] = {
-                    "columns": columns,
-                    "rows": rows,
-                    "total_count": total_count,
-                    "preview_limit": preview_limit,
-                    "cohort_name": cohort_name,
-                    "sql": extraction_sql,
-                }
-                task["csv_data"] = csv_buf.getvalue()
-                task["csv_filename"] = filename
-                task["status"] = "completed"
+            with _extractions_lock:
+                task = _active_extractions.get(task_id)
+                if task:
+                    task["result"] = {
+                        "columns": columns,
+                        "rows": rows,
+                        "total_count": total_count,
+                        "preview_limit": preview_limit,
+                        "cohort_name": cohort_name,
+                        "sql": extraction_sql,
+                    }
+                    task["csv_data"] = csv_buf.getvalue()
+                    task["csv_filename"] = filename
+                    task["status"] = "completed"
 
             # Send notification
             try:
@@ -386,10 +401,11 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
 
         except Exception as e:
             logger.exception("Extraction failed")
-            task = _active_extractions.get(task_id)
-            if task:
-                task["error"] = "An internal error occurred during data extraction"
-                task["status"] = "error"
+            with _extractions_lock:
+                task = _active_extractions.get(task_id)
+                if task:
+                    task["error"] = "An internal error occurred during data extraction"
+                    task["status"] = "error"
         finally:
             if conn:
                 try:
@@ -406,7 +422,8 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
 @router.get("/extract/status/{task_id}")
 def extract_status(task_id: str):
     """Poll the status of an extraction task."""
-    task = _active_extractions.get(task_id)
+    with _extractions_lock:
+        task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -423,14 +440,16 @@ def extract_status(task_id: str):
         # Don't clean up yet — CSV may still be downloaded
     elif task["status"] == "error":
         resp["error"] = task["error"]
-        _active_extractions.pop(task_id, None)
+        with _extractions_lock:
+            _active_extractions.pop(task_id, None)
     return resp
 
 
 @router.get("/extract/download/{task_id}")
 def extract_download_task(task_id: str):
     """Download the CSV produced by a completed extraction task."""
-    task = _active_extractions.get(task_id)
+    with _extractions_lock:
+        task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task["status"] != "completed":
@@ -443,7 +462,8 @@ def extract_download_task(task_id: str):
 
     # Clean up after download — free memory
     # Use a copy so cleanup doesn't race with the streaming response
-    _active_extractions.pop(task_id, None)
+    with _extractions_lock:
+        _active_extractions.pop(task_id, None)
 
     return StreamingResponse(
         iter([csv_data]),
@@ -458,7 +478,8 @@ def extract_download_task(task_id: str):
 @router.post("/extract/cancel/{task_id}")
 def extract_cancel(task_id: str):
     """Cancel/clean up an extraction task."""
-    task = _active_extractions.pop(task_id, None)
+    with _extractions_lock:
+        task = _active_extractions.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"status": "cancelled"}
@@ -467,7 +488,9 @@ def extract_cancel(task_id: str):
 @router.get("/extract/active")
 def extract_active():
     """Return any currently running extraction task."""
-    for tid, task in _active_extractions.items():
+    with _extractions_lock:
+        items = list(_active_extractions.items())
+    for tid, task in items:
         if task["status"] == "running":
             return {
                 "task_id": tid,
@@ -479,7 +502,7 @@ def extract_active():
                 "current_step": task.get("current_step", ""),
             }
     # Also return completed tasks not yet downloaded
-    for tid, task in _active_extractions.items():
+    for tid, task in items:
         if task["status"] == "completed":
             return {
                 "task_id": tid,

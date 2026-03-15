@@ -13,6 +13,7 @@ Proposes concept mappings for unmapped source values using 5 strategies
 import logging
 import re
 
+from psycopg2 import sql as psysql
 from psycopg2.extras import DictCursor
 
 from utils.sql_safety import safe_identifier
@@ -127,10 +128,10 @@ def suggest_batch(
 def _exact_match(cur, source_value: str, domain: str, schema: str) -> list[dict]:
     """Find concepts where concept_code exactly matches source_value."""
     try:
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             SELECT c.concept_id, c.concept_name, c.concept_code,
                    c.vocabulary_id, c.domain_id, c.standard_concept
-            FROM {schema}.concept c
+            FROM {}.{} c
             WHERE c.concept_code = %(sv)s
               AND c.invalid_reason IS NULL
               AND c.standard_concept = 'S'
@@ -138,7 +139,7 @@ def _exact_match(cur, source_value: str, domain: str, schema: str) -> list[dict]
               CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
               c.concept_name
             LIMIT 5
-        """, {"sv": source_value, "domain": domain})
+        """).format(psysql.Identifier(schema), psysql.Identifier('concept')), {"sv": source_value, "domain": domain})
         rows = cur.fetchall()
         return [
             {
@@ -164,24 +165,29 @@ def _exact_match(cur, source_value: str, domain: str, schema: str) -> list[dict]
 def _relationship_match(cur, source_value: str, domain: str, schema: str) -> list[dict]:
     """Find 'Maps to' relationships from source concept codes."""
     try:
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             SELECT DISTINCT
                 c2.concept_id, c2.concept_name, c2.concept_code,
                 c2.vocabulary_id, c2.domain_id, c2.standard_concept,
                 CASE WHEN c2.domain_id = %(domain)s THEN 0 ELSE 1 END AS domain_rank
-            FROM {schema}.concept c1
-            JOIN {schema}.concept_relationship cr
+            FROM {schema}.{concept} c1
+            JOIN {schema}.{concept_relationship} cr
               ON c1.concept_id = cr.concept_id_1
               AND cr.relationship_id = 'Maps to'
               AND cr.invalid_reason IS NULL
-            JOIN {schema}.concept c2
+            JOIN {schema}.{concept2} c2
               ON cr.concept_id_2 = c2.concept_id
               AND c2.standard_concept = 'S'
               AND c2.invalid_reason IS NULL
             WHERE c1.concept_code = %(sv)s
             ORDER BY domain_rank
             LIMIT 5
-        """, {"sv": source_value, "domain": domain})
+        """).format(
+            schema=psysql.Identifier(schema),
+            concept=psysql.Identifier('concept'),
+            concept_relationship=psysql.Identifier('concept_relationship'),
+            concept2=psysql.Identifier('concept'),
+        ), {"sv": source_value, "domain": domain})
         rows = cur.fetchall()
         return [
             {
@@ -504,20 +510,22 @@ def _ingredient_match(
             if len(results) >= 5:
                 break
 
-            cur.execute(f"""
+            ingredient_sql = psysql.SQL("""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.concept c
+                FROM {schema}.{table} c
                 WHERE c.concept_name ILIKE %(term)s
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
                 ORDER BY
                   CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
-                  {brand_order},
-                  {form_order},
-                  LENGTH(c.concept_name)
-                LIMIT 5
-            """, {"term": search_term, "domain": domain, **fparams})
+            """).format(schema=psysql.Identifier(schema), table=psysql.Identifier('concept'))
+            # brand_order and form_order are code-generated SQL fragments (not user input)
+            order_tail = psysql.SQL("  {brand_order}, {form_order}, LENGTH(c.concept_name) LIMIT 5").format(
+                brand_order=psysql.SQL(brand_order),
+                form_order=psysql.SQL(form_order),
+            )
+            cur.execute(ingredient_sql + order_tail, {"term": search_term, "domain": domain, **fparams})
             rows = cur.fetchall()
             for r in rows:
                 if r["concept_id"] not in seen:
@@ -542,11 +550,11 @@ def _ingredient_match(
         # Also search concept_synonym (use original French ingredient for synonyms)
         if len(results) < 5:
             syn_term = f"%{ingredient}%" if not dosage else f"%{ingredient}%{dosage}%"
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.concept_synonym cs
-                JOIN {schema}.concept c ON cs.concept_id = c.concept_id
+                FROM {schema}.{syn_table} cs
+                JOIN {schema}.{concept} c ON cs.concept_id = c.concept_id
                 WHERE cs.concept_synonym_name ILIKE %(term)s
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
@@ -556,7 +564,11 @@ def _ingredient_match(
                   CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
                   LENGTH(c.concept_name)
                 LIMIT 5
-            """, {"term": syn_term, "domain": domain})
+            """).format(
+                schema=psysql.Identifier(schema),
+                syn_table=psysql.Identifier('concept_synonym'),
+                concept=psysql.Identifier('concept'),
+            ), {"term": syn_term, "domain": domain})
             rows = cur.fetchall()
             seen = {r["concept_id"] for r in results}
             for r in rows:
@@ -592,18 +604,18 @@ def _fuzzy_match(
 
     # Try trigram similarity first
     try:
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             SELECT c.concept_id, c.concept_name, c.concept_code,
                    c.vocabulary_id, c.domain_id, c.standard_concept,
                    similarity(c.concept_name, %(term)s) AS sim
-            FROM {schema}.concept c
+            FROM {}.{} c
             WHERE c.concept_name %% %(term)s
               AND c.standard_concept = 'S'
               AND c.invalid_reason IS NULL
             ORDER BY sim DESC,
               CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END
             LIMIT %(lim)s
-        """, {"term": search_term, "domain": domain, "lim": limit})
+        """).format(psysql.Identifier(schema), psysql.Identifier('concept')), {"term": search_term, "domain": domain, "lim": limit})
         rows = cur.fetchall()
         for r in rows:
             sim = float(r["sim"]) if r["sim"] else 0
@@ -622,21 +634,21 @@ def _fuzzy_match(
         # pg_trgm not available — fall back to ILIKE on concept + synonym
         try:
             cur.connection.rollback()
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT concept_id, concept_name, concept_code,
                        vocabulary_id, domain_id, standard_concept
                 FROM (
                     SELECT c.concept_id, c.concept_name, c.concept_code,
                            c.vocabulary_id, c.domain_id, c.standard_concept
-                    FROM {schema}.concept c
+                    FROM {schema}.{concept} c
                     WHERE c.concept_name ILIKE %(term)s
                       AND c.standard_concept = 'S'
                       AND c.invalid_reason IS NULL
                     UNION
                     SELECT c.concept_id, c.concept_name, c.concept_code,
                            c.vocabulary_id, c.domain_id, c.standard_concept
-                    FROM {schema}.concept_synonym cs
-                    JOIN {schema}.concept c ON cs.concept_id = c.concept_id
+                    FROM {schema}.{syn_table} cs
+                    JOIN {schema}.{concept2} c ON cs.concept_id = c.concept_id
                     WHERE cs.concept_synonym_name ILIKE %(term)s
                       AND c.standard_concept = 'S'
                       AND c.invalid_reason IS NULL
@@ -644,7 +656,12 @@ def _fuzzy_match(
                 ORDER BY LENGTH(concept_name),
                   CASE WHEN domain_id = %(domain)s THEN 0 ELSE 1 END
                 LIMIT %(lim)s
-            """, {"term": f"%{search_term}%", "domain": domain, "lim": limit})
+            """).format(
+                schema=psysql.Identifier(schema),
+                concept=psysql.Identifier('concept'),
+                syn_table=psysql.Identifier('concept_synonym'),
+                concept2=psysql.Identifier('concept'),
+            ), {"term": f"%{search_term}%", "domain": domain, "lim": limit})
             rows = cur.fetchall()
             for r in rows:
                 results.append({
@@ -700,18 +717,21 @@ def _keyword_match(
                 where_parts.append(f"c.concept_name ILIKE %({pname})s")
                 params[pname] = f"%{kw}%"
 
-            cur.execute(f"""
-                SELECT c.concept_id, c.concept_name, c.concept_code,
-                       c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.concept c
-                WHERE {' AND '.join(where_parts)}
-                  AND c.standard_concept = 'S'
-                  AND c.invalid_reason IS NULL
-                ORDER BY
-                  CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
-                  LENGTH(c.concept_name)
-                LIMIT %(lim)s
-            """, params)
+            where_sql = psysql.SQL(' AND ').join(psysql.SQL(wp) for wp in where_parts)
+            kw_query = psysql.SQL(
+                "SELECT c.concept_id, c.concept_name, c.concept_code,"
+                "       c.vocabulary_id, c.domain_id, c.standard_concept"
+                " FROM {schema}.{table} c"
+                " WHERE "
+            ).format(schema=psysql.Identifier(schema), table=psysql.Identifier('concept')) + where_sql + psysql.SQL(
+                "  AND c.standard_concept = 'S'"
+                "  AND c.invalid_reason IS NULL"
+                " ORDER BY"
+                "  CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,"
+                "  LENGTH(c.concept_name)"
+                " LIMIT %(lim)s"
+            )
+            cur.execute(kw_query, params)
             rows = cur.fetchall()
             seen = set()
             for r in rows:
@@ -732,10 +752,10 @@ def _keyword_match(
         if len(results) < 3 and keywords:
             main_kw = max(keywords, key=len)  # longest keyword = most specific
             params2 = {"kw": f"%{main_kw}%", "domain": domain, "lim": limit}
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.concept c
+                FROM {schema}.{table} c
                 WHERE c.concept_name ILIKE %(kw)s
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
@@ -743,7 +763,7 @@ def _keyword_match(
                   CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
                   LENGTH(c.concept_name)
                 LIMIT %(lim)s
-            """, params2)
+            """).format(schema=psysql.Identifier(schema), table=psysql.Identifier('concept')), params2)
             rows = cur.fetchall()
             seen = {r["concept_id"] for r in results}
             for r in rows:
@@ -783,13 +803,13 @@ def _contextual_match(cur, source_value: str, domain: str, schema: str) -> list[
         if len(prefix) < 2:
             return []
 
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             SELECT
                 c.concept_id, c.concept_name, c.concept_code,
                 c.vocabulary_id, c.domain_id, c.standard_concept,
                 CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END AS domain_rank
-            FROM {schema}.source_to_concept_map stcm
-            JOIN {schema}.concept c ON stcm.target_concept_id = c.concept_id
+            FROM {schema}.{stcm} stcm
+            JOIN {schema}.{concept} c ON stcm.target_concept_id = c.concept_id
             WHERE stcm.source_code LIKE %(prefix)s
               AND c.standard_concept = 'S'
               AND c.invalid_reason IS NULL
@@ -798,7 +818,11 @@ def _contextual_match(cur, source_value: str, domain: str, schema: str) -> list[
                      c.vocabulary_id, c.domain_id, c.standard_concept
             ORDER BY domain_rank
             LIMIT 5
-        """, {"prefix": f"{prefix}%", "domain": domain})
+        """).format(
+            schema=psysql.Identifier(schema),
+            stcm=psysql.Identifier('source_to_concept_map'),
+            concept=psysql.Identifier('concept'),
+        ), {"prefix": f"{prefix}%", "domain": domain})
         rows = cur.fetchall()
         return [
             {

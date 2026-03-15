@@ -49,16 +49,23 @@ _CDM_CHECK_SKIP_PREFIXES = {"/api/cdm-access"}
 
 # ── SSE ticket store (one-time-use tokens for EventSource connections) ──
 _SSE_TICKET_TTL = 30  # seconds
+_MAX_SSE_TICKETS = 1000
 _sse_tickets: dict[str, tuple[dict, float]] = {}  # ticket_id → (user_info, expires_at)
 
 
 def create_sse_ticket(user_info: dict) -> str:
     """Create a one-time-use ticket for SSE connections. Valid for 30 seconds."""
+    global _sse_tickets
     # Cleanup expired tickets
     now = time.time()
     expired = [k for k, (_, exp) in _sse_tickets.items() if exp < now]
     for k in expired:
         del _sse_tickets[k]
+
+    # Enforce maximum capacity
+    if len(_sse_tickets) >= _MAX_SSE_TICKETS:
+        # Expired tickets already cleaned above; reject if still at capacity
+        raise HTTPException(status_code=429, detail="Too many active tickets")
 
     ticket_id = uuid.uuid4().hex
     _sse_tickets[ticket_id] = (user_info, now + _SSE_TICKET_TTL)

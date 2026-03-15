@@ -286,7 +286,10 @@ def stream_logs(service_name: str, offset: int = Query(0)):
 def list_or_download_files(path: str = ""):
     """Browse output files or download a specific file."""
     output_dir = Path(OHDSI_OUTPUT_DIR)
-    target = output_dir / path if path else output_dir
+    target = (output_dir / path).resolve() if path else output_dir.resolve()
+
+    if not str(target).startswith(str(output_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     if not target.exists():
         return []
