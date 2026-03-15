@@ -962,6 +962,115 @@ def characterize_active():
     return {"task_id": None, "status": "none"}
 
 
+# ──── Pathways Analysis ────
+
+class PathwaysEventCohort(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    domain: str = Field(..., min_length=1, max_length=100)
+    concept_ids: list[int] = Field(..., min_length=1)
+    include_descendants: bool = False
+
+
+class PathwaysRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    criteria: dict
+    event_cohorts: list[PathwaysEventCohort] = Field(..., min_length=1, max_length=20)
+    max_depth: int = Field(default=5, ge=1, le=10)
+    min_cell_count: int = Field(default=5, ge=1, le=1000)
+    combo_window: int = Field(default=0, ge=0, le=365)
+
+
+_active_pathways: dict[str, dict] = {}
+
+
+@router.post("/pathways")
+def cohort_pathways(req: PathwaysRequest, db: Session = Depends(get_db)):
+    """
+    Launch a pathways analysis as a background task.
+    Returns a task_id for polling via /pathways/status/{task_id}.
+    """
+    from modules.cohort.pathways import run_pathways_analysis
+
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+    schema = _get_omop_schema(db, cdm)
+
+    task_id = str(uuid.uuid4())
+    _active_pathways[task_id] = {
+        "status": "running",
+        "cdm_name": req.cdm_name,
+        "result": None,
+        "error": None,
+        "completed": 0,
+        "total": 0,
+        "current_step": "",
+    }
+
+    def _progress(completed: int, total: int, step_label: str):
+        task = _active_pathways.get(task_id)
+        if task:
+            task["completed"] = completed
+            task["total"] = total
+            task["current_step"] = step_label
+
+    def _worker():
+        try:
+            result = run_pathways_analysis(
+                conn,
+                req.criteria,
+                [ec.model_dump() for ec in req.event_cohorts],
+                schema,
+                max_depth=req.max_depth,
+                min_cell_count=req.min_cell_count,
+                combo_window=req.combo_window,
+                progress_callback=_progress,
+            )
+            _active_pathways[task_id]["result"] = result
+            _active_pathways[task_id]["status"] = "completed"
+        except Exception as e:
+            logger.exception("Pathways analysis failed")
+            _active_pathways[task_id]["error"] = "An internal error occurred during pathways analysis"
+            _active_pathways[task_id]["status"] = "error"
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    return {"task_id": task_id, "status": "running"}
+
+
+@router.get("/pathways/status/{task_id}")
+def pathways_status(task_id: str):
+    """Poll the status of a pathways analysis task."""
+    task = _active_pathways.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    resp: dict = {
+        "task_id": task_id,
+        "status": task["status"],
+        "completed": task.get("completed", 0),
+        "total": task.get("total", 0),
+        "current_step": task.get("current_step", ""),
+    }
+    if task["status"] == "completed":
+        resp["result"] = task["result"]
+        _active_pathways.pop(task_id, None)
+    elif task["status"] == "error":
+        resp["error"] = task["error"]
+        _active_pathways.pop(task_id, None)
+    return resp
+
+
+@router.post("/pathways/cancel/{task_id}")
+def pathways_cancel(task_id: str):
+    """Cancel/clean up a pathways analysis task."""
+    task = _active_pathways.pop(task_id, None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "cancelled"}
+
+
 class CohortCompareRequest(BaseModel):
     cdm_name: str
     cohort_id_a: int
