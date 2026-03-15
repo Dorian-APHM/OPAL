@@ -68,6 +68,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               initial={{ opacity: 0, x: 50, scale: 0.95 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 50, scale: 0.95 }}
+              role="alert"
+              aria-live="assertive"
               className={`
                 pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl
                 bg-surface border border-glass-border border-l-4 ${borderColors[toast.type]}
@@ -75,11 +77,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 min-w-[300px] max-w-[420px]
               `}
             >
-              {icons[toast.type]}
+              <span aria-hidden="true">{icons[toast.type]}</span>
               <span className="flex-1 text-sm text-text-bright">{toast.message}</span>
               <button
                 onClick={() => remove(toast.id)}
                 className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none shrink-0"
+                aria-label="Close notification"
               >
                 <X className="h-4 w-4" />
               </button>

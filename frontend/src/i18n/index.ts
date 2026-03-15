@@ -11,7 +11,7 @@ i18n.use(initReactI18next).init({
   lng: localStorage.getItem('opal-lang') || 'fr',
   fallbackLng: 'fr',
   interpolation: {
-    escapeValue: false,
+    escapeValue: true,
   },
 });
 

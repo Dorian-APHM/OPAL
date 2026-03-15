@@ -13,8 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import psycopg2
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
+from utils.crypto import DecryptionError
 from audit.logger import AUDIT_LOG_DIR
 from db.app_db import engine, get_db
 from db.models import Base
@@ -27,12 +31,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Rate limiter (disabled when TESTING env var is set for test suites)
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["100/minute"],
+    enabled=os.getenv("TESTING", "").lower() not in ("1", "true"),
+)
+
 # Create FastAPI app
 app = FastAPI(
     title="OPAL API",
     description="OMOP Platform for Analytics & Lineage",
     version="1.0.0",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ---------------------------------------------------------------------------
@@ -86,13 +99,25 @@ async def query_timeout_handler(request: Request, exc):
     return JSONResponse(status_code=504, content={"detail": "Query timed out. Try a simpler query or smaller dataset."})
 
 
+@app.exception_handler(ConnectionError)
+async def connection_error_handler(request: Request, exc: ConnectionError):
+    logger.error("Connection pool exhausted: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable. Please try again shortly."})
+
+
+@app.exception_handler(DecryptionError)
+async def decryption_error_handler(request: Request, exc: DecryptionError):
+    logger.error("Decryption failed: %s", exc)
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Accept-Language"],
 )
 
 # Audit logging (must be added before auth so it wraps the full request)
@@ -199,6 +224,7 @@ def auth_me(request: Request):
 
 
 @app.post("/api/auth/sse-ticket")
+@limiter.limit("10/minute")
 def create_sse_ticket_endpoint(request: Request):
     """Create a one-time-use ticket for SSE connections (replaces ?token= in URL)."""
     from auth.keycloak import create_sse_ticket
@@ -568,6 +594,7 @@ def _get_keycloak_admin_token() -> str | None:
 # ──── Access Requests (self-service sign-up) ────
 
 @app.post("/api/access-requests")
+@limiter.limit("5/minute")
 def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
     """Submit a new access request (public, no auth required)."""
     from db.models import AccessRequest

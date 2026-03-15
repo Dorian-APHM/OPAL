@@ -177,12 +177,23 @@ def get_accessible_cdms(
         all_cdms = db.query(CdmConfig.name).all()
         return {"cdms": [c.name for c in all_cdms]}
 
-    # acl_only roles: only CDMs with explicit grant
-    all_cdms = db.query(CdmConfig).all()
-    result = []
-    for cdm in all_cdms:
-        if _user_has_cdm_access(cdm.name, username, db):
-            result.append(cdm.name)
+    # acl_only roles: single query with JOIN instead of N+1
+    # Direct user grants
+    direct_cdms = db.query(CdmAccess.cdm_name).filter(
+        CdmAccess.username == username,
+    ).all()
+
+    # Group-based grants: find groups user belongs to, then CDMs those groups can access
+    user_group_names = db.query(UserGroupMember.group_name).filter(
+        UserGroupMember.username == username,
+    ).subquery()
+    group_cdms = db.query(CdmGroupAccess.cdm_name).filter(
+        CdmGroupAccess.group_name.in_(db.query(UserGroupMember.group_name).filter(
+            UserGroupMember.username == username,
+        )),
+    ).all()
+
+    result = sorted(set(c.cdm_name for c in direct_cdms) | set(c.cdm_name for c in group_cdms))
     return {"cdms": result}
 
 

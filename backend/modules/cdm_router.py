@@ -220,7 +220,13 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, db: Session = Depends(get_d
 
 @router.delete("/{cdm_name}")
 def delete_cdm(cdm_name: str, db: Session = Depends(get_db)):
-    """Delete a CDM connection."""
+    """Delete a CDM connection and all associated data."""
+    from db.models import (
+        AnalysisSnapshot, AnalysisSettings, Cohort, CohortVersion, CohortShare,
+        MappingDecision, CdmAccess, CdmGroupAccess, ConceptSet,
+        IncidenceAnalysis, EstimationAnalysis, SavedQuery,
+    )
+
     cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
@@ -228,9 +234,29 @@ def delete_cdm(cdm_name: str, db: Session = Depends(get_db)):
     # Invalidate pool before deleting config
     invalidate_pool(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user)
 
+    # Cascade delete all dependent records in a single transaction
+    # 1. Delete cohort shares and versions for cohorts in this CDM
+    cohort_ids = [c.id for c in db.query(Cohort.id).filter(Cohort.cdm_name == cdm_name).all()]
+    if cohort_ids:
+        db.query(CohortShare).filter(CohortShare.cohort_id.in_(cohort_ids)).delete(synchronize_session=False)
+        db.query(CohortVersion).filter(CohortVersion.cohort_id.in_(cohort_ids)).delete(synchronize_session=False)
+
+    # 2. Delete CDM-scoped entities
+    db.query(Cohort).filter(Cohort.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(AnalysisSnapshot).filter(AnalysisSnapshot.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(ConceptSet).filter(ConceptSet.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(IncidenceAnalysis).filter(IncidenceAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(EstimationAnalysis).filter(EstimationAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
+    db.query(SavedQuery).filter(SavedQuery.cdm_name == cdm_name).delete(synchronize_session=False)
+
+    # 3. Delete the CDM config itself
     db.delete(cdm)
     db.commit()
-    return {"message": f"CDM '{cdm_name}' deleted"}
+    return {"message": f"CDM '{cdm_name}' and all associated data deleted"}
 
 
 @router.get("/{cdm_name}/settings")
