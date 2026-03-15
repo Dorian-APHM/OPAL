@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 # Rate limiter (disabled when TESTING env var is set for test suites)
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["100/minute"],
     enabled=os.getenv("TESTING", "").lower() not in ("1", "true"),
 )
 
