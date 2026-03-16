@@ -33,6 +33,7 @@ from modules.cohort.sql_builder import (
 from modules.cohort.characterization import run_characterization
 from modules.cohort.comparison import compare_cohorts
 from utils.rate_limit import limiter
+from utils.notifications import notify
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
@@ -475,6 +476,29 @@ def delete_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db
     is_owner = cohort.created_by == username
     if not is_privileged and not is_owner:
         raise HTTPException(status_code=403, detail="Only the owner, admin, or data-manager can delete cohorts")
+
+    # Notify users who had this cohort shared with them
+    shares = db.query(CohortShare).filter(CohortShare.cohort_id == cohort_id).all()
+    for s in shares:
+        if s.share_type == "user" and s.share_target != username:
+            notify(
+                db, s.share_target, "cohort_deleted",
+                title=f"Cohorte supprimée : {cohort.name}",
+                message=f"{username} a supprimé la cohorte « {cohort.name} ».",
+                link="/cohorts",
+                item_id=str(cohort_id),
+            )
+        elif s.share_type == "group":
+            members = db.query(UserGroupMember).filter(UserGroupMember.group_name == s.share_target).all()
+            for m in members:
+                if m.username != username:
+                    notify(
+                        db, m.username, "cohort_deleted",
+                        title=f"Cohorte supprimée : {cohort.name}",
+                        message=f"{username} a supprimé la cohorte « {cohort.name} ».",
+                        link="/cohorts",
+                        item_id=str(cohort_id),
+                    )
 
     db.query(CohortShare).filter(CohortShare.cohort_id == cohort_id).delete()
     db.query(CohortVersion).filter(CohortVersion.cohort_id == cohort_id).delete()

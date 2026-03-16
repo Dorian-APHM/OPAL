@@ -140,9 +140,21 @@ def update_group(group_name: str, req: GroupUpdateRequest, request: Request, use
 @router.delete("/{group_name}")
 def delete_group(group_name: str, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
     """Delete a group and all its members (admin/data-manager only)."""
+    username = user.get("preferred_username", "system")
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
     if not group:
         raise HTTPException(status_code=404, detail=f"Group '{group_name}' not found")
+
+    # Notify all members before deleting
+    members = db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).all()
+    for m in members:
+        if m.username != username:
+            _notify(
+                db, m.username, "group_removed",
+                title=f"Groupe supprimé : {group_name}",
+                message=f"{username} a supprimé le groupe « {group_name} ».",
+                item_id=group_name,
+            )
 
     db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).delete()
     db.delete(group)
@@ -181,11 +193,21 @@ def add_member(group_name: str, req: GroupMemberRequest, request: Request, user=
 @router.delete("/{group_name}/members/{member_username}")
 def remove_member(group_name: str, member_username: str, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
     """Remove a member from a group (admin/data-manager only)."""
+    username = user.get("preferred_username", "system")
     deleted = db.query(UserGroupMember).filter(
         UserGroupMember.group_name == group_name,
         UserGroupMember.username == member_username,
     ).delete()
-    db.commit()
     if not deleted:
         raise HTTPException(status_code=404, detail="Member not found in group")
+
+    if member_username != username:
+        _notify(
+            db, member_username, "group_removed",
+            title=f"Retiré du groupe : {group_name}",
+            message=f"{username} vous a retiré du groupe « {group_name} ».",
+            item_id=group_name,
+        )
+
+    db.commit()
     return {"removed": member_username, "group": group_name}

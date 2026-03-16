@@ -34,7 +34,7 @@ export function useNotifDots(notifType: string) {
   useEffect(() => {
     refresh();
 
-    // Refresh when sidebar badges update (every 30s or after markRead)
+    // Refresh when sidebar badges update or after markRead
     const onBadgeRefresh = () => refresh();
     window.addEventListener('opal:badges-refresh', onBadgeRefresh);
 
@@ -42,12 +42,20 @@ export function useNotifDots(notifType: string) {
     const onFocus = () => refresh();
     window.addEventListener('focus', onFocus);
 
-    // Poll every 5s for near-instant feedback
-    const interval = setInterval(refresh, 5000);
+    // Real-time: refresh when a WS notification of this type arrives
+    const onWsNotif = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && detail.type === notifType) refresh();
+    };
+    window.addEventListener('opal:notification', onWsNotif);
+
+    // Safety-net poll (WS handles real-time push)
+    const interval = setInterval(refresh, 30000);
 
     return () => {
       window.removeEventListener('opal:badges-refresh', onBadgeRefresh);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('opal:notification', onWsNotif);
       clearInterval(interval);
     };
   }, [refresh]);

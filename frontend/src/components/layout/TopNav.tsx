@@ -3,16 +3,18 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Home, LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
   Database, Settings, Globe, LogOut, Shield, ClipboardList, HardDrive,
-  Menu, X, ChevronDown,
+  Menu, X, ChevronDown, Bell,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, cdmAccessApi, notificationsApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
+import { useNotificationWs } from '../../hooks/useNotificationWs';
 import { Select } from '../ui/Select';
 import { Tag } from '../ui/Tag';
 import { Tooltip } from '../ui/Tooltip';
 import GlobalSearch from '../GlobalSearch';
+import NotificationCenter from '../NotificationCenter';
 
 interface TopNavProps {
   selectedCdm: string | null;
@@ -71,7 +73,11 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
   const [cdms, setCdms] = useState<CdmConfig[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [notifCenterOpen, setNotifCenterOpen] = useState(false);
   const { username, roles, logout, hasPageAccess, authenticated, token } = useAuth();
+
+  // --- WebSocket for real-time notifications ---
+  useNotificationWs(!!authenticated && !!token);
 
   // --- Notification badges ---
   const [badges, setBadges] = useState<Record<string, number>>({});
@@ -91,7 +97,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
     const onRefresh = () => refreshBadges();
     window.addEventListener('opal:badges-refresh', onRefresh);
     window.addEventListener('focus', onRefresh);
-    const interval = setInterval(refreshBadges, 15000);
+    // WS handles real-time push; poll is just a safety net
+    const interval = setInterval(refreshBadges, 60000);
     return () => {
       window.removeEventListener('opal:badges-refresh', onRefresh);
       window.removeEventListener('focus', onRefresh);
@@ -220,6 +227,17 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
             </button>
           </Tooltip>
 
+          {/* Notification bell */}
+          <Tooltip title="Notifications">
+            <button
+              onClick={() => setNotifCenterOpen(true)}
+              className="relative text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5"
+            >
+              <Bell className="h-4 w-4" />
+              <NotifDot count={Object.values(badges).reduce((a, b) => a + b, 0)} />
+            </button>
+          </Tooltip>
+
           {/* User menu — includes admin nav items */}
           <div className="relative">
             <button
@@ -343,6 +361,9 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           </div>
         </div>
       )}
+
+      {/* Notification Center Drawer */}
+      <NotificationCenter open={notifCenterOpen} onClose={() => setNotifCenterOpen(false)} />
     </nav>
   );
 }
