@@ -49,3 +49,5 @@ preview*.html
 *.png
 .claude/
 backend/test_opal.db
+.coverage
+htmlcov/
