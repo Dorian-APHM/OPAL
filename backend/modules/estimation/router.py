@@ -13,27 +13,16 @@ from utils.rate_limit import limiter
 
 from db.app_db import get_db
 from db.models import (
-    CdmConfig, Cohort, CohortVersion, AnalysisSettings, EstimationAnalysis,
+    Cohort, CohortVersion, EstimationAnalysis,
 )
-from db.omop_connector import get_omop_connection
-from utils.crypto import decrypt_password
-from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
+from utils.cdm_helper import get_cdm_connection as _get_cdm_conn, check_cdm_access
+from config import DOMAIN_CONFIG
 from modules.cohort.sql_builder import build_cohort_sql
 from modules.estimation.survival import compute_km, compute_median_survival, log_rank_test
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/estimation", tags=["estimation"])
 
-
-def _get_cdm_conn(db: Session, cdm_name: str):
-    cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
-    if not cdm:
-        raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
-    password = decrypt_password(cdm.db_password_encrypted)
-    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
-    settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
-    schema = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
-    return conn, schema
 
 
 def _get_cohort_criteria(db: Session, cohort_id: int) -> tuple[dict, str]:
@@ -217,6 +206,8 @@ class EstimationSaveRequest(BaseModel):
 @router.post("/kaplan-meier")
 @limiter.limit("3/minute")
 def compute_kaplan_meier(body: KaplanMeierRequest, request: Request, db=Depends(get_db)):
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, body.cdm_name)
     conn, omop_schema = _get_cdm_conn(db, body.cdm_name)
     try:
         target_criteria, target_name = _get_cohort_criteria(db, body.target_cohort_id)
@@ -303,7 +294,9 @@ def compute_kaplan_meier(body: KaplanMeierRequest, request: Request, db=Depends(
 
 
 @router.post("/save")
-def save_estimation(body: EstimationSaveRequest, db=Depends(get_db)):
+def save_estimation(body: EstimationSaveRequest, request: Request, db=Depends(get_db)):
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, body.cdm_name)
     analysis = EstimationAnalysis(
         cdm_name=body.cdm_name,
         name=body.name,

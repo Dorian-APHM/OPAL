@@ -100,6 +100,8 @@ def suggest_batch(
     Each term dict should have 'source_value' and optionally 'source_name'.
     Returns list of {source_value, source_name, suggestions: [...]}.
     """
+    # NOTE: Sequential processing — psycopg2 connections are not thread-safe.
+    # Parallelization would require a connection per thread from the pool.
     results = []
     for term in unmapped_terms:
         sv = term.get("source_value", "")

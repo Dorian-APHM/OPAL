@@ -521,29 +521,40 @@ def get_concept_counts(
     counts: dict[int, dict] = {}
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Query standard concept_id columns (all indexed → fast)
+            # Build a single UNION ALL query across all domain tables
+            parts = []
             for cfg in DOMAIN_CONFIG.values():
                 table = safe_identifier(cfg["table"])
                 concept_col = safe_identifier(cfg["concept_id"])
-                try:
-                    cur.execute(
-                        psysql.SQL(
-                            "SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
-                            "COUNT(DISTINCT person_id) AS n_persons "
-                            "FROM {schema}.{table} WHERE {concept_col} = ANY(%s) GROUP BY {concept_col}"
-                        ).format(
-                            concept_col=_ident(concept_col),
-                            schema=_ident(schema),
-                            table=_ident(table),
-                        ),
-                        [ids],
+                parts.append(
+                    psysql.SQL(
+                        "SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
+                        "COUNT(DISTINCT person_id) AS n_persons "
+                        "FROM {schema}.{table} WHERE {concept_col} = ANY(%s) "
+                        "GROUP BY {concept_col}"
+                    ).format(
+                        concept_col=_ident(concept_col),
+                        schema=_ident(schema),
+                        table=_ident(table),
                     )
+                )
+
+            if parts:
+                union_query = psysql.SQL(" UNION ALL ").join(parts)
+                full_query = psysql.SQL(
+                    "SELECT concept_id, SUM(n_records) AS n_records, "
+                    "SUM(n_persons) AS n_persons "
+                    "FROM ({}) sub GROUP BY concept_id"
+                ).format(union_query)
+                # Each UNION part needs its own copy of the parameter
+                params = [ids] * len(parts)
+                try:
+                    cur.execute(full_query, params)
                     for r in cur.fetchall():
-                        cid = r["concept_id"]
-                        if cid not in counts:
-                            counts[cid] = {"n_records": 0, "n_persons": 0}
-                        counts[cid]["n_records"] += r["n_records"]
-                        counts[cid]["n_persons"] += r["n_persons"]
+                        counts[int(r["concept_id"])] = {
+                            "n_records": int(r["n_records"]),
+                            "n_persons": int(r["n_persons"]),
+                        }
                 except Exception:
                     conn.rollback()
 
