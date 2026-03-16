@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request, Depends
+from fastapi import FastAPI, Query, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -64,6 +64,63 @@ def _start_pool_evictor():
     _evictor_thread = _threading.Thread(target=_pool_evictor, daemon=True, name="pool-evictor")
     _evictor_thread.start()
     logger.info("OMOP pool evictor started")
+
+
+# ---------------------------------------------------------------------------
+# WebSocket manager — capture the main event loop at startup
+# ---------------------------------------------------------------------------
+import asyncio as _asyncio
+from utils.ws_manager import manager as _ws_manager, set_main_loop as _set_main_loop
+
+
+@app.on_event("startup")
+def _capture_event_loop():
+    try:
+        loop = _asyncio.get_running_loop()
+        _set_main_loop(loop)
+        logger.info("WebSocket manager bound to main event loop")
+    except RuntimeError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Notification cleanup — purge old read notifications every 6 hours
+# ---------------------------------------------------------------------------
+def _notification_cleaner():
+    """Background thread that deletes read notifications older than 30 days."""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy.orm import Session as _Session
+    from db.app_db import SessionLocal
+    from db.models import Notification as _Notif
+
+    while not _evictor_stop.is_set():
+        _evictor_stop.wait(21600)  # 6 hours
+        if _evictor_stop.is_set():
+            break
+        try:
+            db: _Session = SessionLocal()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            deleted = db.query(_Notif).filter(
+                _Notif.read == 1,
+                _Notif.created_at < cutoff,
+            ).delete(synchronize_session=False)
+            db.commit()
+            db.close()
+            if deleted:
+                logger.info("Notification cleanup: deleted %d old read notifications", deleted)
+        except Exception as e:
+            logger.error("Notification cleanup error: %s", e)
+
+
+_cleaner_thread: _threading.Thread | None = None
+
+
+@app.on_event("startup")
+def _start_notification_cleaner():
+    global _cleaner_thread
+    _cleaner_thread = _threading.Thread(target=_notification_cleaner, daemon=True, name="notif-cleaner")
+    _cleaner_thread.start()
+    logger.info("Notification cleaner started (purges read notifications >30d)")
 
 
 @app.on_event("shutdown")
@@ -420,6 +477,41 @@ def export_audit_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=audit_logs.csv"},
     )
+
+
+# ---------------------------------------------------------------------------
+# WebSocket endpoint for real-time notifications
+# ---------------------------------------------------------------------------
+@app.websocket("/api/ws/notifications")
+async def websocket_notifications(websocket: WebSocket, ticket: str = ""):
+    """WebSocket endpoint for real-time notification push.
+
+    Authentication uses a one-time SSE ticket (same mechanism as SSE streams)
+    passed as ?ticket= query parameter.
+    """
+    from auth.keycloak import _redeem_sse_ticket
+
+    user_info = _redeem_sse_ticket(ticket) if ticket else None
+    if not user_info:
+        await websocket.close(code=4001, reason="Invalid or expired ticket")
+        return
+
+    username = user_info.get("preferred_username", "anonymous")
+    roles = user_info.get("roles", [])
+
+    await _ws_manager.connect(websocket, username, roles)
+    try:
+        while True:
+            # Keep connection alive; client sends pings, we just read and discard
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text('{"type":"pong"}')
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _ws_manager.disconnect(websocket, username)
 
 
 @app.get("/api/health")

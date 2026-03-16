@@ -640,7 +640,7 @@ export const cdmAccessApi = {
 // Notifications endpoints
 export const notificationsApi = {
   list: (unreadOnly?: boolean, limit?: number, notifType?: string) =>
-    api.get<{ notifications: any[] }>('/notifications/', { params: { unread_only: unreadOnly, limit, notif_type: notifType } }),
+    api.get<{ notifications: NotificationItem[] }>('/notifications/', { params: { unread_only: unreadOnly, limit, notif_type: notifType } }),
   badges: () =>
     api.get<{ badges: Record<string, number>; total: number }>('/notifications/badges'),
   items: (notifType?: string) =>
@@ -651,7 +651,29 @@ export const notificationsApi = {
     api.post('/notifications/read-item', null, { params: { notif_type: notifType, item_id: itemId } }),
   markAllRead: (type?: string) =>
     api.post('/notifications/read-all', null, { params: { notif_type: type } }),
+  deleteNotif: (id: number) =>
+    api.delete(`/notifications/${id}`),
+  deleteAllRead: () =>
+    api.delete('/notifications/'),
+  sseTicket: () =>
+    api.post<{ ticket: string }>('/auth/sse-ticket'),
+  getPreferences: () =>
+    api.get<{ preferences: Record<string, boolean> }>('/notifications/preferences'),
+  updatePreference: (notifType: string, enabled: boolean) =>
+    api.post('/notifications/preferences', { notif_type: notifType, enabled }),
 };
+
+/** Notification shape returned by the API */
+export interface NotificationItem {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  link: string;
+  item_id: string | null;
+  read: boolean;
+  created_at: string | null;
+}
 
 // Favorites endpoints
 export const favoritesApi = {

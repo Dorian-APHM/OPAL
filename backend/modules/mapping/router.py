@@ -766,6 +766,9 @@ def record_decision(req: DecisionRequest, request: Request, db: Session = Depend
     if req.action not in ("approved", "modified", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action")
 
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
+
     decision = MappingDecision(
         cdm_name=req.cdm_name,
         domain=req.domain,
@@ -780,6 +783,15 @@ def record_decision(req: DecisionRequest, request: Request, db: Session = Depend
         reason=req.reason,
     )
     db.add(decision)
+
+    notify(
+        db, username, "mapping_review",
+        title=f"Décision mapping : {req.action}",
+        message=f"{username} a {req.action} « {req.source_value} » dans {req.domain} ({req.cdm_name}).",
+        link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
+        item_id=f"{req.cdm_name}:{req.domain}",
+    )
+
     db.commit()
     db.refresh(decision)
 
@@ -906,6 +918,18 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
     #     finally:
     #         conn.close()
     # --- End write block ---
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
+    notify(
+        db, username, "mapping_applied",
+        title=f"Mapping exporté : {req.domain}",
+        message=f"{len(stcm_rows)} mappings générés pour {req.domain} ({req.cdm_name}).",
+        link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
+        target_role="data-manager",
+        item_id=f"{req.cdm_name}:{req.domain}",
+    )
+    db.commit()
 
     return {
         "count": len(stcm_rows),
