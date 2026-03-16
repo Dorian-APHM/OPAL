@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from db.app_db import get_db
 from db.models import CdmAccess, CdmGroupAccess, CdmConfig, UserGroupMember
 from auth.permissions import has_any_full_visibility, can_manage_access as _can_manage, can_clear_all_grants as _can_clear
+from utils.notifications import notify
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cdm-access", tags=["cdm-access"])
@@ -218,12 +219,22 @@ def grant_access(req: GrantAccessRequest, request: Request, user=Depends(_requir
         return {"status": "already_granted", "id": existing.id}
 
     user = getattr(request.state, "user", {})
+    granted_by = user.get("preferred_username", "admin")
     access = CdmAccess(
         cdm_name=req.cdm_name,
         username=req.username,
-        granted_by=user.get("preferred_username", "admin"),
+        granted_by=granted_by,
     )
     db.add(access)
+
+    notify(
+        db, req.username, "access_granted",
+        title=f"Accès accordé : {req.cdm_name}",
+        message=f"{granted_by} vous a accordé l'accès à la base CDM « {req.cdm_name} ».",
+        link="/quality",
+        item_id=req.cdm_name,
+    )
+
     db.commit()
     return {"status": "ok", "id": access.id}
 
@@ -250,12 +261,25 @@ def grant_group_access(req: GrantGroupAccessRequest, request: Request, user=Depe
         return {"status": "already_granted", "id": existing.id}
 
     user = getattr(request.state, "user", {})
+    granted_by = user.get("preferred_username", "admin")
     access = CdmGroupAccess(
         cdm_name=req.cdm_name,
         group_name=req.group_name,
-        granted_by=user.get("preferred_username", "admin"),
+        granted_by=granted_by,
     )
     db.add(access)
+
+    # Notify all group members
+    members = db.query(UserGroupMember).filter(UserGroupMember.group_name == req.group_name).all()
+    for m in members:
+        notify(
+            db, m.username, "access_granted",
+            title=f"Accès accordé : {req.cdm_name}",
+            message=f"Le groupe « {req.group_name} » a reçu l'accès à la base CDM « {req.cdm_name} ».",
+            link="/quality",
+            item_id=req.cdm_name,
+        )
+
     db.commit()
     return {"status": "ok", "id": access.id}
 
@@ -269,6 +293,18 @@ def revoke_access(req: RevokeAccessRequest, request: Request, user=Depends(_requ
     ).first()
     if not access:
         raise HTTPException(status_code=404, detail="Access grant not found")
+
+    admin_user = getattr(request.state, "user", {})
+    admin_name = admin_user.get("preferred_username", "admin")
+
+    notify(
+        db, req.username, "access_revoked",
+        title=f"Accès révoqué : {req.cdm_name}",
+        message=f"{admin_name} a révoqué votre accès à la base CDM « {req.cdm_name} ».",
+        link="/",
+        item_id=req.cdm_name,
+    )
+
     db.delete(access)
     db.commit()
     return {"status": "ok"}
@@ -283,6 +319,21 @@ def revoke_group_access(req: RevokeGroupAccessRequest, request: Request, user=De
     ).first()
     if not access:
         raise HTTPException(status_code=404, detail="Group access grant not found")
+
+    admin_user = getattr(request.state, "user", {})
+    admin_name = admin_user.get("preferred_username", "admin")
+
+    # Notify all group members before revoking
+    members = db.query(UserGroupMember).filter(UserGroupMember.group_name == req.group_name).all()
+    for m in members:
+        notify(
+            db, m.username, "access_revoked",
+            title=f"Accès révoqué : {req.cdm_name}",
+            message=f"{admin_name} a révoqué l'accès du groupe « {req.group_name} » à la base CDM « {req.cdm_name} ».",
+            link="/",
+            item_id=req.cdm_name,
+        )
+
     db.delete(access)
     db.commit()
     return {"status": "ok"}

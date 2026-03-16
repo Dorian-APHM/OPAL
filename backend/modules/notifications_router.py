@@ -18,10 +18,19 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 # Map notification types to sidebar tabs
 TYPE_TO_TAB = {
     "mapping_review": "mapping",
+    "mapping_applied": "mapping",
     "quality_done": "quality",
     "cohort_shared": "cohorts",
+    "cohort_deleted": "cohorts",
+    "cohort_updated": "cohorts",
     # "group_added" excluded: ephemeral info, no badge needed
+    "group_removed": "users",
     "access_request": "users",
+    "access_granted": "cdm",
+    "access_revoked": "cdm",
+    "cdm_created": "cdm",
+    "cdm_updated": "cdm",
+    "cdm_deleted": "cdm",
     "extraction_done": "data",
 }
 
@@ -194,4 +203,96 @@ def create_notification(req: CreateNotificationRequest, request: Request, db: Se
     )
     db.add(notif)
     db.commit()
+    db.refresh(notif)
+
+    # Push via WebSocket
+    from utils.ws_manager import _push_via_main_loop
+    _push_via_main_loop(req.username, {
+        "id": notif.id, "type": notif.type, "title": notif.title,
+        "message": notif.message, "link": notif.link, "item_id": notif.item_id,
+        "read": False, "created_at": notif.created_at.isoformat() if notif.created_at else None,
+    })
+
     return {"status": "ok", "id": notif.id}
+
+
+@router.delete("/{notification_id}")
+def delete_notification(notification_id: int, request: Request, db: Session = Depends(get_db)):
+    """Delete a specific notification."""
+    user_or, _ = _user_filter(request)
+    notif = db.query(Notification).filter(Notification.id == notification_id, user_or).first()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    db.delete(notif)
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/")
+def delete_all_read(request: Request, db: Session = Depends(get_db)):
+    """Delete all read notifications for the current user."""
+    user_or, _ = _user_filter(request)
+    deleted = db.query(Notification).filter(user_or, Notification.read == 1).delete(synchronize_session="fetch")
+    db.commit()
+    return {"status": "ok", "deleted": deleted}
+
+
+@router.get("/types")
+def list_notification_types():
+    """Return all known notification types and their tab mappings."""
+    return {"types": TYPE_TO_TAB}
+
+
+# ── Notification Preferences ──
+
+@router.get("/preferences")
+def get_preferences(request: Request, db: Session = Depends(get_db)):
+    """Get notification preferences for the current user."""
+    from db.models import NotificationPreference
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "anonymous")
+
+    prefs = db.query(NotificationPreference).filter(
+        NotificationPreference.username == username,
+    ).all()
+
+    # Build a map: type → enabled (default True for types not in DB)
+    pref_map = {p.notif_type: bool(p.enabled) for p in prefs}
+    result = {}
+    for notif_type in TYPE_TO_TAB:
+        result[notif_type] = pref_map.get(notif_type, True)
+    # Include non-tabbed types
+    result["group_added"] = pref_map.get("group_added", True)
+    result["group_removed"] = pref_map.get("group_removed", True)
+
+    return {"preferences": result}
+
+
+class PreferenceUpdateRequest(BaseModel):
+    notif_type: str = Field(..., min_length=1)
+    enabled: bool
+
+
+@router.post("/preferences")
+def update_preference(req: PreferenceUpdateRequest, request: Request, db: Session = Depends(get_db)):
+    """Update a notification preference for the current user."""
+    from db.models import NotificationPreference
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "anonymous")
+
+    pref = db.query(NotificationPreference).filter(
+        NotificationPreference.username == username,
+        NotificationPreference.notif_type == req.notif_type,
+    ).first()
+
+    if pref:
+        pref.enabled = 1 if req.enabled else 0
+    else:
+        db.add(NotificationPreference(
+            username=username,
+            notif_type=req.notif_type,
+            enabled=1 if req.enabled else 0,
+        ))
+
+    db.commit()
+    return {"status": "ok", "notif_type": req.notif_type, "enabled": req.enabled}

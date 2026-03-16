@@ -5,7 +5,7 @@ import ipaddress
 import re
 import socket
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,7 @@ from db.app_db import get_db
 from db.models import CdmConfig, AnalysisSettings
 from db.omop_connector import test_omop_connection, invalidate_pool
 from utils.crypto import encrypt_password, decrypt_password
+from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA
 
 router = APIRouter(prefix="/api/cdm", tags=["cdm"])
@@ -140,11 +141,14 @@ def list_cdms(db: Session = Depends(get_db)):
 
 
 @router.post("/")
-def create_cdm(req: CdmCreateRequest, db: Session = Depends(get_db)):
+def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(get_db)):
     """Register a new CDM connection."""
     existing = db.query(CdmConfig).filter(CdmConfig.name == req.name).first()
     if existing:
         raise HTTPException(status_code=409, detail=f"CDM '{req.name}' already exists")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
 
     cdm = CdmConfig(
         name=req.name,
@@ -156,6 +160,16 @@ def create_cdm(req: CdmCreateRequest, db: Session = Depends(get_db)):
         omop_schema=req.omop_schema,
     )
     db.add(cdm)
+
+    notify(
+        db, username, "cdm_created",
+        title=f"Nouveau CDM : {req.name}",
+        message=f"{username} a enregistré la base CDM « {req.name} ».",
+        link="/cdm",
+        target_role="admin",
+        item_id=req.name,
+    )
+
     db.commit()
     db.refresh(cdm)
 
@@ -188,11 +202,14 @@ def test_saved_connection(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{cdm_name}")
-def update_cdm(cdm_name: str, req: CdmUpdateRequest, db: Session = Depends(get_db)):
+def update_cdm(cdm_name: str, req: CdmUpdateRequest, request: Request, db: Session = Depends(get_db)):
     """Update a CDM connection."""
     cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
 
     # Snapshot old connection params before update (for pool invalidation)
     old_host, old_port, old_dbname, old_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
@@ -210,6 +227,15 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, db: Session = Depends(get_d
     if req.omop_schema is not None:
         cdm.omop_schema = req.omop_schema
 
+    notify(
+        db, username, "cdm_updated",
+        title=f"CDM modifié : {cdm_name}",
+        message=f"{username} a modifié la configuration de « {cdm_name} ».",
+        link="/cdm",
+        target_role="admin",
+        item_id=cdm_name,
+    )
+
     db.commit()
 
     # Invalidate the old pool so next request creates a fresh one
@@ -219,7 +245,7 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, db: Session = Depends(get_d
 
 
 @router.delete("/{cdm_name}")
-def delete_cdm(cdm_name: str, db: Session = Depends(get_db)):
+def delete_cdm(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     """Delete a CDM connection and all associated data."""
     from db.models import (
         AnalysisSnapshot, AnalysisSettings, Cohort, CohortVersion, CohortShare,
@@ -230,6 +256,18 @@ def delete_cdm(cdm_name: str, db: Session = Depends(get_db)):
     cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
+
+    notify(
+        db, username, "cdm_deleted",
+        title=f"CDM supprimé : {cdm_name}",
+        message=f"{username} a supprimé la base CDM « {cdm_name} » et toutes ses données associées.",
+        link="/cdm",
+        target_role="admin",
+        item_id=cdm_name,
+    )
 
     # Invalidate pool before deleting config
     invalidate_pool(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user)

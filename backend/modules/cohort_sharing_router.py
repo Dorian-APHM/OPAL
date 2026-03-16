@@ -130,11 +130,34 @@ def share_cohort(cohort_id: int, req: ShareRequest, request: Request, db: Sessio
 def unshare_cohort(cohort_id: int, req: UnshareRequest, request: Request, db: Session = Depends(get_db)):
     """Remove sharing from a cohort."""
     cohort = _require_owner_or_admin(db, cohort_id, request)
+    user = _get_user(request)
+    username = user.get("preferred_username", "")
 
     if req.share_type == "all":
         cohort.shared_with_all = 0
         db.commit()
         return {"cohort_id": cohort_id, "shared_with_all": False}
+
+    # Notify affected users before unsharing
+    if req.share_type == "user" and req.share_target != username:
+        _notify(
+            db, req.share_target, "cohort_shared",
+            title=f"Partage retiré : {cohort.name}",
+            message=f"{username} a retiré le partage de la cohorte « {cohort.name} ».",
+            link=f"/cohorts",
+            item_id=str(cohort_id),
+        )
+    elif req.share_type == "group":
+        members = db.query(UserGroupMember).filter(UserGroupMember.group_name == req.share_target).all()
+        for m in members:
+            if m.username != username:
+                _notify(
+                    db, m.username, "cohort_shared",
+                    title=f"Partage retiré : {cohort.name}",
+                    message=f"{username} a retiré le partage de la cohorte « {cohort.name} » pour le groupe {req.share_target}.",
+                    link=f"/cohorts",
+                    item_id=str(cohort_id),
+                )
 
     deleted = db.query(CohortShare).filter(
         CohortShare.cohort_id == cohort_id,
