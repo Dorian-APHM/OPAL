@@ -280,6 +280,20 @@ class Notification(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class NotificationPreference(Base):
+    """Per-user notification preferences. Users can mute specific notification types."""
+    __tablename__ = "notification_preferences"
+    __table_args__ = (
+        UniqueConstraint("username", "notif_type", name="uq_notif_pref"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, index=True)
+    notif_type = Column(String(50), nullable=False)  # e.g. "quality_done", "cohort_shared"
+    enabled = Column(Integer, default=1)  # 1=enabled, 0=muted
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
 class CohortTemplate(Base):
     """Pre-defined cohort templates."""
     __tablename__ = "cohort_templates"
