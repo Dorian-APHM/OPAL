@@ -368,17 +368,26 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
     async def event_generator():
         loop = _asyncio.get_event_loop()
-        yield f"data: {json.dumps({'type': 'start', 'analysis_id': analysis_id, 'total': len(domains)})}\n\n"
+        try:
+            yield f"data: {json.dumps({'type': 'start', 'analysis_id': analysis_id, 'total': len(domains)})}\n\n"
 
-        while True:
-            # Read from the queue in a thread-safe, non-blocking way.
-            try:
-                event = await loop.run_in_executor(None, progress_q.get, True, 2.0)
-            except _queue.Empty:
-                continue
-            if event is None:
-                break
-            yield f"data: {json.dumps(event)}\n\n"
+            while True:
+                # Read from the queue in a thread-safe, non-blocking way.
+                try:
+                    event = await loop.run_in_executor(None, progress_q.get, True, 2.0)
+                except _queue.Empty:
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        except _asyncio.CancelledError:
+            # Client disconnected — drain remaining events to avoid blocking the worker
+            logger.info("SSE client disconnected for analysis %s", analysis_id)
+            while not progress_q.empty():
+                try:
+                    progress_q.get_nowait()
+                except _queue.Empty:
+                    break
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

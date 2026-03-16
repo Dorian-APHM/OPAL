@@ -6,7 +6,7 @@ Admin assigns access; middleware filters CDM list.
 Visibility rules driven by permissions.yaml.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -113,6 +113,8 @@ def list_access(
     request: Request,
     cdm_name: str | None = None,
     username: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     user=Depends(_require_manage_access),
     db: Session = Depends(get_db),
 ):
@@ -123,13 +125,15 @@ def list_access(
         q = q.filter(CdmAccess.cdm_name == cdm_name)
     if username:
         q = q.filter(CdmAccess.username == username)
-    user_rows = q.order_by(CdmAccess.created_at.desc()).all()
+    total_user = q.count()
+    user_rows = q.order_by(CdmAccess.created_at.desc()).offset(offset).limit(limit).all()
 
     # Group grants
     gq = db.query(CdmGroupAccess)
     if cdm_name:
         gq = gq.filter(CdmGroupAccess.cdm_name == cdm_name)
-    group_rows = gq.order_by(CdmGroupAccess.created_at.desc()).all()
+    total_group = gq.count()
+    group_rows = gq.order_by(CdmGroupAccess.created_at.desc()).offset(offset).limit(limit).all()
 
     return {
         "grants": [
@@ -154,6 +158,10 @@ def list_access(
             }
             for r in group_rows
         ],
+        "total_user_grants": total_user,
+        "total_group_grants": total_group,
+        "limit": limit,
+        "offset": offset,
     }
 
 
