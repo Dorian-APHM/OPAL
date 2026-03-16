@@ -16,9 +16,20 @@ interface Props {
 
 const TYPE_ICONS: Record<string, string> = {
   mapping_review: '🗺️',
+  mapping_applied: '🗺️',
   quality_done: '✅',
   cohort_shared: '👥',
+  cohort_deleted: '🗑️',
+  cohort_updated: '✏️',
   access_request: '🔑',
+  access_granted: '🔓',
+  access_revoked: '🔒',
+  cdm_created: '🗄️',
+  cdm_updated: '⚙️',
+  cdm_deleted: '🗑️',
+  extraction_done: '📦',
+  group_added: '👥',
+  group_removed: '👤',
 };
 
 function timeAgo(dateStr: string): string {
@@ -66,10 +77,23 @@ export default function HomePage({ selectedCdm }: Props) {
     }
   };
 
+  // Real-time: prepend new notifications from WebSocket
+  useEffect(() => {
+    const onNotif = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail) {
+        setNotifications(prev => [detail, ...prev].slice(0, 20));
+      }
+    };
+    window.addEventListener('opal:notification', onNotif);
+    return () => window.removeEventListener('opal:notification', onNotif);
+  }, []);
+
   const markNotifRead = async (id: number) => {
     try {
       await notificationsApi.markRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+      window.dispatchEvent(new Event('opal:badges-refresh'));
     } catch {}
   };
 
@@ -77,6 +101,7 @@ export default function HomePage({ selectedCdm }: Props) {
     try {
       await notificationsApi.markAllRead();
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      window.dispatchEvent(new Event('opal:badges-refresh'));
     } catch {}
   };
 
