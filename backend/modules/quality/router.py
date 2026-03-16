@@ -25,6 +25,7 @@ from modules.quality.comparator import compare_snapshots
 from utils.csv_safety import csv_safe
 from config import DEFAULT_OMOP_SCHEMA
 from utils.rate_limit import limiter
+from utils.cdm_helper import check_cdm_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quality", tags=["quality"])
@@ -98,6 +99,8 @@ def list_domains():
 @limiter.limit("3/minute")
 def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run analysis for a single domain on a CDM."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -156,6 +159,8 @@ def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends
 @router.post("/analyze/batch")
 def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run analysis for multiple domains on a CDM."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -226,6 +231,8 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
 @router.post("/analyze/batch/stream")
 def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run batch analysis with SSE progress stream."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -441,6 +448,9 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
     an AnalysisSnapshot with domain='Conformity' so it survives page
     navigation.  Supports cancel via /conformity/cancel/{analysis_id}.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
+
     import threading as _threading
     import uuid as _uuid
 
@@ -871,8 +881,11 @@ def generate_report(
 
 
 @router.post("/compare")
-def compare_cdms(req: CompareRequest, db: Session = Depends(get_db)):
+def compare_cdms(req: CompareRequest, request: Request, db: Session = Depends(get_db)):
     """Compare analysis results between two CDMs or two snapshots."""
+    # cdm_name_a/b are in the JSON body, so the Keycloak middleware cannot see them — check here.
+    check_cdm_access(request, req.cdm_name_a)
+    check_cdm_access(request, req.cdm_name_b)
     # Get snapshot A
     if req.snapshot_id_a:
         snap_a = db.query(AnalysisSnapshot).filter(AnalysisSnapshot.id == req.snapshot_id_a).first()

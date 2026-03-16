@@ -25,6 +25,7 @@ from modules.mapping.suggest import suggest_mappings, suggest_batch
 from utils.csv_safety import csv_safe
 from utils.sql_safety import safe_identifier
 from utils.rate_limit import limiter
+from utils.cdm_helper import check_cdm_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
@@ -491,8 +492,10 @@ def _get_sapbert_suggestions(db: Session, source_value: str, domain: str) -> lis
 
 
 @router.post("/suggest")
-def suggest_single(req: SuggestRequest, db: Session = Depends(get_db)):
+def suggest_single(req: SuggestRequest, request: Request, db: Session = Depends(get_db)):
     """Get mapping suggestions for a single source term."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     source_name = req.source_name or ""
 
     # Enrich from reference codebook if no source_name
@@ -540,6 +543,8 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     Launch mapping suggestions in a background thread.
     Returns immediately with a task_id. Poll /suggest/status/{task_id} for results.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     import threading
     import uuid as _uuid
 
@@ -754,8 +759,10 @@ def suggest_active():
 # ──── 5.4 Validation Workflow ────
 
 @router.post("/decide")
-def record_decision(req: DecisionRequest, db: Session = Depends(get_db)):
+def record_decision(req: DecisionRequest, request: Request, db: Session = Depends(get_db)):
     """Record a mapping decision (approve, modify, reject)."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     if req.action not in ("approved", "modified", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action")
 
@@ -780,38 +787,43 @@ def record_decision(req: DecisionRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/decide/bulk")
-def bulk_decision(req: BulkDecisionRequest, db: Session = Depends(get_db)):
+def bulk_decision(req: BulkDecisionRequest, request: Request, db: Session = Depends(get_db)):
     """
     Bulk approve or reject suggestions above a confidence threshold.
     Either uses source_values list or processes all pending terms.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     if req.action not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action for bulk")
 
-    # Get already-decided source values
-    existing = set(
-        r[0] for r in
-        db.query(MappingDecision.source_value)
-        .filter(
-            MappingDecision.cdm_name == req.cdm_name,
-            MappingDecision.domain == req.domain,
-        ).all()
-    )
-
-    count = 0
     if req.source_values:
-        for sv in req.source_values:
-            if sv not in existing:
-                decision = MappingDecision(
+        # Get existing source values in one query, filtered to only the requested values
+        existing = set(
+            r[0] for r in
+            db.query(MappingDecision.source_value)
+            .filter(
+                MappingDecision.cdm_name == req.cdm_name,
+                MappingDecision.domain == req.domain,
+                MappingDecision.source_value.in_(req.source_values),
+            ).all()
+        )
+        new_values = [sv for sv in req.source_values if sv not in existing]
+        if new_values:
+            db.bulk_save_objects([
+                MappingDecision(
                     cdm_name=req.cdm_name,
                     domain=req.domain,
                     source_value=sv,
                     action=req.action,
                     suggestion_source="bulk",
                 )
-                db.add(decision)
-                count += 1
-    db.commit()
+                for sv in new_values
+            ])
+            db.commit()
+        count = len(new_values)
+    else:
+        count = 0
 
     return {"action": req.action, "count": count}
 
@@ -824,6 +836,8 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
     Generate source_to_concept_map entries from approved decisions.
     Optionally writes directly to the CDM's source_to_concept_map table.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     # Get all approved/modified decisions
     decisions = (
         db.query(MappingDecision)
@@ -901,8 +915,10 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
 
 @router.post("/apply/preview")
-def apply_preview(req: ApplyMappingRequest, db: Session = Depends(get_db)):
+def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
     """Preview impact of applying approved mappings."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     decisions = (
         db.query(MappingDecision)
         .filter(
