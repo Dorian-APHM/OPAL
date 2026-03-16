@@ -96,13 +96,11 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
     refreshBadges();
     const onRefresh = () => refreshBadges();
     window.addEventListener('opal:badges-refresh', onRefresh);
+    // Refresh only when user returns to the tab (no polling — WS is real-time)
     window.addEventListener('focus', onRefresh);
-    // WS handles real-time push; poll is just a safety net
-    const interval = setInterval(refreshBadges, 60000);
     return () => {
       window.removeEventListener('opal:badges-refresh', onRefresh);
       window.removeEventListener('focus', onRefresh);
-      clearInterval(interval);
     };
   }, [refreshBadges]);
 
