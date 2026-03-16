@@ -49,14 +49,11 @@ export function useNotifDots(notifType: string) {
     };
     window.addEventListener('opal:notification', onWsNotif);
 
-    // Safety-net poll (WS handles real-time push)
-    const interval = setInterval(refresh, 30000);
-
+    // No polling — WS handles real-time push
     return () => {
       window.removeEventListener('opal:badges-refresh', onBadgeRefresh);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('opal:notification', onWsNotif);
-      clearInterval(interval);
     };
   }, [refresh]);
 
