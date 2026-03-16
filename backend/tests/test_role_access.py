@@ -151,3 +151,119 @@ class TestCdmAccessRoleCheck:
             "cdm_name": "cdm_rbac", "username": "researcher",
         })
         assert resp.status_code == 200
+
+
+# ── IDOR tests — verify ownership enforcement ──
+
+USER_A = {"X-Test-Username": "alice", "X-Test-Roles": "chercheur"}
+USER_B = {"X-Test-Username": "bob", "X-Test-Roles": "chercheur"}
+
+
+class TestIDORSavedQueries:
+
+    def test_user_b_cannot_update_user_a_query(self, client):
+        resp = client.post("/api/saved-queries/", headers=USER_A, json={
+            "cdm_name": "test", "name": "alice_query", "sql": "SELECT 1",
+        })
+        query_id = resp.json()["id"]
+
+        resp = client.put(f"/api/saved-queries/{query_id}", headers=USER_B, json={
+            "name": "hacked",
+        })
+        assert resp.status_code == 403
+
+    def test_user_b_cannot_delete_user_a_query(self, client):
+        resp = client.post("/api/saved-queries/", headers=USER_A, json={
+            "cdm_name": "test", "name": "alice_query2", "sql": "SELECT 1",
+        })
+        query_id = resp.json()["id"]
+        resp = client.delete(f"/api/saved-queries/{query_id}", headers=USER_B)
+        assert resp.status_code == 403
+
+    def test_owner_can_update_own_query(self, client):
+        resp = client.post("/api/saved-queries/", headers=USER_A, json={
+            "cdm_name": "test", "name": "my_query", "sql": "SELECT 1",
+        })
+        query_id = resp.json()["id"]
+        resp = client.put(f"/api/saved-queries/{query_id}", headers=USER_A, json={
+            "name": "updated",
+        })
+        assert resp.status_code == 200
+
+
+class TestIDORCohortDelete:
+
+    def _create_cdm_and_cohort(self, client, cohort_name, headers):
+        """Create a CDM then a cohort owned by the given user."""
+        # Ensure CDM exists (idempotent via 409)
+        client.post("/api/cdm/", headers=ADMIN, json={
+            "name": "idor_cdm", "db_host": "db.example.com", "db_port": 5432,
+            "db_name": "db", "db_user": "u", "db_password": "p",
+        })
+        resp = client.post("/api/cohorts/", headers=headers, json={
+            "name": cohort_name, "cdm_name": "idor_cdm", "criteria": {"type": "ALL"},
+        })
+        assert resp.status_code == 200, resp.text
+        return resp.json()["id"]
+
+    def test_user_b_cannot_delete_user_a_cohort(self, client):
+        cohort_id = self._create_cdm_and_cohort(client, "alice_c1", USER_A)
+        resp = client.delete(f"/api/cohorts/{cohort_id}", headers=USER_B)
+        assert resp.status_code == 403
+
+    def test_owner_can_delete_own_cohort(self, client):
+        cohort_id = self._create_cdm_and_cohort(client, "alice_c2", USER_A)
+        resp = client.delete(f"/api/cohorts/{cohort_id}", headers=USER_A)
+        assert resp.status_code == 200
+
+    def test_admin_can_delete_any_cohort(self, client):
+        cohort_id = self._create_cdm_and_cohort(client, "alice_c3", USER_A)
+        resp = client.delete(f"/api/cohorts/{cohort_id}", headers=ADMIN)
+        assert resp.status_code == 200
+
+
+class TestIDORNotifications:
+
+    def test_user_b_cannot_read_user_a_notification(self, client):
+        # Create notification for alice (admin-only endpoint)
+        resp = client.post("/api/notifications/create", headers=ADMIN, json={
+            "username": "alice", "type": "info", "title": "Test", "message": "for alice",
+        })
+        assert resp.status_code == 200, resp.text
+        notif_id = resp.json()["id"]
+
+        # Bob tries to mark it as read
+        resp = client.post(f"/api/notifications/{notif_id}/read", headers=USER_B)
+        assert resp.status_code == 404  # filtered by username, not found
+
+
+class TestIDORConceptSets:
+
+    def test_user_b_cannot_update_user_a_concept_set(self, client):
+        resp = client.post("/api/concept-sets/", headers=USER_A, json={
+            "name": "alice_cs", "cdm_name": "test", "domain": "Condition", "concepts": [],
+        })
+        cs_id = resp.json()["id"]
+        resp = client.put(f"/api/concept-sets/{cs_id}", headers=USER_B, json={
+            "name": "hacked",
+        })
+        assert resp.status_code == 403
+
+    def test_user_b_cannot_delete_user_a_concept_set(self, client):
+        resp = client.post("/api/concept-sets/", headers=USER_A, json={
+            "name": "alice_cs2", "cdm_name": "test", "domain": "Drug", "concepts": [],
+        })
+        cs_id = resp.json()["id"]
+        resp = client.delete(f"/api/concept-sets/{cs_id}", headers=USER_B)
+        assert resp.status_code == 403
+
+
+class TestIDORCohortTemplates:
+
+    def test_user_b_cannot_delete_user_a_template(self, client):
+        resp = client.post("/api/cohort-templates/", headers=USER_A, json={
+            "name": "alice_tpl", "description": "test", "criteria_json": {},
+        })
+        tpl_id = resp.json()["id"]
+        resp = client.delete(f"/api/cohort-templates/{tpl_id}", headers=USER_B)
+        assert resp.status_code == 403

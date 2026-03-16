@@ -10,11 +10,10 @@ from sqlalchemy.orm import Session
 from psycopg2 import sql as psysql
 
 from db.app_db import get_db
-from db.models import CdmConfig, Cohort, MappingDecision, AnalysisSettings, SavedQuery
-from db.omop_connector import get_omop_connection
-from utils.crypto import decrypt_password
+from db.models import Cohort, MappingDecision, SavedQuery
 from utils.sql_safety import safe_identifier
-from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
+from utils.cdm_helper import get_cdm_connection
+from config import DOMAIN_CONFIG
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -68,14 +67,8 @@ def global_search(
     # 2. Search concepts (requires CDM connection)
     if cdm_name:
         try:
-            cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
-            if cdm:
-                settings = db.query(AnalysisSettings).filter(
-                    AnalysisSettings.cdm_name == cdm_name
-                ).first()
-                schema = safe_identifier(settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA)
-                password = decrypt_password(cdm.db_password_encrypted)
-                conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+            conn, schema = get_cdm_connection(db, cdm_name)
+            if conn:
                 try:
                     from psycopg2.extras import DictCursor
                     with conn.cursor(cursor_factory=DictCursor) as cur:
