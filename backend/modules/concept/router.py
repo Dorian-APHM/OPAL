@@ -4,6 +4,8 @@ Concept Explorer — browse, search and navigate OMOP vocabulary concepts.
 import csv
 import io
 import logging
+import threading
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -22,6 +24,31 @@ from utils.csv_safety import csv_safe
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/concepts", tags=["concepts"])
+
+# ── LRU-style cache for concept details and hierarchy (per CDM) ──
+_concept_cache: dict[tuple, tuple[float, dict]] = {}  # key -> (timestamp, data)
+_concept_cache_lock = threading.Lock()
+_CACHE_TTL = 300  # 5 minutes
+_CACHE_MAX_SIZE = 500
+
+
+def _cache_get(key: tuple) -> dict | None:
+    with _concept_cache_lock:
+        entry = _concept_cache.get(key)
+        if entry and (time.monotonic() - entry[0]) < _CACHE_TTL:
+            return entry[1]
+        if entry:
+            del _concept_cache[key]
+    return None
+
+
+def _cache_set(key: tuple, data: dict) -> None:
+    with _concept_cache_lock:
+        # Evict oldest if at capacity
+        if len(_concept_cache) >= _CACHE_MAX_SIZE:
+            oldest_key = min(_concept_cache, key=lambda k: _concept_cache[k][0])
+            del _concept_cache[oldest_key]
+        _concept_cache[key] = (time.monotonic(), data)
 
 
 def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
@@ -126,6 +153,11 @@ def get_concept_details(
     db: Session = Depends(get_db),
 ):
     """Get full details for a single concept, including relationships and source values."""
+    cache_key = ("details", cdm_name, concept_id)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     conn, schema = _get_conn(db, cdm_name)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -181,11 +213,13 @@ def get_concept_details(
             except Exception:
                 conn.rollback()
 
-        return {
+        result = {
             "concept": dict(concept),
             "relationships": relationships,
             "synonyms": synonyms,
         }
+        _cache_set(cache_key, result)
+        return result
     finally:
         conn.close()
 
@@ -197,6 +231,11 @@ def get_concept_hierarchy(
     db: Session = Depends(get_db),
 ):
     """Get ancestors and descendants via concept_ancestor table."""
+    cache_key = ("hierarchy", cdm_name, concept_id)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     conn, schema = _get_conn(db, cdm_name)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -238,11 +277,13 @@ def get_concept_hierarchy(
             )
             descendants = [dict(r) for r in cur.fetchall()]
 
-        return {
+        result = {
             "concept_id": concept_id,
             "ancestors": ancestors,
             "descendants": descendants,
         }
+        _cache_set(cache_key, result)
+        return result
     finally:
         conn.close()
 

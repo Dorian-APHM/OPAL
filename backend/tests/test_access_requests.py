@@ -189,8 +189,8 @@ def test_approve_request_keycloak_unavailable(client, monkeypatch):
     req_id = reqs[0]["id"]
 
     # Mock _get_keycloak_admin_token to return None
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: None)
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: None)
 
     resp = client.post(f"/api/admin/access-requests/{req_id}/approve")
     assert resp.status_code == 503
@@ -198,14 +198,14 @@ def test_approve_request_keycloak_unavailable(client, monkeypatch):
 
 def test_approve_request_success(client, monkeypatch):
     """Full approve flow with mocked Keycloak."""
-    import main
+    import modules.admin_router as admin_mod
 
     client.post("/api/access-requests", json=_make_request_body())
     reqs = client.get("/api/admin/access-requests").json()["requests"]
     req_id = reqs[0]["id"]
 
     # Mock Keycloak admin token
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     # Mock requests.post for user creation
     class FakeResponse:
