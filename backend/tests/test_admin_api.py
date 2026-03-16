@@ -28,8 +28,8 @@ class MockResponse:
 
 
 def test_list_users_keycloak_unavailable(client, monkeypatch):
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: None)
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: None)
 
     resp = client.get("/api/admin/users")
     assert resp.status_code == 200
@@ -39,10 +39,10 @@ def test_list_users_keycloak_unavailable(client, monkeypatch):
 
 
 def test_list_users_success(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     alice = {
         "id": "uid-1",
@@ -91,10 +91,10 @@ def test_list_users_success(client, monkeypatch):
 
 
 def test_list_users_keycloak_error(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_get(url, **kwargs):
         raise Exception("Connection refused")
@@ -111,26 +111,26 @@ def test_list_users_keycloak_error(client, monkeypatch):
 
 
 def test_assign_role_missing_body(client, monkeypatch):
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     resp = client.post("/api/admin/users/uid-1/roles", json={})
     assert resp.status_code == 422  # Pydantic validation: 'role' is required
 
 
 def test_assign_role_keycloak_unavailable(client, monkeypatch):
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: None)
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: None)
 
     resp = client.post("/api/admin/users/uid-1/roles", json={"role": "chercheur"})
     assert resp.status_code == 503
 
 
 def test_assign_role_success(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_get(url, **kwargs):
         return MockResponse(json_data={"id": "role-id", "name": "chercheur"})
@@ -150,10 +150,10 @@ def test_assign_role_success(client, monkeypatch):
 
 
 def test_assign_role_not_found(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_get(url, **kwargs):
         return MockResponse(status_code=404)
@@ -168,18 +168,18 @@ def test_assign_role_not_found(client, monkeypatch):
 
 
 def test_remove_role_keycloak_unavailable(client, monkeypatch):
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: None)
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: None)
 
     resp = client.delete("/api/admin/users/uid-1/roles/chercheur")
     assert resp.status_code == 503
 
 
 def test_remove_role_success(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_get(url, **kwargs):
         return MockResponse(json_data={"id": "role-id", "name": "chercheur"})
@@ -199,10 +199,10 @@ def test_remove_role_success(client, monkeypatch):
 
 
 def test_remove_role_not_found(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_get(url, **kwargs):
         return MockResponse(status_code=404)
@@ -217,18 +217,18 @@ def test_remove_role_not_found(client, monkeypatch):
 
 
 def test_toggle_user_keycloak_unavailable(client, monkeypatch):
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: None)
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: None)
 
     resp = client.put("/api/admin/users/uid-1/toggle", json={"enabled": False})
     assert resp.status_code == 503
 
 
 def test_toggle_user_enable(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_put(url, **kwargs):
         return MockResponse()
@@ -243,10 +243,10 @@ def test_toggle_user_enable(client, monkeypatch):
 
 
 def test_toggle_user_disable(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_put(url, **kwargs):
         return MockResponse()
@@ -260,10 +260,10 @@ def test_toggle_user_disable(client, monkeypatch):
 
 
 def test_toggle_user_keycloak_error(client, monkeypatch):
-    import main
+    import modules.admin_router as admin_mod
     import requests as http_requests
 
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     def mock_put(url, **kwargs):
         return MockResponse(status_code=500)

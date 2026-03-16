@@ -32,13 +32,16 @@ class UpdateQueryRequest(BaseModel):
 def list_queries(
     cdm_name: str | None = None,
     request: Request = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     """List saved queries, optionally filtered by CDM."""
     q = db.query(SavedQuery)
     if cdm_name:
         q = q.filter(SavedQuery.cdm_name == cdm_name)
-    queries = q.order_by(SavedQuery.updated_at.desc()).all()
+    total = q.count()
+    queries = q.order_by(SavedQuery.updated_at.desc()).offset(offset).limit(limit).all()
     return {
         "queries": [
             {
@@ -52,7 +55,10 @@ def list_queries(
                 "updated_at": sq.updated_at.isoformat() if sq.updated_at else None,
             }
             for sq in queries
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 
