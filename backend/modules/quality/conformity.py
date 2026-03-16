@@ -7,6 +7,8 @@ with scores and detailed findings. Integrated into the quality analysis.
 import logging
 import re
 
+from psycopg2 import sql as psysql
+
 logger = logging.getLogger(__name__)
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -71,13 +73,13 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
         # ── 2. Person table checks ──
         if "person" in existing_tables:
             # Merge person checks into fewer queries (P14 fix)
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT
                     COUNT(*) AS total,
                     COUNT(*) FILTER (WHERE gender_concept_id = 0 OR gender_concept_id IS NULL) AS unmapped_gender,
                     COUNT(*) FILTER (WHERE year_of_birth > EXTRACT(YEAR FROM CURRENT_DATE)) AS future_births
-                FROM {schema}.person
-            """)
+                FROM {}.{}
+            """).format(psysql.Identifier(schema), psysql.Identifier("person")))
             row = cur.fetchone()
             total_persons = row[0]
             unmapped_gender = row[1]
@@ -85,11 +87,14 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
 
             # Persons with no observation period (requires join, separate query)
             if "observation_period" in existing_tables:
-                cur.execute(f"""
-                    SELECT COUNT(*) FROM {schema}.person p
-                    LEFT JOIN {schema}.observation_period op ON op.person_id = p.person_id
+                cur.execute(psysql.SQL("""
+                    SELECT COUNT(*) FROM {}.{} p
+                    LEFT JOIN {}.{} op ON op.person_id = p.person_id
                     WHERE op.person_id IS NULL
-                """)
+                """).format(
+                    psysql.Identifier(schema), psysql.Identifier("person"),
+                    psysql.Identifier(schema), psysql.Identifier("observation_period"),
+                ))
                 orphan_persons = cur.fetchone()[0]
             else:
                 orphan_persons = total_persons
@@ -128,15 +133,18 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
         # ── 3. Observation period checks ──
         if "observation_period" in existing_tables:
             # Merge both obs period checks into one query (P14 fix)
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT
                     (SELECT COUNT(*) FROM (
-                        SELECT person_id FROM {schema}.observation_period
+                        SELECT person_id FROM {}.{}
                         GROUP BY person_id HAVING COUNT(*) > 1
                     ) t) AS multi_obs,
-                    (SELECT COUNT(*) FROM {schema}.observation_period
+                    (SELECT COUNT(*) FROM {}.{}
                      WHERE observation_period_end_date > CURRENT_DATE + INTERVAL '1 day') AS future_obs
-            """)
+            """).format(
+                psysql.Identifier(schema), psysql.Identifier("observation_period"),
+                psysql.Identifier(schema), psysql.Identifier("observation_period"),
+            ))
             row = cur.fetchone()
             multi_obs = row[0]
             future_obs = row[1]
@@ -199,23 +207,40 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
 
             try:
                 # Build a single query with FILTER clauses for all checks on this table
-                filters = [f"COUNT(*) AS total"]
-                filters.append(f"COUNT(*) FILTER (WHERE {concept_col} = 0) AS unmapped")
+                filter_parts = [psysql.SQL("COUNT(*) AS total")]
+                filter_parts.append(
+                    psysql.SQL("COUNT(*) FILTER (WHERE {} = 0) AS unmapped").format(
+                        psysql.Identifier(concept_col)
+                    )
+                )
 
                 if date_col:
-                    filters.append(
-                        f"COUNT(*) FILTER (WHERE {date_col} > CURRENT_DATE + INTERVAL '1 day') AS future_dates"
+                    filter_parts.append(
+                        psysql.SQL("COUNT(*) FILTER (WHERE {} > CURRENT_DATE + INTERVAL '1 day') AS future_dates").format(
+                            psysql.Identifier(date_col)
+                        )
                     )
 
                 if visit_fk_col and has_visits:
-                    filters.append(
-                        f"COUNT(*) FILTER (WHERE {visit_fk_col} IS NOT NULL"
-                        f" AND NOT EXISTS (SELECT 1 FROM {schema}.visit_occurrence v"
-                        f" WHERE v.visit_occurrence_id = t.{visit_fk_col})) AS orphans"
+                    filter_parts.append(
+                        psysql.SQL(
+                            "COUNT(*) FILTER (WHERE {} IS NOT NULL"
+                            " AND NOT EXISTS (SELECT 1 FROM {}.{} v"
+                            " WHERE v.visit_occurrence_id = t.{})) AS orphans"
+                        ).format(
+                            psysql.Identifier(visit_fk_col),
+                            psysql.Identifier(schema),
+                            psysql.Identifier("visit_occurrence"),
+                            psysql.Identifier(visit_fk_col),
+                        )
                     )
 
-                select_clause = ",\n                       ".join(filters)
-                cur.execute(f"SELECT {select_clause} FROM {schema}.{table} t")
+                select_clause = psysql.SQL(",\n                       ").join(filter_parts)
+                cur.execute(psysql.SQL("SELECT {} FROM {}.{} t").format(
+                    select_clause,
+                    psysql.Identifier(schema),
+                    psysql.Identifier(table),
+                ))
                 row = cur.fetchone()
 
                 total = row[0]
@@ -276,10 +301,10 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
         # ── Visit occurrence future dates (standalone, no concept/FK checks) ──
         if "visit_occurrence" in existing_tables:
             try:
-                cur.execute(f"""
-                    SELECT COUNT(*) FROM {schema}.visit_occurrence
+                cur.execute(psysql.SQL("""
+                    SELECT COUNT(*) FROM {}.{}
                     WHERE visit_start_date > CURRENT_DATE + INTERVAL '1 day'
-                """)
+                """).format(psysql.Identifier(schema), psysql.Identifier("visit_occurrence")))
                 future = cur.fetchone()[0]
                 checks.append({
                     "id": "future_dates_visit_occurrence",
