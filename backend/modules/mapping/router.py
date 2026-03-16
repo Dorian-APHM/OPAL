@@ -1181,9 +1181,13 @@ async def upload_reference(
 
 
 @router.get("/reference")
-def list_references(db: Session = Depends(get_db)):
+def list_references(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
     """List all loaded reference codebooks."""
-    results = (
+    base_q = (
         db.query(
             ReferenceCodebook.name,
             ReferenceCodebook.domain,
@@ -1191,8 +1195,9 @@ def list_references(db: Session = Depends(get_db)):
             func.max(ReferenceCodebook.uploaded_at).label("uploaded_at"),
         )
         .group_by(ReferenceCodebook.name, ReferenceCodebook.domain)
-        .all()
     )
+    total = base_q.count()
+    results = base_q.offset(offset).limit(limit).all()
     return {
         "references": [
             {
@@ -1201,7 +1206,10 @@ def list_references(db: Session = Depends(get_db)):
                 "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             }
             for r in results
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -1270,9 +1278,13 @@ async def upload_sapbert(
 
 
 @router.get("/sapbert")
-def list_sapbert(db: Session = Depends(get_db)):
+def list_sapbert(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
     """List loaded SapBERT mapping sets."""
-    results = (
+    base_q = (
         db.query(
             SapbertMapping.domain,
             func.count(SapbertMapping.id).label("count"),
@@ -1280,8 +1292,9 @@ def list_sapbert(db: Session = Depends(get_db)):
             func.max(SapbertMapping.uploaded_at).label("uploaded_at"),
         )
         .group_by(SapbertMapping.domain)
-        .all()
     )
+    total = base_q.count()
+    results = base_q.offset(offset).limit(limit).all()
     return {
         "sapbert_sets": [
             {
@@ -1291,7 +1304,10 @@ def list_sapbert(db: Session = Depends(get_db)):
                 "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             }
             for r in results
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 
