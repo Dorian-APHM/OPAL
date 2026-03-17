@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Home, LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
   Database, Settings, Globe, LogOut, Shield, ClipboardList, HardDrive,
-  Menu, X, ChevronDown, Bell,
+  Menu, X, ChevronDown, Bell, Sun, Moon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, cdmAccessApi, notificationsApi } from '../../api/client';
@@ -15,6 +15,7 @@ import { Tag } from '../ui/Tag';
 import { Tooltip } from '../ui/Tooltip';
 import GlobalSearch from '../GlobalSearch';
 import NotificationCenter from '../NotificationCenter';
+import { useTheme } from '../../hooks/useTheme';
 
 interface TopNavProps {
   selectedCdm: string | null;
@@ -75,6 +76,7 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifCenterOpen, setNotifCenterOpen] = useState(false);
   const { username, roles, logout, hasPageAccess, authenticated, token } = useAuth();
+  const { theme, toggle: toggleTheme } = useTheme();
 
   // --- WebSocket for real-time notifications ---
   useNotificationWs(!!authenticated && !!token);
@@ -222,6 +224,13 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'}>
             <button onClick={toggleLang} className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
               <Globe className="h-4 w-4" />
+            </button>
+          </Tooltip>
+
+          {/* Theme toggle */}
+          <Tooltip title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
+            <button onClick={toggleTheme} className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
           </Tooltip>
 

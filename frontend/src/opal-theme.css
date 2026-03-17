@@ -87,6 +87,14 @@ code, pre, .opal-mono {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
 }
 
+/* ── Card shadows (used by Card.tsx) ──────────────────── */
+.opal-card-shadow {
+  box-shadow: 10px 10px 20px #080b13, -5px -5px 15px #1c2539;
+}
+.opal-card-hoverable:hover {
+  box-shadow: 12px 12px 24px #080b13, -6px -6px 18px #1c2539, 0 0 25px rgba(16, 185, 129, 0.1);
+}
+
 /* ── Focus ring ────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid rgba(16, 185, 129, 0.5);
@@ -106,4 +114,182 @@ code, pre, .opal-mono {
   right: 0;
   height: 2px;
   background: linear-gradient(90deg, #10B981, #14b8a6);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Crème Sauge — Light Theme overrides for hardcoded values
+   ═══════════════════════════════════════════════════════════ */
+[data-theme="light"],
+[data-theme="light"] html,
+[data-theme="light"] body {
+  background: #F7F3EB !important;
+  color: #2D3B1E;
+}
+
+[data-theme="light"] h1,
+[data-theme="light"] h2,
+[data-theme="light"] h3,
+[data-theme="light"] h4,
+[data-theme="light"] h5,
+[data-theme="light"] h6 {
+  color: #2D3B1E;
+}
+
+[data-theme="light"] .opal-card-accent {
+  border-top: 2px solid #8FAE6B !important;
+}
+[data-theme="light"] .opal-card-accent-left {
+  border-left: 3px solid #8FAE6B !important;
+}
+
+[data-theme="light"] .opal-live-dot {
+  background: #8FAE6B;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(143, 174, 107, 0.25);
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(143, 174, 107, 0.45);
+}
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #F7F3EB;
+}
+
+[data-theme="light"] :focus-visible {
+  outline: 2px solid rgba(143, 174, 107, 0.50);
+}
+
+[data-theme="light"] .opal-stat-card::before {
+  background: linear-gradient(90deg, #8FAE6B, #6B9E5A);
+}
+
+/* ── Light: primary button text must be white (not cream) ── */
+[data-theme="light"] .text-deep-base {
+  color: #FFFFFF !important;
+}
+
+/* ── Light: modal shadow ───────────────────────────────── */
+[data-theme="light"] [class*="shadow-"][class*="rgba(0,0,0,0.5)"] {
+  /* fallback handled by panel class below */
+}
+
+/* ── Light: CircularProgress SVG hardcoded colors ──────── */
+[data-theme="light"] circle[stroke="#10B981"] {
+  stroke: #8FAE6B;
+}
+[data-theme="light"] circle[stroke="rgba(16,185,129,0.1)"] {
+  stroke: rgba(143, 174, 107, 0.15);
+}
+
+/* ── Light: LoginPage background glow → sage ───────────── */
+[data-theme="light"] .bg-\[radial-gradient\(ellipse\2c rgba\(16\2c 185\2c 129\2c 0\.12\)_0\%\2c transparent_70\%\)\] {
+  background: radial-gradient(ellipse, rgba(143, 174, 107, 0.15) 0%, transparent 70%) !important;
+}
+
+/* ── Light: Modal panel shadow ─────────────────────────── */
+[data-theme="light"] .shadow-\[0_20px_60px_rgba\(0\2c 0\2c 0\2c 0\.5\)\2c 0_0_40px_rgba\(16\2c 185\2c 129\2c 0\.08\)\] {
+  box-shadow: 0 20px 60px rgba(45, 59, 30, 0.12), 0 0 40px rgba(143, 174, 107, 0.06) !important;
+}
+
+/* ── Light: backdrop overlay ───────────────────────────── */
+[data-theme="light"] .bg-black\/60 {
+  background: rgba(45, 59, 30, 0.25) !important;
+}
+
+/* ── Light: red-500 badges softer ──────────────────────── */
+[data-theme="light"] .bg-red-500 {
+  background-color: #C75C5C !important;
+}
+
+/* ── Light: Tags — darker text for cream background ────── */
+[data-theme="light"] .text-emerald-400 { color: #4A7A3A !important; }
+[data-theme="light"] .text-blue-400 { color: #2563EB !important; }
+[data-theme="light"] .text-red-400 { color: #B91C1C !important; }
+[data-theme="light"] .text-orange-400 { color: #C2700A !important; }
+[data-theme="light"] .text-purple-400 { color: #7C3AED !important; }
+[data-theme="light"] .text-cyan-400 { color: #0E7490 !important; }
+[data-theme="light"] .text-yellow-400 { color: #A16207 !important; }
+[data-theme="light"] .text-pink-400 { color: #BE185D !important; }
+[data-theme="light"] .text-teal-400 { color: #0F766E !important; }
+[data-theme="light"] .text-slate-400 { color: #475569 !important; }
+
+/* ── Light: Sidebar gradient (if ever used) ────────────── */
+[data-theme="light"] .from-deep-base {
+  --tw-gradient-from: #F7F3EB;
+}
+[data-theme="light"] .to-\[\#0e1324\] {
+  --tw-gradient-to: #EDE8DC;
+}
+
+/* ── Light: card shadows ───────────────────────────────── */
+[data-theme="light"] .opal-card-shadow {
+  box-shadow: 3px 3px 10px #D8D2C5, -2px -2px 6px #F2EDE3;
+}
+[data-theme="light"] .opal-card-hoverable:hover {
+  box-shadow: 4px 4px 16px #D0CABC, -3px -3px 8px #F2EDE3, 0 0 20px rgba(143, 174, 107, 0.10);
+}
+
+/* ── Light: Tailwind color overrides for inline emerald/shadow ─ */
+/* Neumorphic shadows → soft cream shadows */
+[data-theme="light"] .shadow-\[10px_10px_20px_\#080b13\2c -5px_-5px_15px_\#1c2539\] {
+  box-shadow: 3px 3px 10px #D8D2C5, -2px -2px 6px #F2EDE3 !important;
+}
+[data-theme="light"] .shadow-\[2px_0_12px_rgba\(0\2c 0\2c 0\2c 0\.3\)\] {
+  box-shadow: 2px 0 12px rgba(45, 59, 30, 0.06) !important;
+}
+/* User-menu dropdown */
+[data-theme="light"] .shadow-\[0_8px_32px_rgba\(0\2c 0\2c 0\2c 0\.4\)\] {
+  box-shadow: 0 8px 32px rgba(45, 59, 30, 0.12) !important;
+}
+/* NotifDot glow */
+[data-theme="light"] .shadow-\[0_0_6px_rgba\(239\2c 68\2c 68\2c 0\.5\)\] {
+  box-shadow: 0 0 6px rgba(199, 92, 92, 0.35) !important;
+}
+/* Emerald drop-shadow on active icons */
+[data-theme="light"] .drop-shadow-\[0_0_6px_rgba\(16\2c 185\2c 129\2c 0\.5\)\] {
+  filter: drop-shadow(0 0 6px rgba(143, 174, 107, 0.45)) !important;
+}
+[data-theme="light"] .drop-shadow-\[0_0_8px_rgba\(16\2c 185\2c 129\2c 0\.6\)\] {
+  filter: drop-shadow(0 0 8px rgba(143, 174, 107, 0.50)) !important;
+}
+/* Active sidebar bar */
+[data-theme="light"] .shadow-\[0_0_8px_rgba\(16\2c 185\2c 129\2c 0\.4\)\] {
+  box-shadow: 0 0 8px rgba(143, 174, 107, 0.35) !important;
+}
+/* Focus rings */
+[data-theme="light"] .focus-within\:shadow-\[0_0_0_3px_rgba\(16\2c 185\2c 129\2c 0\.1\)\]:focus-within,
+[data-theme="light"] .focus\:shadow-\[0_0_0_3px_rgba\(16\2c 185\2c 129\2c 0\.1\)\]:focus {
+  box-shadow: 0 0 0 3px rgba(143, 174, 107, 0.15) !important;
+}
+/* Button primary shadow */
+[data-theme="light"] .shadow-\[0_4px_12px_rgba\(16\2c 185\2c 129\2c 0\.3\)\] {
+  box-shadow: 0 4px 12px rgba(143, 174, 107, 0.25) !important;
+}
+[data-theme="light"] .hover\:shadow-\[0_6px_20px_rgba\(16\2c 185\2c 129\2c 0\.4\)\]:hover {
+  box-shadow: 0 6px 20px rgba(143, 174, 107, 0.30) !important;
+}
+/* TopNav active bar glow */
+[data-theme="light"] .shadow-\[0_0_6px_rgba\(16\2c 185\2c 129\2c 0\.4\)\] {
+  box-shadow: 0 0 6px rgba(143, 174, 107, 0.30) !important;
+}
+/* Logo dot glow */
+[data-theme="light"] .shadow-\[0_0_12px_rgba\(16\2c 185\2c 129\2c 0\.4\)\] {
+  box-shadow: 0 0 12px rgba(143, 174, 107, 0.30) !important;
+}
+/* GlobalSearch dropdown shadow */
+[data-theme="light"] .shadow-\[0_8px_32px_rgba\(0\2c 0\2c 0\2c 0\.4\)\2c 0_0_0_1px_rgba\(16\2c 185\2c 129\2c 0\.05\)\] {
+  box-shadow: 0 8px 32px rgba(45, 59, 30, 0.10), 0 0 0 1px rgba(143, 174, 107, 0.10) !important;
+}
+/* Dropdown/popover shadows */
+[data-theme="light"] .shadow-\[0_8px_32px_rgba\(0\2c 0\2c 0\2c 0\.4\)\] {
+  box-shadow: 0 8px 32px rgba(45, 59, 30, 0.12) !important;
+}
+/* Drawer shadow */
+[data-theme="light"] .shadow-\[-8px_0_32px_rgba\(0\2c 0\2c 0\2c 0\.4\)\] {
+  box-shadow: -8px 0 32px rgba(45, 59, 30, 0.10) !important;
+}
+/* Tooltip */
+[data-theme="light"] .shadow-\[0_4px_16px_rgba\(0\2c 0\2c 0\2c 0\.3\)\] {
+  box-shadow: 0 4px 16px rgba(45, 59, 30, 0.10) !important;
 }
