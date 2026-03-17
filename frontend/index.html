@@ -8,6 +8,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <title>OPAL — OMOP Platform</title>
+    <script>
+      // Apply saved theme before first paint to avoid flash
+      (function(){var t=localStorage.getItem('opal-theme');if(t==='light')document.documentElement.setAttribute('data-theme','light')})();
+    </script>
   </head>
   <body>
     <div id="root"></div>
