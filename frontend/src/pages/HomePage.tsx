@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Clock, Heart, Code, FolderOpen,
   Bell, CheckCheck, ExternalLink,
 } from 'lucide-react';
-import { Card, Button, Tag, Spinner, Empty, Tooltip } from '../components/ui';
+import { Card, Button, Tag, Empty, Tooltip, FadeIn, ScaleIn, CountUp, DashboardSkeleton } from '../components/ui';
 import { cohortApi, qualityApi, favoritesApi, notificationsApi } from '../api/client';
 import type { CohortSummary } from '../types';
 
@@ -128,14 +128,12 @@ export default function HomePage({ selectedCdm }: Props) {
 
   if (!selectedCdm) {
     return (
-      <div className="flex flex-col items-center justify-center text-center mt-20 px-6">
-        <Database className="h-16 w-16 text-text-dim mb-4" />
-        <h3 className="text-xl font-semibold text-text-bright mb-2">
-          {t('dashboard.welcome', 'Welcome to OPAL')}
-        </h3>
-        <p className="text-text-muted">
-          {t('dashboard.select_cdm', 'Select a CDM database from the sidebar to get started.')}
-        </p>
+      <div className="flex items-center justify-center" style={{ height: 'calc(100vh - 56px - 32px)' }}>
+        <Empty variant="no-cdm">
+          <Button variant="primary" size="middle" icon={<Database className="h-4 w-4" />} onClick={() => {}}>
+            {t('dashboard.select_cdm', 'Select a CDM database')}
+          </Button>
+        </Empty>
       </div>
     );
   }
@@ -155,52 +153,57 @@ export default function HomePage({ selectedCdm }: Props) {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center flex-1">
-          <Spinner size="large" />
-        </div>
+        <DashboardSkeleton />
       ) : (
         <div className="flex flex-col flex-1 min-h-0 gap-3">
           {/* Domain Overview — prominent grid */}
           {dashData?.domains && (
-            <div className="flex-shrink-0">
+            <FadeIn className="flex-shrink-0">
               <div className="grid grid-cols-5 xl:grid-cols-9 gap-2">
                 {/* Total persons — highlighted */}
-                <div className="flex flex-col justify-center px-4 py-3 rounded-2xl bg-surface border border-emerald-accent/30 shadow-[0_0_15px_rgba(16,185,129,0.08)]">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Users className="h-4 w-4 text-emerald-accent" />
-                    <span className="text-[10px] uppercase tracking-wider text-text-dim">Total</span>
-                  </div>
-                  <div className="text-xl font-bold text-text-bright leading-tight">{dashData.total_persons?.toLocaleString() ?? '---'}</div>
-                  <div className="text-[10px] text-text-dim mt-0.5">persons</div>
-                </div>
-                {/* Domain cards */}
-                {dashData.domains.map((d: any) => (
-                  <div
-                    key={d.domain}
-                    className="flex flex-col justify-center px-3 py-3 rounded-2xl bg-surface border border-border-subtle cursor-pointer hover:border-border-glow hover:bg-emerald-accent/5 transition-all"
-                    onClick={() => navigate('/quality')}
-                  >
-                    <div className="text-[10px] uppercase tracking-wider text-text-dim mb-1">{String(t(`domains.${d.domain}`, d.domain))}</div>
-                    <div className="text-base font-bold text-text-bright leading-tight">{d.distinct_persons?.toLocaleString()}</div>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className="text-[9px] text-text-dim">{d.total_records?.toLocaleString()} rec.</span>
-                      {d.pct_terms_mapped != null && (
-                        <Tag
-                          color={d.pct_terms_mapped > 80 ? 'green' : d.pct_terms_mapped > 50 ? 'orange' : 'red'}
-                          style={{ fontSize: 8, padding: '0 4px', lineHeight: '16px' }}
-                        >
-                          {d.pct_terms_mapped}%
-                        </Tag>
-                      )}
+                <ScaleIn>
+                  <div className="flex flex-col justify-center px-4 py-3 rounded-2xl bg-surface border border-emerald-accent/30 shadow-[0_0_15px_rgba(16,185,129,0.08)] h-full">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Users className="h-4 w-4 text-emerald-accent" />
+                      <span className="text-[10px] uppercase tracking-wider text-text-dim">Total</span>
                     </div>
+                    <div className="text-xl font-bold text-text-bright leading-tight">
+                      {dashData.total_persons != null ? (
+                        <CountUp end={dashData.total_persons} format={(n: number) => n.toLocaleString()} />
+                      ) : '---'}
+                    </div>
+                    <div className="text-[10px] text-text-dim mt-0.5">persons</div>
                   </div>
+                </ScaleIn>
+                {/* Domain cards */}
+                {dashData.domains.map((d: any, idx: number) => (
+                  <ScaleIn key={d.domain} delay={0.03 * (idx + 1)}>
+                    <div
+                      className="flex flex-col justify-center px-3 py-3 rounded-2xl bg-surface border border-border-subtle cursor-pointer hover:border-border-glow hover:bg-emerald-accent/5 transition-all opal-pressable h-full"
+                      onClick={() => navigate('/quality')}
+                    >
+                      <div className="text-[10px] uppercase tracking-wider text-text-dim mb-1">{String(t(`domains.${d.domain}`, d.domain))}</div>
+                      <div className="text-base font-bold text-text-bright leading-tight">{d.distinct_persons?.toLocaleString()}</div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[9px] text-text-dim">{d.total_records?.toLocaleString()} rec.</span>
+                        {d.pct_terms_mapped != null && (
+                          <Tag
+                            color={d.pct_terms_mapped > 80 ? 'green' : d.pct_terms_mapped > 50 ? 'orange' : 'red'}
+                            style={{ fontSize: 8, padding: '0 4px', lineHeight: '16px' }}
+                          >
+                            {d.pct_terms_mapped}%
+                          </Tag>
+                        )}
+                      </div>
+                    </div>
+                  </ScaleIn>
                 ))}
               </div>
-            </div>
+            </FadeIn>
           )}
 
           {/* Main content: 2 columns — capped height so overview breathes */}
-          <div className="grid grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0', maxHeight: 'calc(100vh - 56px - 16px - 160px)' }}>
+          <FadeIn delay={0.15} className="grid grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0', maxHeight: 'calc(100vh - 56px - 16px - 160px)' }}>
             {/* Left column: Recent Cohorts + Favorites */}
             <div className="flex flex-col gap-2 min-h-0">
               <Card
@@ -220,7 +223,7 @@ export default function HomePage({ selectedCdm }: Props) {
                 }
               >
                 {cohorts.length === 0 ? (
-                  <Empty description={t('dashboard.no_cohorts', 'No cohorts yet')}>
+                  <Empty variant="no-cohorts">
                     <Button variant="primary" size="small" onClick={() => navigate('/cohorts')}>
                       {t('dashboard.create_cohort', 'Create a Cohort')}
                     </Button>
@@ -261,9 +264,7 @@ export default function HomePage({ selectedCdm }: Props) {
                 }
               >
                 {favorites.length === 0 ? (
-                  <Empty
-                    description={t('dashboard.no_favorites', 'No favorites yet. Star items from other pages.')}
-                  />
+                  <Empty variant="no-favorites" />
                 ) : (
                   <div className="overflow-y-auto flex-1">
                     {favorites.slice(0, 10).map((f) => (
@@ -355,10 +356,7 @@ export default function HomePage({ selectedCdm }: Props) {
                 }
               >
                 {notifications.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-4 text-text-dim text-xs">
-                    <Bell className="h-8 w-8 mb-2 opacity-30" />
-                    No notifications
-                  </div>
+                  <Empty variant="no-notifications" className="py-4" />
                 ) : (
                   <div className="overflow-y-auto flex-1">
                     {notifications.map((n) => (
@@ -399,7 +397,7 @@ export default function HomePage({ selectedCdm }: Props) {
                 )}
               </Card>
             </div>
-          </div>        </div>
+          </FadeIn>        </div>
       )}
     </div>
   );

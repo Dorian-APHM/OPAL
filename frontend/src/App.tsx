@@ -1,10 +1,12 @@
 import { useState, lazy, Suspense, Component, useEffect, useRef, type ReactNode, type ErrorInfo } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import TopNav from './components/layout/TopNav';
 import { useAuth } from './auth/KeycloakContext';
 import { cdmAccessApi } from './api/client';
-import { Button } from './components/ui/Button';
-import { Spinner, Skeleton } from './components/ui/Spinner';
+import { Spinner } from './components/ui/Spinner';
+import { ErrorState } from './components/ui/ErrorState';
+import { CardSkeleton } from './components/ui/SkeletonPatterns';
 
 // Lazy-loaded pages for code splitting
 const HomePage = lazy(() => import('./pages/HomePage'));
@@ -20,7 +22,7 @@ const AuditPage = lazy(() => import('./pages/AuditPage'));
 const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 
-// Error Boundary
+// Error Boundary with rich error state
 interface ErrorBoundaryState { hasError: boolean; error?: Error; }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
@@ -37,14 +39,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-          <div className="text-6xl text-red-400/30">!</div>
-          <h2 className="text-xl font-semibold text-text-bright">Something went wrong</h2>
-          <p className="text-sm text-text-muted">{this.state.error?.message || 'An unexpected error occurred.'}</p>
-          <Button variant="primary" onClick={() => this.setState({ hasError: false })}>
-            Try Again
-          </Button>
-        </div>
+        <ErrorState
+          variant="generic"
+          error={this.state.error}
+          onRetry={() => this.setState({ hasError: false })}
+        />
       );
     }
     return this.props.children;
@@ -53,11 +52,16 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 
 function PageSkeleton() {
   return (
-    <div className="p-6">
-      <Skeleton lines={1} className="mb-6" />
-      <div className="flex gap-4">
-        <div className="flex-1"><Skeleton lines={4} /></div>
-        <div className="flex-[2]"><Skeleton lines={6} /></div>
+    <div className="p-6 space-y-4">
+      {/* Header skeleton */}
+      <div className="flex items-center gap-3">
+        <div className="h-6 w-6 rounded bg-surface-light animate-pulse" />
+        <div className="h-6 w-40 rounded bg-surface-light animate-pulse" />
+      </div>
+      {/* Content skeleton */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <CardSkeleton lines={4} />
+        <CardSkeleton lines={5} />
       </div>
     </div>
   );
@@ -91,11 +95,7 @@ function PageSuspense({ children }: { children: ReactNode }) {
 
 function ForbiddenPage() {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-      <div className="text-7xl font-bold text-text-dim/20">403</div>
-      <h2 className="text-xl font-semibold text-text-bright">Forbidden</h2>
-      <p className="text-sm text-text-muted">You do not have permission to access this page.</p>
-    </div>
+    <ErrorState variant="forbidden" />
   );
 }
 

@@ -28,6 +28,93 @@ body { min-height: 100%; }
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
+/* ── Theme transition (smooth dark↔light switch) ──────── */
+.opal-theme-transitioning,
+.opal-theme-transitioning *,
+.opal-theme-transitioning *::before,
+.opal-theme-transitioning *::after {
+  transition: background-color 0.4s ease,
+              color 0.4s ease,
+              border-color 0.4s ease,
+              box-shadow 0.4s ease,
+              fill 0.4s ease,
+              stroke 0.4s ease,
+              filter 0.3s ease !important;
+}
+
+/* ── Micro-interactions — press feedback ──────────────── */
+.opal-pressable:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* ── Shimmer effect for loading states ────────────────── */
+@keyframes opal-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.opal-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    rgba(16, 185, 129, 0.04) 50%,
+    transparent 75%
+  );
+  background-size: 200% 100%;
+  animation: opal-shimmer 2s infinite;
+}
+
+/* ── Success flash — brief green glow on action success ── */
+@keyframes opal-success-flash {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.08); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+.opal-success-flash {
+  animation: opal-success-flash 0.6s ease-out;
+}
+
+/* ── Notification bell ring ───────────────────────────── */
+@keyframes opal-bell-ring {
+  0%, 100% { transform: rotate(0); }
+  15% { transform: rotate(14deg); }
+  30% { transform: rotate(-12deg); }
+  45% { transform: rotate(8deg); }
+  60% { transform: rotate(-6deg); }
+  75% { transform: rotate(2deg); }
+}
+.opal-bell-ring {
+  animation: opal-bell-ring 0.6s ease-in-out;
+  transform-origin: top center;
+}
+
+/* ── Skeleton shimmer overlay ─────────────────────────── */
+@keyframes opal-skeleton-wave {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.opal-skeleton-wave::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.03),
+    transparent
+  );
+  animation: opal-skeleton-wave 1.8s infinite;
+}
+
+/* ── Number count-up emphasis ─────────────────────────── */
+@keyframes opal-number-pop {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+.opal-number-pop {
+  animation: opal-number-pop 0.3s ease-out;
+}
+
 /* ── Typography ────────────────────────────────────────── */
 h1, h2, h3, h4, h5, h6 {
   color: #F8FAFC;
@@ -220,6 +307,25 @@ code, pre, .opal-mono {
 }
 [data-theme="light"] .to-\[\#0e1324\] {
   --tw-gradient-to: #EDE8DC;
+}
+
+/* ── Light: shimmer / skeleton ────────────────────────── */
+[data-theme="light"] .opal-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 25%,
+    rgba(143, 174, 107, 0.06) 50%,
+    transparent 75%
+  );
+  background-size: 200% 100%;
+}
+[data-theme="light"] .opal-skeleton-wave::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 0, 0, 0.02),
+    transparent
+  );
 }
 
 /* ── Light: card shadows ───────────────────────────────── */
