@@ -151,11 +151,11 @@ export const layout = {
 
 // ── Light Mode Colors (Crème Sauge) ────────────────────────
 export const lightColors = {
-  deepBase: '#F7F3EB',
-  surface: '#EDE8DC',
-  surfaceLight: '#F2EDE3',
-  surfaceDark: '#D8D2C5',
-  surfaceHover: '#E5DFD2',
+  deepBase: '#EDE7D9',
+  surface: '#E0D9C8',
+  surfaceLight: '#E8E2D3',
+  surfaceDark: '#CFC8B6',
+  surfaceHover: '#D8D1C0',
 
   primary: '#8FAE6B',
   primaryLight: '#A8C484',
@@ -189,14 +189,14 @@ export const lightColors = {
 } as const;
 
 export const lightShadows = {
-  sm: '2px 2px 4px #D8D2C5, -2px -2px 4px #F2EDE3',
-  md: '3px 3px 8px #D8D2C5, -2px -2px 6px #F2EDE3',
-  lg: '4px 4px 12px #D8D2C5, -3px -3px 8px #F2EDE3',
-  xl: '6px 6px 16px #D8D2C5, -4px -4px 10px #F2EDE3',
-  card: '3px 3px 10px #D8D2C5, -2px -2px 6px #F2EDE3',
-  cardHover: '4px 4px 16px #D0CABC, -3px -3px 8px #F2EDE3, 0 0 20px rgba(143, 174, 107, 0.10)',
+  sm: '2px 2px 4px #CFC8B6, -2px -2px 4px #E8E2D3',
+  md: '3px 3px 8px #CFC8B6, -2px -2px 6px #E8E2D3',
+  lg: '4px 4px 12px #CFC8B6, -3px -3px 8px #E8E2D3',
+  xl: '6px 6px 16px #CFC8B6, -4px -4px 10px #E8E2D3',
+  card: '3px 3px 10px #CFC8B6, -2px -2px 6px #E8E2D3',
+  cardHover: '4px 4px 16px #C5BEAC, -3px -3px 8px #E8E2D3, 0 0 20px rgba(143, 174, 107, 0.10)',
   sidebar: '2px 0 12px rgba(45, 59, 30, 0.06)',
   glow: '0 0 20px rgba(143, 174, 107, 0.15)',
   glowStrong: '0 0 30px rgba(143, 174, 107, 0.25)',
-  inset: 'inset 2px 2px 4px #D8D2C5, inset -2px -2px 4px #F2EDE3',
+  inset: 'inset 2px 2px 4px #CFC8B6, inset -2px -2px 4px #E8E2D3',
 } as const;
