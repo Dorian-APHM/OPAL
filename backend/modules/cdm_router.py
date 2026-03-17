@@ -2,8 +2,11 @@
 CDM management API endpoints — CRUD for CDM connections.
 """
 import ipaddress
+import logging
 import re
 import socket
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, validator
@@ -161,16 +164,21 @@ def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(ge
     )
     db.add(cdm)
 
-    notify(
-        db, username, "cdm_created",
-        title=f"Nouveau CDM : {req.name}",
-        message=f"{username} a enregistré la base CDM « {req.name} ».",
-        link="/cdm",
-        target_role="admin",
-        item_id=req.name,
-    )
+    try:
+        notify(
+            db, username, "cdm_created",
+            title=f"Nouveau CDM : {req.name}",
+            message=f"{username} a enregistré la base CDM « {req.name} ».",
+            link="/cdm",
+            target_role="admin",
+            item_id=req.name,
+        )
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create CDM '%s'", req.name)
+        raise HTTPException(status_code=500, detail="Failed to register CDM")
     db.refresh(cdm)
 
     return {
@@ -273,27 +281,32 @@ def delete_cdm(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     invalidate_pool(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user)
 
     # Cascade delete all dependent records in a single transaction
-    # 1. Delete cohort shares and versions for cohorts in this CDM
-    cohort_ids = [c.id for c in db.query(Cohort.id).filter(Cohort.cdm_name == cdm_name).all()]
-    if cohort_ids:
-        db.query(CohortShare).filter(CohortShare.cohort_id.in_(cohort_ids)).delete(synchronize_session=False)
-        db.query(CohortVersion).filter(CohortVersion.cohort_id.in_(cohort_ids)).delete(synchronize_session=False)
+    try:
+        # 1. Delete cohort shares and versions for cohorts in this CDM
+        cohort_ids = [c.id for c in db.query(Cohort.id).filter(Cohort.cdm_name == cdm_name).all()]
+        if cohort_ids:
+            db.query(CohortShare).filter(CohortShare.cohort_id.in_(cohort_ids)).delete(synchronize_session=False)
+            db.query(CohortVersion).filter(CohortVersion.cohort_id.in_(cohort_ids)).delete(synchronize_session=False)
 
-    # 2. Delete CDM-scoped entities
-    db.query(Cohort).filter(Cohort.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(AnalysisSnapshot).filter(AnalysisSnapshot.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(ConceptSet).filter(ConceptSet.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(IncidenceAnalysis).filter(IncidenceAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(EstimationAnalysis).filter(EstimationAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
-    db.query(SavedQuery).filter(SavedQuery.cdm_name == cdm_name).delete(synchronize_session=False)
+        # 2. Delete CDM-scoped entities
+        db.query(Cohort).filter(Cohort.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(AnalysisSnapshot).filter(AnalysisSnapshot.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(ConceptSet).filter(ConceptSet.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(IncidenceAnalysis).filter(IncidenceAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(EstimationAnalysis).filter(EstimationAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
+        db.query(SavedQuery).filter(SavedQuery.cdm_name == cdm_name).delete(synchronize_session=False)
 
-    # 3. Delete the CDM config itself
-    db.delete(cdm)
-    db.commit()
+        # 3. Delete the CDM config itself
+        db.delete(cdm)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to delete CDM '%s' and associated data", cdm_name)
+        raise HTTPException(status_code=500, detail="Failed to delete CDM and associated data")
     return {"message": f"CDM '{cdm_name}' and all associated data deleted"}
 
 

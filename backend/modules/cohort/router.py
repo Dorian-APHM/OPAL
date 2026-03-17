@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from utils.cdm_helper import check_cdm_access
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -100,11 +101,12 @@ def _get_cdm_conn(db: Session, cdm_name: str):
 # ──── Concept Search ────
 
 @router.post("/concepts/search")
-def search_concepts(req: ConceptSearchRequest, db: Session = Depends(get_db)):
+def search_concepts(req: ConceptSearchRequest, request: Request, db: Session = Depends(get_db)):
     """
     Search OMOP concepts by name or code.
     Searches the concept table with ILIKE and returns matching concepts.
     """
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -510,8 +512,9 @@ def delete_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db
 # ──── Cohort Execution ────
 
 @router.post("/count")
-def cohort_count(req: CohortCountRequest, db: Session = Depends(get_db)):
+def cohort_count(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """Execute a cohort definition and return the patient count."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -537,11 +540,12 @@ def cohort_count(req: CohortCountRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/count/approximate")
-def cohort_count_approximate(req: CohortCountRequest, db: Session = Depends(get_db)):
+def cohort_count_approximate(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """
     Quick approximate count using TABLESAMPLE.
     Useful for initial iterations before running exact count.
     """
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -573,11 +577,12 @@ def cohort_count_approximate(req: CohortCountRequest, db: Session = Depends(get_
 
 
 @router.post("/attrition")
-def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
+def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """
     Run attrition analysis: execute each step incrementally and return
     the patient count at each step.
     """
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -607,6 +612,7 @@ def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
                         })
                 except Exception:
                     # Fallback to individual queries if CTE fails
+                    logger.debug("CTE attrition failed, falling back to individual queries", exc_info=True)
                     conn.rollback()
                     results = []
                     for step in steps:
@@ -642,8 +648,9 @@ def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/sample")
-def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
+def cohort_sample(req: CohortSampleRequest, request: Request, db: Session = Depends(get_db)):
     """Return a random sample of patients matching the cohort criteria."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -668,8 +675,9 @@ def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/sample/detailed")
-def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_db)):
+def cohort_sample_detailed(req: CohortSampleRequest, request: Request, db: Session = Depends(get_db)):
     """Return a detailed patient sample with per-criterion matched codes and values."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -724,8 +732,9 @@ def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_d
 
 
 @router.post("/export/direct")
-def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
+def export_direct(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """Export full patient list as CSV directly from criteria (no save required)."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -799,11 +808,12 @@ def get_sql_schema(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.post("/sql/execute")
-def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+def execute_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(get_db)):
     """
     Execute a raw read-only SQL query against a CDM.
     Only SELECT statements are allowed.
     """
+    check_cdm_access(request, req.cdm_name)
     import re
     sql_stripped = req.sql.strip().rstrip(";")
 
@@ -863,8 +873,9 @@ def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/sql/export")
-def export_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+def export_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(get_db)):
     """Execute a raw SQL query and return results as CSV."""
+    check_cdm_access(request, req.cdm_name)
     import re
     sql_stripped = req.sql.strip().rstrip(";")
 
@@ -1500,6 +1511,7 @@ def patient_journey(
                     cur.execute(sql, (person_id,))
                     rows = cur.fetchall()
                 except Exception:
+                    logger.warning("Failed to fetch patient events for domain %s", domain_name, exc_info=True)
                     conn.rollback()
                     continue
 
