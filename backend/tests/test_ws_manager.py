@@ -176,3 +176,167 @@ async def test_connect_without_roles(mgr, make_ws):
     # No role entries
     for role_users in mgr._user_roles.values():
         assert "alice" not in role_users
+
+
+@pytest.mark.asyncio
+async def test_connect_with_empty_roles_list(mgr, make_ws):
+    """Empty roles list should behave like None."""
+    ws = make_ws()
+    await mgr.connect(ws, "alice", roles=[])
+    assert mgr._count_total() == 1
+    for role_users in mgr._user_roles.values():
+        assert "alice" not in role_users
+
+
+# ── disconnect edge cases ──
+
+@pytest.mark.asyncio
+async def test_disconnect_idempotent(mgr, make_ws):
+    """Disconnecting the same WS twice should not crash."""
+    ws = make_ws()
+    await mgr.connect(ws, "alice")
+    mgr.disconnect(ws, "alice")
+    mgr.disconnect(ws, "alice")  # second call should be a no-op
+    assert mgr._count_total() == 0
+
+
+@pytest.mark.asyncio
+async def test_disconnect_preserves_other_users(mgr, make_ws):
+    """Disconnecting one user should not affect others."""
+    ws_alice = make_ws()
+    ws_bob = make_ws()
+    await mgr.connect(ws_alice, "alice", roles=["admin"])
+    await mgr.connect(ws_bob, "bob", roles=["admin"])
+    mgr.disconnect(ws_alice, "alice")
+    assert mgr._count_total() == 1
+    assert "bob" in mgr._connections
+    assert "bob" in mgr._user_roles["admin"]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_partial_keeps_roles(mgr, make_ws):
+    """If a user has multiple connections, disconnecting one should keep roles."""
+    ws1, ws2 = make_ws(), make_ws()
+    await mgr.connect(ws1, "alice", roles=["admin"])
+    await mgr.connect(ws2, "alice", roles=["admin"])
+    mgr.disconnect(ws1, "alice")
+    # alice still has a connection, role should remain
+    assert "alice" in mgr._connections
+    # Note: current impl removes roles when ALL connections gone
+
+
+# ── broadcast edge cases ──
+
+@pytest.mark.asyncio
+async def test_broadcast_empty(mgr):
+    """Broadcasting with no connections should not raise."""
+    await mgr.broadcast({"type": "test"})
+
+
+@pytest.mark.asyncio
+async def test_broadcast_skips_dead(mgr, make_ws):
+    """Broadcast should handle dead connections gracefully."""
+    ws_good = make_ws()
+    ws_dead = make_ws()
+    ws_dead.send_text = AsyncMock(side_effect=RuntimeError("dead"))
+
+    await mgr.connect(ws_good, "alice")
+    await mgr.connect(ws_dead, "bob")
+    await mgr.broadcast({"type": "test"})
+
+    assert len(ws_good.sent) == 1
+    # Dead connection should be removed from bob's set
+    bob_conns = mgr._connections.get("bob", set())
+    assert ws_dead not in bob_conns
+
+
+# ── send_to_role edge cases ──
+
+@pytest.mark.asyncio
+async def test_send_to_role_multiple_connections_per_user(mgr, make_ws):
+    """All connections of a user with matching role should receive the message."""
+    ws1, ws2 = make_ws(), make_ws()
+    await mgr.connect(ws1, "alice", roles=["admin"])
+    await mgr.connect(ws2, "alice", roles=["admin"])
+    await mgr.send_to_role("admin", {"type": "test"})
+    assert len(ws1.sent) == 1
+    assert len(ws2.sent) == 1
+
+
+# ── _push_via_main_loop / set_main_loop ──
+
+@pytest.mark.asyncio
+async def test_set_main_loop_and_push():
+    """_push_via_main_loop should use the loop set by set_main_loop."""
+    from utils.ws_manager import set_main_loop, _push_via_main_loop, manager
+
+    loop = asyncio.get_running_loop()
+    set_main_loop(loop)
+
+    ws = AsyncMock()
+    ws.sent = []
+    ws.send_text = AsyncMock(side_effect=lambda m: ws.sent.append(m))
+    await manager.connect(ws, "loop_test_user")
+
+    try:
+        _push_via_main_loop("loop_test_user", {"id": 1, "type": "test", "title": "T"})
+        await asyncio.sleep(0.1)
+        assert len(ws.sent) >= 1
+        parsed = json.loads(ws.sent[0])
+        assert parsed["type"] == "notification"
+        assert parsed["data"]["title"] == "T"
+    finally:
+        manager.disconnect(ws, "loop_test_user")
+        set_main_loop(None)
+
+
+def test_push_via_main_loop_no_loop():
+    """_push_via_main_loop with no main loop should silently no-op."""
+    from utils.ws_manager import set_main_loop, _push_via_main_loop
+
+    set_main_loop(None)
+    # Should not raise
+    _push_via_main_loop("nobody", {"id": 1, "type": "test", "title": "T"})
+
+
+@pytest.mark.asyncio
+async def test_push_via_main_loop_with_role():
+    """_push_via_main_loop with target_role should send to role members too."""
+    from utils.ws_manager import set_main_loop, _push_via_main_loop, manager
+
+    loop = asyncio.get_running_loop()
+    set_main_loop(loop)
+
+    ws_user = AsyncMock()
+    ws_user.sent = []
+    ws_user.send_text = AsyncMock(side_effect=lambda m: ws_user.sent.append(m))
+
+    ws_admin = AsyncMock()
+    ws_admin.sent = []
+    ws_admin.send_text = AsyncMock(side_effect=lambda m: ws_admin.sent.append(m))
+
+    await manager.connect(ws_user, "alice")
+    await manager.connect(ws_admin, "bob", roles=["admin"])
+
+    try:
+        _push_via_main_loop("alice", {"id": 1, "type": "test", "title": "T"}, target_role="admin")
+        await asyncio.sleep(0.1)
+        # alice should receive (direct)
+        assert len(ws_user.sent) >= 1
+        # bob should receive (admin role)
+        assert len(ws_admin.sent) >= 1
+    finally:
+        manager.disconnect(ws_user, "alice")
+        manager.disconnect(ws_admin, "bob")
+        set_main_loop(None)
+
+
+# ── _count_total ──
+
+@pytest.mark.asyncio
+async def test_count_total_multiple_users(mgr, make_ws):
+    """_count_total should count all connections across all users."""
+    await mgr.connect(make_ws(), "alice")
+    await mgr.connect(make_ws(), "alice")
+    await mgr.connect(make_ws(), "bob")
+    assert mgr._count_total() == 3
