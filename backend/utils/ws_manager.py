@@ -53,6 +53,7 @@ class ConnectionManager:
             try:
                 await ws.send_text(message)
             except Exception:
+                logger.debug("WebSocket send failed for %s, marking connection dead", username)
                 dead.append(ws)
         for ws in dead:
             conns.discard(ws)
@@ -103,7 +104,7 @@ def push_notification_sync(username: str, notif_data: dict, target_role: str = "
             import concurrent.futures
             _push_via_main_loop(username, notif_data, target_role)
         except Exception:
-            pass  # Client will pick up via polling fallback
+            logger.debug("WS push fallback failed for %s, client will poll", username)
 
 
 # Reference to the main event loop, set at startup

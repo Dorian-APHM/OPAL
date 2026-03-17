@@ -2,7 +2,10 @@
 Dashboard domain analysis — ported from achilles_like/analysis.py.
 Aggregated overview across all clinical domains.
 """
+import logging
 from psycopg2.extras import DictCursor
+
+logger = logging.getLogger(__name__)
 
 from config import DOMAIN_CONFIG
 from utils.sql_safety import safe_identifier
@@ -57,6 +60,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                 for row in cur.fetchall():
                     stats_by_domain[row["domain"]] = dict(row)
             except Exception:
+                logger.warning("Failed to fetch merged domain stats", exc_info=True)
                 conn.rollback()
 
         # Build results with sparklines (still per-domain, but stats are pre-fetched)
@@ -97,6 +101,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                     """)
                     sparkline = [int(r["n"]) for r in cur.fetchall()]
                 except Exception:
+                    logger.warning("Failed to fetch sparkline for %s", domain_name, exc_info=True)
                     conn.rollback()
 
             domain_stats.append({

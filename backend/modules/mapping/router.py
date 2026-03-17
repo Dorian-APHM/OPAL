@@ -33,7 +33,22 @@ router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 # Background suggestion tasks — survive page navigation
 _active_suggestions: dict[str, dict] = {}
 _suggestions_lock = __import__('threading').Lock()
-# Stores: { task_id: { status, cdm_name, domain, results, error, cancelled } }
+# Stores: { task_id: { status, cdm_name, domain, results, error, cancelled, created_at } }
+_SUGGESTION_TTL_SECONDS = 600  # 10 minutes — auto-evict completed/orphaned tasks
+
+
+def _cleanup_stale_suggestions():
+    """Remove suggestions older than TTL (completed or stuck)."""
+    import time
+    now = time.time()
+    stale = [
+        tid for tid, entry in _active_suggestions.items()
+        if now - entry.get("created_at", 0) > _SUGGESTION_TTL_SECONDS
+    ]
+    for tid in stale:
+        _active_suggestions.pop(tid, None)
+    if stale:
+        logger.info("Cleaned up %d stale suggestion tasks", len(stale))
 
 
 # ──── Request models ────
@@ -575,11 +590,14 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     ).all()
     ref_map = {r.code: r.description for r in ref_rows}
 
+    import time as _time
     task_id = str(_uuid.uuid4())[:8]
     with _suggestions_lock:
+        _cleanup_stale_suggestions()
         _active_suggestions[task_id] = {
             "status": "running", "cdm_name": req.cdm_name, "domain": req.domain,
             "results": None, "error": None, "cancelled": False,
+            "created_at": _time.time(),
         }
 
     # Capture request params for worker

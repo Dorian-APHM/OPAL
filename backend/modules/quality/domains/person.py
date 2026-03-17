@@ -1,7 +1,10 @@
 """
 Person domain analysis — ported from achilles_like/analysis.py.
 """
+import logging
 from psycopg2.extras import DictCursor
+
+logger = logging.getLogger(__name__)
 
 
 def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
@@ -75,6 +78,7 @@ def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                 race_names.append(r["concept_name"])
                 race_counts.append(int(r["n"]))
         except Exception:
+            logger.warning("Failed to fetch race distribution", exc_info=True)
             conn.rollback()
 
         # Ethnicity distribution (if available)
@@ -95,6 +99,7 @@ def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                 eth_names.append(r["concept_name"])
                 eth_counts.append(int(r["n"]))
         except Exception:
+            logger.warning("Failed to fetch ethnicity distribution", exc_info=True)
             conn.rollback()
 
     res["achilles_like"]["person_summary"] = {

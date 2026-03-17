@@ -1,7 +1,10 @@
 """
 User group management endpoints.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -86,17 +89,22 @@ def create_group(req: GroupCreateRequest, request: Request, user=require_roles("
     group = UserGroup(name=req.name, description=req.description, created_by=username)
     db.add(group)
 
-    for member in req.members:
-        db.add(UserGroupMember(group_name=req.name, username=member, added_by=username))
-        if member != username:
-            _notify(
-                db, member, "group_added",
-                title=f"Ajouté au groupe : {req.name}",
-                message=f"{username} vous a ajouté au groupe « {req.name} ».",
-                item_id=req.name,
-            )
+    try:
+        for member in req.members:
+            db.add(UserGroupMember(group_name=req.name, username=member, added_by=username))
+            if member != username:
+                _notify(
+                    db, member, "group_added",
+                    title=f"Ajouté au groupe : {req.name}",
+                    message=f"{username} vous a ajouté au groupe « {req.name} ».",
+                    item_id=req.name,
+                )
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create group '%s'", req.name)
+        raise HTTPException(status_code=500, detail="Failed to create group")
     return {"name": req.name, "members": req.members}
 
 
@@ -128,12 +136,17 @@ def update_group(group_name: str, req: GroupUpdateRequest, request: Request, use
     if req.description is not None:
         group.description = req.description
 
-    if req.members is not None:
-        db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).delete()
-        for member in req.members:
-            db.add(UserGroupMember(group_name=group_name, username=member, added_by=username))
+    try:
+        if req.members is not None:
+            db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).delete()
+            for member in req.members:
+                db.add(UserGroupMember(group_name=group_name, username=member, added_by=username))
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to update group '%s'", group_name)
+        raise HTTPException(status_code=500, detail="Failed to update group")
     return {"name": group_name, "updated": True}
 
 
