@@ -227,15 +227,20 @@ def grant_access(req: GrantAccessRequest, request: Request, user=Depends(_requir
     )
     db.add(access)
 
-    notify(
-        db, req.username, "access_granted",
-        title=f"Accès accordé : {req.cdm_name}",
-        message=f"{granted_by} vous a accordé l'accès à la base CDM « {req.cdm_name} ».",
-        link="/quality",
-        item_id=req.cdm_name,
-    )
+    try:
+        notify(
+            db, req.username, "access_granted",
+            title=f"Accès accordé : {req.cdm_name}",
+            message=f"{granted_by} vous a accordé l'accès à la base CDM « {req.cdm_name} ».",
+            link="/quality",
+            item_id=req.cdm_name,
+        )
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to grant access to CDM '%s' for user '%s'", req.cdm_name, req.username)
+        raise HTTPException(status_code=500, detail="Failed to grant access")
     return {"status": "ok", "id": access.id}
 
 
@@ -342,7 +347,12 @@ def revoke_group_access(req: RevokeGroupAccessRequest, request: Request, user=De
 @router.delete("/cdm/{cdm_name}")
 def clear_cdm_access(cdm_name: str, request: Request, user=Depends(_require_clear_all), db: Session = Depends(get_db)):
     """Remove all access controls for a CDM (requires can_clear_all_grants)."""
-    deleted_users = db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete()
-    deleted_groups = db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete()
-    db.commit()
+    try:
+        deleted_users = db.query(CdmAccess).filter(CdmAccess.cdm_name == cdm_name).delete()
+        deleted_groups = db.query(CdmGroupAccess).filter(CdmGroupAccess.cdm_name == cdm_name).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to clear access for CDM '%s'", cdm_name)
+        raise HTTPException(status_code=500, detail="Failed to clear CDM access")
     return {"status": "ok", "deleted_users": deleted_users, "deleted_groups": deleted_groups}

@@ -7,7 +7,8 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from utils.cdm_helper import check_cdm_access
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -211,6 +212,7 @@ def get_concept_details(
                 )
                 synonyms = [dict(r) for r in cur.fetchall()]
             except Exception:
+                logger.warning("Failed to fetch synonyms for concept %s", concept_id, exc_info=True)
                 conn.rollback()
 
         result = {
@@ -343,6 +345,7 @@ def get_concept_source_values(
                     for r in rows:
                         results.append(dict(r))
                 except Exception:
+                    logger.warning("Failed to fetch source values for concept %s in domain %s", concept_id, domain, exc_info=True)
                     conn.rollback()
 
         return {"concept_id": concept_id, "source_values": results}
@@ -548,9 +551,11 @@ class ConceptCountsRequest(BaseModel):
 def get_concept_counts(
     req: ConceptCountsRequest,
     cdm_name: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Get record and person counts for a list of concept_ids across all clinical tables."""
+    check_cdm_access(request, cdm_name)
     if not req.concept_ids:
         return {"counts": {}}
 
@@ -597,6 +602,7 @@ def get_concept_counts(
                             "n_persons": int(r["n_persons"]),
                         }
                 except Exception:
+                    logger.warning("Failed to fetch concept counts", exc_info=True)
                     conn.rollback()
 
         return {"counts": counts}
@@ -608,9 +614,11 @@ def get_concept_counts(
 def get_concept_source_counts(
     req: ConceptCountsRequest,
     cdm_name: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Get source_concept_id counts. Pass domains to limit to specific tables (much faster)."""
+    check_cdm_access(request, cdm_name)
     if not req.concept_ids:
         return {"counts": {}}
 
@@ -649,6 +657,7 @@ def get_concept_source_counts(
                         counts[cid]["n_source_records"] += r["n_records"]
                         counts[cid]["n_source_persons"] += r["n_persons"]
                 except Exception:
+                    logger.warning("Failed to fetch source concept counts", exc_info=True)
                     conn.rollback()
 
         return {"counts": counts}
