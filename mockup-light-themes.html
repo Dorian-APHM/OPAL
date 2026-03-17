@@ -7,13 +7,39 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   /* ═══════════════════════════════════════════════════════════
-     Exact same CSS variables from landing.css [data-theme="light"]
+     DARK MODE = default (matches real app)
      ═══════════════════════════════════════════════════════════ */
   :root {
-    --color-deep-base: #F7F3EB;
-    --color-surface: #EDE8DC;
-    --color-surface-light: #F2EDE3;
-    --color-surface-dark: #D8D2C5;
+    --color-deep-base: #0B0F1A;
+    --color-surface: #121826;
+    --color-surface-light: #1c2539;
+    --color-surface-dark: #080b13;
+    --color-emerald-accent: #10B981;
+    --color-emerald-light: #34D399;
+    --color-emerald-glow: rgba(16, 185, 129, 0.20);
+    --color-emerald-glow-strong: rgba(16, 185, 129, 0.60);
+    --color-teal-accent: #14b8a6;
+    --color-text-bright: #F8FAFC;
+    --color-text-muted: #94A3B8;
+    --color-text-dim: #64748B;
+    --color-border-subtle: rgba(255, 255, 255, 0.03);
+    --color-border-glow: rgba(16, 185, 129, 0.15);
+    --color-glass-bg: rgba(18, 24, 38, 0.70);
+    --color-glass-border: rgba(255, 255, 255, 0.06);
+    --shadow-card: 10px 10px 20px #080b13, -5px -5px 15px #1c2539;
+    --shadow-card-hover: 12px 12px 24px #080b13, -6px -6px 18px #1c2539, 0 0 25px rgba(16,185,129,0.1);
+    --success: #10B981; --warning: #F59E0B; --error: #EF4444; --info: #3B82F6;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     LIGHT MODE — Crème Sauge (surfaces MORE saturated, zero white)
+     ═══════════════════════════════════════════════════════════ */
+  .light {
+    --color-deep-base: #EDE7D9;
+    --color-surface: #E0D9C8;
+    --color-surface-light: #E8E2D3;
+    --color-surface-dark: #CFC8B6;
     --color-emerald-accent: #8FAE6B;
     --color-emerald-light: #A8C484;
     --color-emerald-glow: rgba(143, 174, 107, 0.20);
@@ -22,23 +48,22 @@
     --color-text-bright: #2D3B1E;
     --color-text-muted: #5E6D50;
     --color-text-dim: #8B9A7D;
-    --color-border-subtle: rgba(45, 59, 30, 0.08);
+    --color-border-subtle: rgba(45, 59, 30, 0.12);
     --color-border-glow: rgba(143, 174, 107, 0.30);
-    --color-glass-bg: rgba(247, 243, 235, 0.80);
-    --color-glass-border: rgba(45, 59, 30, 0.10);
-    --shadow-card: 3px 3px 10px #D8D2C5, -2px -2px 6px #F2EDE3;
-    --shadow-card-hover: 4px 4px 16px #D0CABC, -3px -3px 8px #F2EDE3, 0 0 20px rgba(143, 174, 107, 0.10);
+    --color-glass-bg: rgba(237, 231, 217, 0.85);
+    --color-glass-border: rgba(45, 59, 30, 0.12);
+    --shadow-card: 3px 3px 10px #CFC8B6, -2px -2px 6px #E8E2D3;
+    --shadow-card-hover: 4px 4px 16px #C5BEAc, -3px -3px 8px #E8E2D3, 0 0 20px rgba(143, 174, 107, 0.10);
     --success: #5A9E6F; --warning: #D4A04A; --error: #C75C5C; --info: #5B8DB8;
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   }
+  .light .topnav-avatar,
+  .light .btn-primary { color: #fff; }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     font-family: var(--font-sans);
-    background: var(--color-deep-base);
-    color: var(--color-text-bright);
     -webkit-font-smoothing: antialiased;
-    height: 100%;
+    height: 100%; margin: 0;
   }
 
   /* ═══ Switcher: Light vs Dark preview ═══ */
@@ -60,7 +85,10 @@
   .switcher .btn-dark.active { border-color: #10B981; box-shadow: 0 0 10px rgba(16,185,129,0.5); }
 
   /* ═══ APP SHELL ═══ */
-  .app { min-height: 100vh; padding-top: 38px; transition: all 0.4s; }
+  .app {
+    min-height: 100vh; padding-top: 38px; transition: all 0.4s;
+    background: var(--color-deep-base); color: var(--color-text-bright);
+  }
 
   /* ── TopNav (glass-nav) ── exact replica ── */
   .topnav {
@@ -245,30 +273,7 @@
   }
   .btn-primary:hover { box-shadow: 0 4px 16px var(--color-emerald-glow); transform: translateY(-1px); }
 
-  /* ── Dark mode vars for comparison ── */
-  .app.dark {
-    --color-deep-base: #0B0F1A;
-    --color-surface: #121826;
-    --color-surface-light: #1c2539;
-    --color-surface-dark: #080b13;
-    --color-emerald-accent: #10B981;
-    --color-emerald-light: #34D399;
-    --color-emerald-glow: rgba(16, 185, 129, 0.20);
-    --color-emerald-glow-strong: rgba(16, 185, 129, 0.60);
-    --color-teal-accent: #14b8a6;
-    --color-text-bright: #F8FAFC;
-    --color-text-muted: #94A3B8;
-    --color-text-dim: #64748B;
-    --color-border-subtle: rgba(255, 255, 255, 0.03);
-    --color-border-glow: rgba(16, 185, 129, 0.15);
-    --color-glass-bg: rgba(18, 24, 38, 0.70);
-    --color-glass-border: rgba(255, 255, 255, 0.06);
-    --shadow-card: 10px 10px 20px #080b13, -5px -5px 15px #1c2539;
-    --shadow-card-hover: 12px 12px 24px #080b13, -6px -6px 18px #1c2539, 0 0 25px rgba(16,185,129,0.1);
-    --success: #10B981; --warning: #F59E0B; --error: #EF4444; --info: #3B82F6;
-  }
-  .app.dark .topnav-avatar { color: #0B0F1A; }
-  .app.dark .btn-primary { color: #0B0F1A; }
+  /* (dark = default via :root, light = .light class) */
 
   /* ── Swatches bar ── */
   .swatches {
@@ -448,9 +453,9 @@
 <!-- Swatches -->
 <div class="swatches" id="swatches">
   <span style="font-weight:600;color:#ccc" id="sName">Crème Sauge</span>
-  <div class="sw"><div class="sw-dot" id="s1" style="background:#F7F3EB"></div> base</div>
-  <div class="sw"><div class="sw-dot" id="s2" style="background:#EDE8DC"></div> surface</div>
-  <div class="sw"><div class="sw-dot" id="s3" style="background:#D8D2C5"></div> shadow</div>
+  <div class="sw"><div class="sw-dot" id="s1" style="background:#EDE7D9"></div> base</div>
+  <div class="sw"><div class="sw-dot" id="s2" style="background:#E0D9C8"></div> surface</div>
+  <div class="sw"><div class="sw-dot" id="s3" style="background:#CFC8B6"></div> shadow</div>
   <div class="sw"><div class="sw-dot" id="s4" style="background:#8FAE6B"></div> accent</div>
   <div class="sw"><div class="sw-dot" id="s5" style="background:#6B9E5A"></div> teal</div>
   <div class="sw"><div class="sw-dot" id="s6" style="background:#2D3B1E"></div> text</div>
@@ -462,8 +467,20 @@ function setMode(m) {
   const app = document.getElementById('app');
   const tb = document.getElementById('themeBtn');
   document.querySelectorAll('.switcher button').forEach(b => b.classList.remove('active'));
-  if (m === 'dark') {
-    app.classList.add('dark');
+  if (m === 'light') {
+    app.classList.add('light');
+    document.querySelector('.btn-light').classList.add('active');
+    tb.innerHTML = '<svg class="icon"><use href="#i-moon"/></svg>';
+    document.getElementById('sName').textContent = 'Crème Sauge';
+    document.getElementById('s1').style.background = '#EDE7D9';
+    document.getElementById('s2').style.background = '#E0D9C8';
+    document.getElementById('s3').style.background = '#CFC8B6';
+    document.getElementById('s4').style.background = '#8FAE6B';
+    document.getElementById('s5').style.background = '#6B9E5A';
+    document.getElementById('s6').style.background = '#2D3B1E';
+    document.getElementById('s7').style.background = '#8B9A7D';
+  } else {
+    app.classList.remove('light');
     document.querySelector('.btn-dark').classList.add('active');
     tb.innerHTML = '<svg class="icon"><use href="#i-sun"/></svg>';
     document.getElementById('sName').textContent = 'Emerald Night';
@@ -474,20 +491,10 @@ function setMode(m) {
     document.getElementById('s5').style.background = '#14b8a6';
     document.getElementById('s6').style.background = '#F8FAFC';
     document.getElementById('s7').style.background = '#64748B';
-  } else {
-    app.classList.remove('dark');
-    document.querySelector('.btn-light').classList.add('active');
-    tb.innerHTML = '<svg class="icon"><use href="#i-moon"/></svg>';
-    document.getElementById('sName').textContent = 'Crème Sauge';
-    document.getElementById('s1').style.background = '#F7F3EB';
-    document.getElementById('s2').style.background = '#EDE8DC';
-    document.getElementById('s3').style.background = '#D8D2C5';
-    document.getElementById('s4').style.background = '#8FAE6B';
-    document.getElementById('s5').style.background = '#6B9E5A';
-    document.getElementById('s6').style.background = '#2D3B1E';
-    document.getElementById('s7').style.background = '#8B9A7D';
   }
 }
+// Start in light mode
+setMode('light');
 </script>
 </body>
 </html>
