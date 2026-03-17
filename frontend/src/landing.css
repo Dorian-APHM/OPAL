@@ -158,11 +158,11 @@ body {
    Activated via data-theme="light" on <html>.
    ═══════════════════════════════════════════════════════════ */
 [data-theme="light"] {
-  /* Core surfaces — all cream, zero white */
-  --color-deep-base: #F7F3EB;
-  --color-surface: #EDE8DC;
-  --color-surface-light: #F2EDE3;
-  --color-surface-dark: #D8D2C5;
+  /* Core surfaces — saturated cream, clearly not white */
+  --color-deep-base: #EDE7D9;
+  --color-surface: #E0D9C8;
+  --color-surface-light: #E8E2D3;
+  --color-surface-dark: #CFC8B6;
 
   /* Brand — sage green */
   --color-emerald-accent: #8FAE6B;
@@ -181,8 +181,8 @@ body {
   --color-border-glow: rgba(143, 174, 107, 0.30);
 
   /* Glass */
-  --color-glass-bg: rgba(247, 243, 235, 0.80);
-  --color-glass-border: rgba(45, 59, 30, 0.10);
+  --color-glass-bg: rgba(237, 231, 217, 0.85);
+  --color-glass-border: rgba(45, 59, 30, 0.12);
 }
 
 /* ── Light: gradient text ──────────────────────────────── */
