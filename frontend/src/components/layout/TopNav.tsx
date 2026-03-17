@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Home, LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
@@ -234,13 +234,13 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
             </button>
           </Tooltip>
 
-          {/* Notification bell */}
+          {/* Notification bell with ring animation on new notifs */}
           <Tooltip title="Notifications">
             <button
               onClick={() => setNotifCenterOpen(true)}
               className="relative text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5"
             >
-              <Bell className="h-4 w-4" />
+              <Bell className={`h-4 w-4 ${Object.values(badges).reduce((a, b) => a + b, 0) > 0 ? 'opal-bell-ring' : ''}`} />
               <NotifDot count={Object.values(badges).reduce((a, b) => a + b, 0)} />
             </button>
           </Tooltip>
