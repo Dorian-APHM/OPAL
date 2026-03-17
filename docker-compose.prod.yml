@@ -1,0 +1,67 @@
+# docker-compose.prod.yml — Production overrides
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env: set SECRET_KEY, KEYCLOAK_ADMIN_PASSWORD, POSTGRES_PASSWORD, ENVIRONMENT=production
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This overlay:
+#   - Runs Keycloak in production mode (start instead of start-dev)
+#   - Uses PostgreSQL for Keycloak persistence (instead of H2)
+#   - Removes Docker socket mount (disable OHDSI container orchestration)
+#   - Binds Keycloak port to localhost only (use reverse proxy for external access)
+
+services:
+  opal-backend:
+    volumes:
+      - opal_data:/app/data
+      - ./ohdsi_output:/app/ohdsi_output
+      - ./backend/logs:/app/logs
+      # Docker socket intentionally removed in production.
+      # Set OHDSI_ENABLED=true and add the socket mount manually if needed.
+
+  opal-keycloak:
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN must be set}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
+      - KC_HOSTNAME_STRICT=true
+      - KC_HOSTNAME=${EXTERNAL_HOSTNAME:?EXTERNAL_HOSTNAME must be set for production Keycloak}
+      - KC_HTTP_ENABLED=true
+      - KC_PROXY_HEADERS=xforwarded
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://opal-keycloak-db:5432/keycloak
+      - KC_DB_USERNAME=${KC_DB_USERNAME:-keycloak}
+      - KC_DB_PASSWORD=${KC_DB_PASSWORD:?KC_DB_PASSWORD must be set}
+    command: start --import-realm
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./keycloak/opal-realm.json:/opt/keycloak/data/import/opal-realm.json:ro
+      - ./keycloak/themes/opal:/opt/keycloak/themes/opal:ro
+    depends_on:
+      opal-keycloak-db:
+        condition: service_healthy
+
+  opal-keycloak-db:
+    image: postgres:16-alpine
+    container_name: opal-keycloak-db
+    environment:
+      - POSTGRES_USER=${KC_DB_USERNAME:-keycloak}
+      - POSTGRES_PASSWORD=${KC_DB_PASSWORD:?KC_DB_PASSWORD must be set}
+      - POSTGRES_DB=keycloak
+    volumes:
+      - opal_keycloak_pgdata:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USERNAME:-keycloak}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  opal_keycloak_pgdata:

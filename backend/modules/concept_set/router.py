@@ -6,6 +6,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.cdm_helper import check_cdm_access
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -190,13 +191,14 @@ def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Dep
 
 
 @router.post("/{concept_set_id}/counts")
-def concept_set_counts(concept_set_id: int, body: dict, db=Depends(get_db)):
+def concept_set_counts(concept_set_id: int, body: dict, request: Request, db=Depends(get_db)):
     """Get record and person counts for each concept in the set."""
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
 
     target_cdm = body.get("cdm_name", cs.cdm_name)
+    check_cdm_access(request, target_cdm)
     concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
     if not concepts:
         return {"counts": {}}
@@ -232,6 +234,7 @@ def concept_set_counts(concept_set_id: int, body: dict, db=Depends(get_db)):
                     counts[cid]["n_records"] += row[1]
                     counts[cid]["n_persons"] += row[2]
             except Exception:
+                logger.warning("Failed to fetch concept set counts for domain", exc_info=True)
                 conn.rollback()
                 continue
         cur.close()
