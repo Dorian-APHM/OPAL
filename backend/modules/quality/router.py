@@ -374,7 +374,7 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
             while True:
                 # Read from the queue in a thread-safe, non-blocking way.
                 try:
-                    event = await loop.run_in_executor(None, progress_q.get, True, 2.0)
+                    event = await loop.run_in_executor(None, lambda: progress_q.get(block=True, timeout=2.0))
                 except _queue.Empty:
                     continue
                 if event is None:
@@ -400,23 +400,21 @@ def cancel_analysis(analysis_id: str, request: Request):
     Also attempts to cancel the active PostgreSQL query.
     Only the user who launched the analysis (or an admin) can cancel it.
     """
-    with _active_analyses_lock:
-        entry = _active_analyses.get(analysis_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Analysis not found or already finished")
-
     user = getattr(request.state, "user", {})
     username = user.get("preferred_username", "")
     roles = user.get("roles", [])
-    owner = entry.get("username", "")
-    if owner and username != owner and "admin" not in roles:
-        raise HTTPException(status_code=403, detail="Only the analysis owner or admin can cancel")
 
     with _active_analyses_lock:
+        entry = _active_analyses.get(analysis_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+        owner = entry.get("username", "")
+        if owner and username != owner and "admin" not in roles:
+            raise HTTPException(status_code=403, detail="Only the analysis owner or admin can cancel")
         entry["cancelled"] = True
+        conn = entry.get("conn")
 
-    # Try to cancel the running PostgreSQL query
-    conn = entry.get("conn")
+    # Try to cancel the running PostgreSQL query (outside lock — cancel() may block)
     if conn and not conn.closed:
         try:
             conn.cancel()

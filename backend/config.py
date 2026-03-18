@@ -139,6 +139,30 @@ DOMAIN_CONFIG = {
         "source_value": "cause_source_value",
         "source_concept_id": "cause_source_concept_id",
     },
+    "Specimen": {
+        "table": "specimen",
+        "person_id": "person_id",
+        "date_col": "specimen_date",
+        "concept_id": "specimen_concept_id",
+        "source_value": "specimen_source_value",
+        "source_concept_id": "specimen_source_concept_id",
+    },
+    "Note": {
+        "table": "note",
+        "person_id": "person_id",
+        "date_col": "note_date",
+        "concept_id": "note_type_concept_id",
+        "source_value": "note_source_value",
+        "source_concept_id": "note_source_concept_id",
+    },
+    "Payer_Plan_Period": {
+        "table": "payer_plan_period",
+        "person_id": "person_id",
+        "date_col": "payer_plan_period_start_date",
+        "concept_id": "payer_concept_id",
+        "source_value": "payer_source_value",
+        "source_concept_id": "payer_source_concept_id",
+    },
 }
 
 PERSON_DOMAIN_NAME = "Person"
