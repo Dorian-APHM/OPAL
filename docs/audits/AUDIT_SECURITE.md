@@ -331,5 +331,24 @@ Mitigé par `docker-compose.prod.yml`.
 | `a7491de` | 2026-03-16 | clinical.py + conformity.py → psysql.SQL/Identifier |
 | `1145ce0` | 2026-03-17 | docker-compose.prod.yml, CDM access checks (12), deps pinnées |
 | `5318b57` | 2026-03-18 | person.py + obs_period.py + dashboard.py → psysql.SQL, SSE lock |
+| `9534240` | 2026-03-18 | Validation Pydantic critères cohorte (F1), fix TOCTOU cancel SSE (F2) |
 
 **Régressions** : Aucune. **Secrets commités** : Aucun.
+
+---
+
+## Bilan des corrections P0 (commit `9534240`)
+
+Toutes les findings **CRITIQUE** de l'audit de sécurité ont été corrigées :
+
+| ID | Finding | Statut | Commit |
+|----|---------|--------|--------|
+| C1 | Endpoints OHDSI sans authentification | ✅ CORRIGÉ | `fa9f870` |
+| C2 | Keycloak `sslRequired: "none"` + redirectUris wildcard | ✅ CORRIGÉ | `fa9f870` |
+| C3 | Docker socket monté (dev) | ⚠️ ATTÉNUÉ | `1145ce0` (prod.yml) |
+| C4 | F-strings SQL dans quality domains | ✅ CORRIGÉ | `5318b57` |
+| C5 | Tickets SSE sans lock thread-safe | ✅ CORRIGÉ | `5318b57` |
+
+**Corrections cross-audit** appliquées dans ce commit :
+- **F1 (fonctionnel/sécurité)** : Validation Pydantic des critères de cohorte — limite profondeur (5), concept_ids (10K), types stricts → prévient DoS par payload
+- **F2 (fonctionnel/sécurité)** : Race condition TOCTOU dans cancel SSE → lecture + écriture atomique sous un seul lock
