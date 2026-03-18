@@ -18,6 +18,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from utils.rate_limit import limiter
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -27,6 +28,7 @@ from db.app_db import get_db, SessionLocal
 from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
+from utils.cdm_helper import check_cdm_access
 from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA
 from modules.cohort.sql_builder import build_cohort_sql
@@ -234,6 +236,7 @@ def _build_extraction_context(db: Session, req: ExtractRequest):
 
 
 @router.post("/extract/start")
+@limiter.limit("3/minute")
 def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch extraction as a background task.
@@ -249,6 +252,7 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     # Validate upfront (will raise HTTPException if invalid)
     cohort, version = _get_cohort_and_version(db, req.cohort_id)
     cdm_name = cohort.cdm_name
+    check_cdm_access(request, cdm_name)
     cohort_name = cohort.name
 
     criteria = version.criteria_json

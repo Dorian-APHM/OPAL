@@ -83,6 +83,7 @@ def list_concept_sets(
 
 @router.post("/")
 def create_concept_set(body: ConceptSetCreate, request: Request, db=Depends(get_db)):
+    check_cdm_access(request, body.cdm_name)
     user_info = getattr(request.state, "user", {})
     cs = ConceptSet(
         name=body.name,
@@ -152,7 +153,7 @@ def delete_concept_set(concept_set_id: int, request: Request, db=Depends(get_db)
 
 
 @router.get("/{concept_set_id}/resolve")
-def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Depends(get_db)):
+def resolve_concept_set(concept_set_id: int, request: Request, cdm_name: str | None = None, db=Depends(get_db)):
     """Resolve a concept set: return all concept_ids including descendants."""
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
@@ -163,6 +164,7 @@ def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Dep
         return {"concept_ids": [], "total": 0}
 
     target_cdm = cdm_name or cs.cdm_name
+    check_cdm_access(request, target_cdm)
     conn, omop_schema = _get_cdm_conn(db, target_cdm)
     try:
         all_ids = set()
