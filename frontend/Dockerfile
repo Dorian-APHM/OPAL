@@ -9,8 +9,7 @@ WORKDIR /app
 ENV PATH="/app/node_modules/.bin:$PATH"
 
 COPY package.json package-lock.json ./
-RUN npm config set strict-ssl false && \
-    if [ -n "$HTTP_PROXY" ]; then npm config set proxy $HTTP_PROXY && npm config set https-proxy $HTTPS_PROXY; fi && \
+RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy $HTTP_PROXY && npm config set https-proxy $HTTPS_PROXY; fi && \
     npm install
 
 COPY . .

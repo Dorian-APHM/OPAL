@@ -12,10 +12,10 @@
 | Sévérité | Trouvées | Corrigées (cette session) | Restantes |
 |----------|----------|---------------------------|-----------|
 | CRITIQUE | 5 | 4 | 1 |
-| HAUTE | 12 | 0 | 12 |
+| HAUTE | 12 | 5 | 7 |
 | MOYENNE | 10 | 0 | 10 |
 | BASSE | 8 | 0 | 8 |
-| **Total** | **35** | **4** | **31** |
+| **Total** | **35** | **9** | **26** |
 
 ### Points forts confirmés
 - SQL injection : defense-in-depth solide (`safe_identifier()` + `psycopg2.sql.SQL/Identifier` sur les chemins critiques)
@@ -145,7 +145,7 @@ Renvoie le message brut au client.
 
 ---
 
-### H3 — Pas de rate limiting sur les endpoints coûteux
+### H3 — Pas de rate limiting sur les endpoints coûteux — CORRIGÉ ✓
 
 **Fichiers** : Multiples routers
 **OWASP** : A04-Insecure Design
@@ -153,10 +153,12 @@ Renvoie le message brut au client.
 | Endpoint | Rate limit | Coût |
 |----------|-----------|------|
 | `POST /api/quality/analyze` | 3/min ✓ | Élevé |
-| `POST /api/quality/analyze/batch/stream` | **Aucun** | Très élevé |
-| `POST /api/quality/conformity` | **Aucun** | Élevé |
-| `POST /api/incidence/compute` | **Aucun** | Élevé |
-| `POST /api/datamanagement/extract/start` | **Aucun** | Élevé |
+| `POST /api/quality/analyze/batch/stream` | 2/min ✓ | Très élevé |
+| `POST /api/quality/conformity` | 3/min ✓ | Élevé |
+| `POST /api/incidence/compute` | 3/min ✓ | Élevé |
+| `POST /api/datamanagement/extract/start` | 3/min ✓ | Élevé |
+
+**Correction** : Rate limiting ajouté sur tous les endpoints coûteux.
 
 ---
 
@@ -169,25 +171,19 @@ Les endpoints `GET/PUT/DELETE /api/cohorts/{id}` utilisent un ID numérique. Le 
 
 ---
 
-### H5 — Keycloak URL hardcodée en HTTP dans le frontend
+### H5 — Keycloak URL hardcodée en HTTP dans le frontend — CORRIGÉ ✓
 
 **Fichier** : `frontend/src/auth/KeycloakContext.tsx:44-46`
 
-```typescript
-return `http://${hostname}:8080`;  // HTTP hardcodé
-```
-
-Downgrade de protocole si l'app est servie en HTTPS.
+**Correction** : Utilise désormais `window.location.protocol` pour détecter HTTP/HTTPS et le port correspondant (8080/8443).
 
 ---
 
-### H6 — Frontend npm : SSL désactivé dans le Dockerfile
+### H6 — Frontend npm : SSL désactivé dans le Dockerfile — CORRIGÉ ✓
 
 **Fichier** : `frontend/Dockerfile:12`
 
-```dockerfile
-RUN npm config set strict-ssl false && npm install
-```
+**Correction** : `npm config set strict-ssl false` supprimé du Dockerfile.
 
 ---
 
@@ -210,15 +206,19 @@ Mots de passe CDM déchiffrés passés en `env_vars` → visibles via `docker in
 
 ---
 
-### H9 — WebSocket : pas de limite de connexions par utilisateur
+### H9 — WebSocket : pas de limite de connexions par utilisateur — CORRIGÉ ✓
 
 **Fichier** : `backend/utils/ws_manager.py`
 
+**Correction** : Limite de 5 connexions par utilisateur. La plus ancienne est évincée au-delà.
+
 ---
 
-### H10 — Content-Disposition : nom de fichier non sanitisé
+### H10 — Content-Disposition : nom de fichier non sanitisé — CORRIGÉ ✓
 
 **Fichier** : `frontend/src/api/client.ts:165-169`
+
+**Correction** : Sanitisation des séparateurs de chemin (`/`, `\`, `..`) dans le nom de fichier extrait.
 
 ---
 
@@ -352,3 +352,21 @@ Toutes les findings **CRITIQUE** de l'audit de sécurité ont été corrigées :
 **Corrections cross-audit** appliquées dans ce commit :
 - **F1 (fonctionnel/sécurité)** : Validation Pydantic des critères de cohorte — limite profondeur (5), concept_ids (10K), types stricts → prévient DoS par payload
 - **F2 (fonctionnel/sécurité)** : Race condition TOCTOU dans cancel SSE → lecture + écriture atomique sous un seul lock
+
+---
+
+## Bilan des corrections HAUTE
+
+| ID | Finding | Statut |
+|----|---------|--------|
+| H3 | Rate limiting endpoints coûteux | ✅ CORRIGÉ |
+| H5 | Keycloak URL hardcodée HTTP | ✅ CORRIGÉ |
+| H6 | npm strict-ssl false | ✅ CORRIGÉ |
+| H9 | WebSocket sans limite connexions/user | ✅ CORRIGÉ |
+| H10 | Content-Disposition non sanitisé | ✅ CORRIGÉ |
+| H1 | SSRF TOCTOU | ⚠️ ATTÉNUÉ (admin-only) |
+| H4 | IDOR cohorts | En attente |
+| H7 | Port 8000 sur 0.0.0.0 | En attente |
+| H8 | Credentials Docker OHDSI | En attente |
+| H11 | directAccessGrantsEnabled | En attente |
+| H12 | Proxy credentials Docker layers | En attente |

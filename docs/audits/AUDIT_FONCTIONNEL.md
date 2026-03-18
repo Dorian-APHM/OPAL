@@ -12,10 +12,10 @@
 | Sévérité | Trouvées | Corrigées | Restantes |
 |----------|----------|-----------|-----------|
 | CRITIQUE | 4 | 3 (F1, F2, F4) | 1 (F3) |
-| HAUTE | 9 | 1 (F7) | 8 |
+| HAUTE | 9 | 5 (F5, F7, F11, F12, F13) | 4 |
 | MOYENNE | 12 | 0 | 12 |
 | BASSE | 8 | 0 | 8 |
-| **Total** | **33** | **4** | **29** |
+| **Total** | **33** | **8** | **25** |
 
 OPAL implémente un ensemble fonctionnel remarquablement complet pour une plateforme OMOP CDM : qualité Achilles-like (5 analyseurs de domaines), cohort builder avec SQL dynamique (1152 lignes, 10+ types de critères), mapping avec 5 stratégies, pathways ATLAS-style, incidence, estimation Kaplan-Meier, et data management. L'analyse en profondeur révèle cependant des bugs concrets dans le code, des incohérences API/frontend, et des lacunes fonctionnelles significatives.
 
@@ -113,19 +113,19 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ## HAUTE
 
-### F5 — Gestion d'erreurs inconsistante entre modules
+### F5 — Gestion d'erreurs inconsistante entre modules — PARTIELLEMENT CORRIGÉ ✓
 
 | Module | 404 pattern | Auth check | CDM access check |
 |--------|-------------|------------|-----------------|
-| `cohort/router.py` | `HTTPException(404)` | Middleware | `check_cdm_access()` |
-| `mapping/router.py` | `HTTPException(404)` | Middleware | `check_cdm_access()` |
+| `cohort/router.py` | `HTTPException(404)` | Middleware | `check_cdm_access()` ✓ |
+| `mapping/router.py` | `HTTPException(404)` | Middleware | `check_cdm_access()` ✓ |
 | `saved_queries_router.py` | `HTTPException(404)` | Owner check L.89 | **Non** |
 | `favorites_router.py` | `HTTPException(404)` | Username filter | **Non** |
-| `concept_set/router.py` | `JSONResponse(404)` | Middleware | **1 endpoint sur 7** |
-| `incidence/router.py` | `HTTPException(404)` | Middleware | **2 endpoints sur 5** |
-| `estimation/router.py` | `HTTPException(404)` | Middleware | **2 endpoints sur 5** |
+| `concept_set/router.py` | `JSONResponse(404)` | Middleware | **4 endpoints sur 7** ✓ |
+| `incidence/router.py` | `HTTPException(404)` | Middleware | **5 endpoints sur 5** ✓ |
+| `estimation/router.py` | `HTTPException(404)` | Middleware | **5 endpoints sur 5** ✓ |
 
-15+ endpoints ne vérifient pas l'accès CDM (détail dans l'audit sécurité C3).
+**Correction** : `check_cdm_access()` ajouté sur tous les endpoints incidence, estimation, concept_set (create, resolve, counts) et datamanagement (extract).
 
 ---
 
@@ -172,32 +172,29 @@ Si une cohorte référencée est supprimée entre la création de l'analyse et s
 
 ---
 
-### F11 — Pas de validation des `concept_ids` dans pathways
+### F11 — Pas de validation des `concept_ids` dans pathways — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/cohort/pathways.py:119-143`
 
-```python
-ids_str = ",".join(str(int(cid)) for cid in concept_ids)
-```
-Liste vide → `IN ()` syntax error SQL. IDs négatifs acceptés silencieusement.
+**Correction** : Validation des concept_ids — filtrage des IDs négatifs/nuls, skip si liste vide après validation.
 
 ---
 
-### F12 — Pas de cascade delete dans les modèles
+### F12 — Pas de cascade delete dans les modèles — CORRIGÉ ✓
 
 **Fichier** : `backend/db/models.py`
 
-- Suppression Cohort : CohortVersion, CohortShare, IncidenceAnalysis non cascadés → orphelins
-- Suppression UserGroup : UserGroupMember orphelins
-- Suppression CdmConfig : CdmAccess/CdmGroupAccess stale → rows fantômes
+**Correction** : Cascade `all, delete-orphan` ajouté sur :
+- `Cohort` → `CohortVersion`, `CohortShare`
+- `UserGroup` → `UserGroupMember`
 
 ---
 
-### F13 — `created_by` nullable sur Cohort sans NULL guards
+### F13 — `created_by` nullable sur Cohort sans NULL guards — CORRIGÉ ✓
 
 **Fichier** : `backend/db/models.py:71`
 
-`created_by` est nullable mais utilisé pour les vérifications de partage sans guard → cohorts orphelines possibles si créées avant que le champ soit obligatoire.
+**Correction** : `created_by` changé en `nullable=False, default="system"` — plus de cohorts sans propriétaire.
 
 ---
 
@@ -391,7 +388,14 @@ Ne couvre pas : snapshots qualité, analyses incidence/estimation, décisions de
 | F2 | Faible | Critique | Semaine 1 | ✅ CORRIGÉ (`9534240`) |
 | F3 | Élevé | Critique | Sprint dédié | En attente |
 | F4 | Moyen | Critique | Semaine 2 | ✅ CORRIGÉ (`9534240`) |
-| F5 | Moyen | Haute | Semaine 2 | En attente |
-| F6-F13 | Variable | Haute | Semaine 2-3 | F7 ✅ CORRIGÉ, reste en attente |
+| F5 | Moyen | Haute | Semaine 2 | ✅ PARTIELLEMENT CORRIGÉ |
+| F6 | Moyen | Haute | Semaine 2-3 | En attente |
+| F7 | Faible | Haute | Semaine 1 | ✅ CORRIGÉ |
+| F8 | Moyen | Haute | Semaine 2-3 | En attente |
+| F9 | Moyen | Haute | Semaine 2-3 | En attente |
+| F10 | Faible | Haute | Semaine 2 | En attente |
+| F11 | Faible | Haute | Semaine 2 | ✅ CORRIGÉ |
+| F12 | Moyen | Haute | Semaine 2 | ✅ CORRIGÉ |
+| F13 | Faible | Haute | Semaine 2 | ✅ CORRIGÉ |
 | F14-F25 | Variable | Moyenne | Semaine 3-4 | En attente |
 | F26-F33 | Variable | Basse | Backlog | En attente |

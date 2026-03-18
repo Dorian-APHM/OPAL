@@ -12,10 +12,10 @@
 | Sévérité | Trouvées | Corrigées | Restantes |
 |----------|----------|-----------|-----------|
 | CRITIQUE | 5 | 3 (P1, P2, P3, P5) | 1 (P4) |
-| HAUTE | 9 | 0 | 9 |
-| MOYENNE | 10 | 1 (P18) | 9 |
+| HAUTE | 9 | 1 (P14) | 8 |
+| MOYENNE | 10 | 3 (P16, P17, P18) | 7 |
 | BASSE | 6 | 0 | 6 |
-| **Total** | **30** | **5** | **25** |
+| **Total** | **30** | **8** | **22** |
 
 L'application est globalement bien conçue (connection pooling, GZip, lazy loading, cache i18n). Les problèmes critiques concernent la gestion mémoire (données CSV stockées en RAM, logs chargés intégralement), l'absence de pagination, les requêtes SQL coûteuses dans les modules analytiques, et le polling frontend à 2 req/sec même au repos.
 
@@ -232,28 +232,11 @@ Sans `useMemo`, les charts Recharts re-render à chaque changement d'état, mêm
 
 ---
 
-### P14 — Vite : pas de code splitting avancé (manualChunks)
+### P14 — Vite : pas de code splitting avancé (manualChunks) — CORRIGÉ ✓
 
 **Fichier** : `frontend/vite.config.ts`
 
-Recharts, Framer Motion, CodeMirror bundlés dans le chunk principal. Pas de `manualChunks` pour séparer les bibliothèques lourdes.
-
-**Impact** : Bundle initial plus gros, temps de chargement initial plus long.
-
-**Remédiation** :
-```typescript
-build: {
-  rollupOptions: {
-    output: {
-      manualChunks: {
-        'recharts': ['recharts'],
-        'framer': ['framer-motion'],
-        'vendor': ['react', 'react-dom', 'react-router-dom'],
-      }
-    }
-  }
-}
-```
+**Correction** : `manualChunks` ajouté — `vendor` (react, react-dom, react-router-dom), `recharts`, `framer` (framer-motion) séparés du bundle principal.
 
 ---
 
@@ -265,17 +248,17 @@ build: {
 
 Deux requêtes séparées (`COUNT(*)` puis `COUNT(DISTINCT person_id)`) au lieu d'une seule combinée. Doublement du temps sur chaque domaine.
 
-### P16 — Pathways : ANALYZE manquant sur tables temporaires
+### P16 — Pathways : ANALYZE manquant sur tables temporaires — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/cohort/pathways.py:93-103`
 
-Tables temp `_pw_target`, `_pw_events`, `_pw_eras` créées avec index mais sans `ANALYZE`. Le planificateur PostgreSQL peut choisir un plan sous-optimal.
+**Correction** : `ANALYZE` ajouté après la création des index sur `_pw_target`, `_pw_events`, `_pw_eras`.
 
-### P17 — Pool evictor : intervalle 5 min trop lent
+### P17 — Pool evictor : intervalle 5 min trop lent — CORRIGÉ ✓
 
 **Fichier** : `backend/main.py:49-54`
 
-Avec idle timeout 30min, un pool peut rester ouvert 35 min. 20 CDMs = 40 connexions zombies.
+**Correction** : Intervalle réduit de 300s à 60s. Pools idle évincés plus rapidement.
 
 ### P18 — WebSocket `_user_roles` : sets vides non nettoyés — CORRIGÉ ✓
 
@@ -366,9 +349,9 @@ Basé sur l'analyse des patterns SQL générés :
 |---|--------|--------|-------------|--------|
 | 1 | Streamer CSV extraction vers fichier temp (P1) | 1h | -95% mémoire extractions | ✅ FAIT |
 | 2 | Ne poller que quand une analyse tourne (P4) | 30 min | -99% requêtes idle | En attente |
-| 3 | Ajouter `manualChunks` dans Vite config (P14) | 15 min | -30% taille bundle | En attente |
-| 4 | Ajouter debounce sur ConceptExplorer search (P21) | 10 min | -80% requêtes recherche | En attente |
+| 3 | Ajouter `manualChunks` dans Vite config (P14) | 15 min | -30% taille bundle | ✅ FAIT |
+| 4 | Ajouter debounce sur ConceptExplorer search (P21) | 10 min | -80% requêtes recherche | N/A (Enter-only) |
 | 5 | Combiner dual COUNT queries clinical (P15) | 15 min | -50% temps stats globales | En attente |
-| 6 | `ANALYZE` sur tables temp pathways (P16) | 5 min | Plans d'exécution optimaux | En attente |
-| 7 | Réduire intervalle evictor à 60s (P17) | 2 min | -40 connexions zombies | En attente |
+| 6 | `ANALYZE` sur tables temp pathways (P16) | 5 min | Plans d'exécution optimaux | ✅ FAIT |
+| 7 | Réduire intervalle evictor à 60s (P17) | 2 min | -40 connexions zombies | ✅ FAIT |
 | 8 | Nettoyer `_user_roles` vides (P18) | 5 min | Prévient fuite mémoire | ✅ FAIT |
