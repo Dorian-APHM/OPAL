@@ -11,10 +11,10 @@
 | Sévérité | Nombre |
 |----------|--------|
 | CRITIQUE | 2 |
-| HAUTE | 6 |
+| HAUTE | 7 |
 | MOYENNE | 10 |
 | BASSE | 7 |
-| **Total** | **25** |
+| **Total** | **26** |
 
 OPAL implémente un ensemble fonctionnel remarquablement complet pour une plateforme OMOP CDM : qualité avec Achilles-like, cohort builder avec SQL dynamique, mapping avec 6 stratégies, pathways ATLAS-style, incidence, estimation Kaplan-Meier, et data management. La couverture de tests backend est solide (48 fichiers, ~9250 lignes). Les problèmes principaux concernent la couverture de tests frontend, des lacunes de validation sur les critères JSON cohort, et des incohérences entre certains contrats API.
 
@@ -200,7 +200,19 @@ L'endpoint `POST /api/mapping/apply/{cdm_name}/{domain}` écrit dans la table `s
 
 ---
 
-### F8 — Pas de soft-delete pour les cohortes
+### F8 — Race condition dans l'annulation d'analyse qualité
+
+**Fichier** : `backend/modules/quality/router.py:395-427`
+
+L'annulation d'une analyse vérifie l'existence de l'entrée dans `_active_analyses` puis modifie `cancelled=True` dans deux sections `with _active_analyses_lock:` séparées. Entre ces deux sections, le worker thread peut terminer et supprimer l'entrée, créant une race condition TOCTOU.
+
+**Impact** : L'annulation peut échouer silencieusement ou lever une KeyError.
+
+**Remédiation** : Regrouper check + modification dans une seule section verrouillée.
+
+---
+
+### F9 — Pas de soft-delete pour les cohortes
 
 **Fichier** : `backend/modules/cohort/router.py`
 
@@ -214,7 +226,7 @@ La suppression d'une cohorte (`DELETE /api/cohorts/{id}`) est définitive. Les v
 
 ## MOYENNE
 
-### F9 — i18n incomplète : seuls `en.json` et `fr.json`
+### F10 — i18n incomplète : seuls `en.json` et `fr.json`
 
 **Fichier** : `backend/i18n/`
 
@@ -224,7 +236,7 @@ L'application ne supporte que l'anglais et le français. Pour une application m�
 
 ---
 
-### F10 — Keycloak `start-dev` avec import de realm : pas de migration automatique
+### F11 — Keycloak `start-dev` avec import de realm : pas de migration automatique
 
 **Fichier** : `docker-compose.yml:100`
 
@@ -234,7 +246,7 @@ L'application ne supporte que l'anglais et le français. Pour une application m�
 
 ---
 
-### F11 — Concept Explorer : pas de navigation hiérarchique complète
+### F12 — Concept Explorer : pas de navigation hiérarchique complète
 
 **Fichier** : `backend/modules/concept/router.py`
 
@@ -247,7 +259,7 @@ Le module concept fournit la recherche et la hiérarchie parent/enfant, mais ne 
 
 ---
 
-### F12 — Quality analysis : pas d'annulation côté utilisateur
+### F13 — Quality analysis : pas d'annulation côté utilisateur
 
 **Fichier** : `backend/modules/quality/router.py`
 
@@ -257,7 +269,7 @@ L'analyse qualité SSE n'a pas de mécanisme d'annulation. Si un utilisateur lan
 
 ---
 
-### F13 — Cohort sharing : pas de notification de retrait de partage
+### F14 — Cohort sharing : pas de notification de retrait de partage
 
 **Fichier** : `backend/modules/cohort_sharing_router.py`
 
@@ -267,7 +279,7 @@ Quand un partage de cohorte est retiré (`DELETE /api/cohorts/{id}/shares`), l'u
 
 ---
 
-### F14 — Data Management : pas de preview avant extraction
+### F15 — Data Management : pas de preview avant extraction
 
 **Fichier** : `backend/modules/datamanagement/router.py`
 
@@ -277,7 +289,7 @@ L'extraction de données lance directement le traitement complet. Il n'y a pas d
 
 ---
 
-### F15 — OHDSI : dépendance à Docker-in-Docker non documentée
+### F16 — OHDSI : dépendance à Docker-in-Docker non documentée
 
 **Fichier** : `backend/modules/ohdsi/router.py`
 
@@ -285,7 +297,7 @@ L'intégration OHDSI requiert le socket Docker monté dans le container. Cette d
 
 ---
 
-### F16 — Groups : pas de hiérarchie ni de nested groups
+### F17 — Groups : pas de hiérarchie ni de nested groups
 
 **Fichier** : `backend/modules/groups_router.py`
 
@@ -293,7 +305,7 @@ Les groupes sont plats — pas de sous-groupes ni de hiérarchie organisationnel
 
 ---
 
-### F17 — Search : recherche globale ne couvre pas tous les types
+### F18 — Search : recherche globale ne couvre pas tous les types
 
 **Fichier** : `backend/modules/search_router.py`
 
@@ -305,7 +317,7 @@ La recherche globale couvre cohortes, concept sets, et requêtes sauvegardées, 
 
 ---
 
-### F18 — Pas de système d'export/import de cohortes
+### F19 — Pas de système d'export/import de cohortes
 
 Il n'y a pas de fonctionnalité pour exporter une définition de cohorte (JSON) et l'importer dans une autre instance OPAL ou un autre CDM.
 
@@ -313,7 +325,7 @@ Il n'y a pas de fonctionnalité pour exporter une définition de cohorte (JSON) 
 
 ## BASSE
 
-### F19 — `AccessRequest` : pas de notification par email
+### F20 — `AccessRequest` : pas de notification par email
 
 **Fichier** : `backend/modules/admin_router.py`
 
@@ -321,7 +333,7 @@ Les demandes d'accès génèrent une notification in-app pour les admins, mais p
 
 ---
 
-### F20 — Cohort templates : pas de catégorisation hiérarchique
+### F21 — Cohort templates : pas de catégorisation hiérarchique
 
 **Fichier** : `backend/modules/cohort_templates_router.py`
 
@@ -329,13 +341,13 @@ Les templates ont un champ `category` (String) mais pas de système de catégori
 
 ---
 
-### F21 — Pas de versioning d'API
+### F22 — Pas de versioning d'API
 
 L'API n'utilise pas de préfixe de version (`/api/v1/`). Les changements breaking nécessiteront une migration coordonnée frontend/backend.
 
 ---
 
-### F22 — Pas de documentation OpenAPI enrichie
+### F23 — Pas de documentation OpenAPI enrichie
 
 **Fichier** : `backend/main.py:34-38`
 
@@ -346,19 +358,19 @@ FastAPI génère l'OpenAPI automatiquement, mais les endpoints manquent de :
 
 ---
 
-### F23 — Pas de mode offline/dégradé côté frontend
+### F24 — Pas de mode offline/dégradé côté frontend
 
 Si le backend est indisponible, le frontend affiche des erreurs génériques. Pas de mode offline avec cache local des dernières données consultées.
 
 ---
 
-### F24 — Frontend : pas de raccourcis clavier
+### F25 — Frontend : pas de raccourcis clavier
 
 Pour un outil analytique utilisé quotidiennement, l'absence de raccourcis clavier (navigation, recherche rapide, actions fréquentes) est un manque d'ergonomie.
 
 ---
 
-### F25 — Pas de mécanisme de backup/restore intégré
+### F26 — Pas de mécanisme de backup/restore intégré
 
 Pas de commande ou endpoint pour sauvegarder/restaurer la base applicative (cohortes, mappings, snapshots). La sauvegarde dépend entièrement de l'opérateur.
 
@@ -451,6 +463,7 @@ Pas de commande ou endpoint pour sauvegarder/restaurer la base applicative (coho
 | F5 | Moyen | Haute | Semaine 3 |
 | F6 | Faible | Haute | Semaine 1 |
 | F7 | Moyen | Haute | Semaine 2 |
-| F8 | Faible | Haute | Semaine 2 |
-| F9-F18 | Variable | Moyenne | Semaine 3-4 |
-| F19-F25 | Variable | Basse | Backlog |
+| F8 | Faible | Haute | Semaine 1 |
+| F9 | Faible | Haute | Semaine 2 |
+| F10-F19 | Variable | Moyenne | Semaine 3-4 |
+| F20-F26 | Variable | Basse | Backlog |
