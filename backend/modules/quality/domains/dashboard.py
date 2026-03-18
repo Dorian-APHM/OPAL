@@ -3,6 +3,7 @@ Dashboard domain analysis — ported from achilles_like/analysis.py.
 Aggregated overview across all clinical domains.
 """
 import logging
+from psycopg2 import sql as psysql
 from psycopg2.extras import DictCursor
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,8 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
     then individual sparkline queries only for domains that have a date column.
     """
     schema = safe_identifier(omop_schema)
-    person_table = f"{schema}.person"
+    _s = psysql.Identifier(schema)
+    _person = psysql.Identifier("person")
 
     res = {
         "domain": "Dashboard",
@@ -29,7 +31,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
 
     with conn.cursor(cursor_factory=DictCursor) as cur:
         # Total persons
-        cur.execute(f"SELECT COUNT(*) AS total FROM {person_table}")
+        cur.execute(psysql.SQL("SELECT COUNT(*) AS total FROM {}.{}").format(_s, _person))
         total_persons = int(cur.fetchone()["total"] or 0)
 
         # Build a single UNION ALL query for all domain stats
@@ -40,23 +42,33 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             person_id = safe_identifier(cfg["person_id"])
             concept_id = safe_identifier(cfg["concept_id"])
             source_value = safe_identifier(cfg["source_value"])
-            full_table = f"{schema}.{table}"
-            union_parts.append(f"""
+            part = psysql.SQL("""
                 SELECT
-                    '{domain_name}' AS domain,
+                    {domain} AS domain,
                     COUNT(*) AS total_records,
-                    COUNT(DISTINCT {person_id}) AS distinct_persons,
-                    COUNT(DISTINCT {source_value}) AS total_terms,
-                    COUNT(DISTINCT CASE WHEN {concept_id} != 0 THEN {source_value} END) AS mapped_terms
-                FROM {full_table}
-            """)
+                    COUNT(DISTINCT {pid}) AS distinct_persons,
+                    COUNT(DISTINCT {sv}) AS total_terms,
+                    COUNT(DISTINCT CASE WHEN {cid} != 0 THEN {sv} END) AS mapped_terms
+                FROM {schema}.{table}
+            """).format(
+                domain=psysql.Literal(domain_name),
+                pid=psysql.Identifier(person_id),
+                sv=psysql.Identifier(source_value),
+                cid=psysql.Identifier(concept_id),
+                schema=_s,
+                table=psysql.Identifier(table),
+            )
+            union_parts.append(part)
             domain_order.append(domain_name)
 
         # Execute merged query
         stats_by_domain: dict[str, dict] = {}
         if union_parts:
             try:
-                cur.execute(" UNION ALL ".join(union_parts))
+                full_query = union_parts[0]
+                for part in union_parts[1:]:
+                    full_query = psysql.SQL("{} UNION ALL {}").format(full_query, part)
+                cur.execute(full_query)
                 for row in cur.fetchall():
                     stats_by_domain[row["domain"]] = dict(row)
             except Exception:
@@ -86,19 +98,19 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             pct_terms_mapped = (mapped_terms / total_terms * 100) if total_terms > 0 else 0
 
             cfg = DOMAIN_CONFIG[domain_name]
-            date_col = cfg.get("date_col")
+            date_col_name = cfg.get("date_col")
             sparkline = []
-            if date_col:
+            if date_col_name:
                 table = safe_identifier(cfg["table"])
-                date_col = safe_identifier(date_col)
-                full_table = f"{schema}.{table}"
+                date_col_name = safe_identifier(date_col_name)
+                _dc = psysql.Identifier(date_col_name)
                 try:
-                    cur.execute(f"""
-                        SELECT date_trunc('month', {date_col})::date AS m, COUNT(*) AS n
-                        FROM {full_table}
-                        WHERE {date_col} >= (CURRENT_DATE - INTERVAL '12 months')
+                    cur.execute(psysql.SQL("""
+                        SELECT date_trunc('month', {dc})::date AS m, COUNT(*) AS n
+                        FROM {schema}.{table}
+                        WHERE {dc} >= (CURRENT_DATE - INTERVAL '12 months')
                         GROUP BY 1 ORDER BY 1
-                    """)
+                    """).format(dc=_dc, schema=_s, table=psysql.Identifier(table)))
                     sparkline = [int(r["n"]) for r in cur.fetchall()]
                 except Exception:
                     logger.warning("Failed to fetch sparkline for %s", domain_name, exc_info=True)

@@ -2,9 +2,11 @@
 Observation Period domain analysis — ported from achilles_like/analysis.py.
 All 6 sub-analyses preserved exactly.
 """
+from psycopg2 import sql as psysql
 from psycopg2.extras import DictCursor
 
 from config import DEFAULT_MAX_OBSERVATION_MONTHS
+from utils.sql_safety import safe_identifier
 
 
 def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
@@ -25,20 +27,24 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
     if cap_months is None:
         cap_months = DEFAULT_MAX_OBSERVATION_MONTHS
 
-    obs_table = f"{omop_schema}.observation_period"
-    person_table = f"{omop_schema}.person"
-    concept_table = f"{omop_schema}.concept"
+    schema = safe_identifier(omop_schema)
+    _s = psysql.Identifier(schema)
+    _obs = psysql.Identifier("observation_period")
+    _person = psysql.Identifier("person")
+    _concept = psysql.Identifier("concept")
+
+    obs_table_str = f"{schema}.observation_period"
 
     res = {
         "domain": "ObservationPeriod",
-        "table": obs_table,
+        "table": obs_table_str,
         "achilles_like": {},
         "mapping": {},
     }
 
     # Helper: build exact birth date using day_of_birth/month_of_birth when available,
     # fallback to July 1st of year_of_birth otherwise.
-    birth_date_expr = f"""
+    birth_date_expr = """
         MAKE_DATE(
             p.year_of_birth,
             COALESCE(NULLIF(p.month_of_birth, 0), 7),
@@ -47,32 +53,35 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
     """
 
     # Shared CTE fragment: per-person min/max observation dates
-    per_cte = f"""
+    per_cte = psysql.SQL("""
         per AS (
             SELECT
                 person_id,
                 MIN(observation_period_start_date) AS obs_start,
                 MAX(observation_period_end_date) AS obs_end
-            FROM {obs_table}
+            FROM {schema}.{obs}
             GROUP BY person_id
         )
-    """
+    """).format(schema=_s, obs=_obs)
 
     with conn.cursor(cursor_factory=DictCursor) as cur:
         # 1) Age at First Observation (integer years for histogram)
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             WITH {per_cte}
             SELECT
-                (EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date_expr})))::int AS age,
+                (EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date})))::int AS age,
                 COUNT(*) AS n
             FROM per
-            JOIN {person_table} p ON p.person_id = per.person_id
+            JOIN {schema}.{person} p ON p.person_id = per.person_id
             WHERE per.obs_start IS NOT NULL
               AND p.year_of_birth IS NOT NULL
-              AND EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date_expr})) BETWEEN 0 AND 120
+              AND EXTRACT(YEAR FROM AGE(per.obs_start, {birth_date})) BETWEEN 0 AND 120
             GROUP BY 1
             ORDER BY age
-        """)
+        """).format(
+            per_cte=per_cte, schema=_s, person=_person,
+            birth_date=psysql.SQL(birth_date_expr),
+        ))
         ages, counts = [], []
         for r in cur.fetchall():
             ages.append(int(r["age"]))
@@ -80,18 +89,18 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         res["achilles_like"]["age_at_first_observation"] = {"age": ages, "count": counts}
 
         # 2) Age by Gender (exact decimal age for boxplot quantiles)
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             WITH {per_cte},
             ages AS (
                 SELECT
                     p.person_id,
                     p.gender_concept_id,
-                    (per.obs_start - {birth_date_expr})::numeric / 365.25 AS age
+                    (per.obs_start - {birth_date})::numeric / 365.25 AS age
                 FROM per
-                JOIN {person_table} p ON p.person_id = per.person_id
+                JOIN {schema}.{person} p ON p.person_id = per.person_id
                 WHERE per.obs_start IS NOT NULL
                   AND p.year_of_birth IS NOT NULL
-                  AND (per.obs_start - {birth_date_expr})::numeric / 365.25 BETWEEN 0 AND 120
+                  AND (per.obs_start - {birth_date})::numeric / 365.25 BETWEEN 0 AND 120
             )
             SELECT
                 a.gender_concept_id,
@@ -104,10 +113,13 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY a.age) AS p75,
                 PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY a.age) AS p90
             FROM ages a
-            LEFT JOIN {concept_table} c ON c.concept_id = a.gender_concept_id
+            LEFT JOIN {schema}.{concept} c ON c.concept_id = a.gender_concept_id
             GROUP BY a.gender_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
             ORDER BY n DESC
-        """)
+        """).format(
+            per_cte=per_cte, schema=_s, person=_person, concept=_concept,
+            birth_date=psysql.SQL(birth_date_expr),
+        ))
         rows = []
         for r in cur.fetchall():
             rows.append({
@@ -124,7 +136,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         res["achilles_like"]["age_by_gender"] = {"rows": rows}
 
         # 3) Observation Length (months, capped)
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             WITH {per_cte},
             per2 AS (
                 SELECT
@@ -142,7 +154,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
             FROM b
             GROUP BY m
             ORDER BY m
-        """, (cap_months, cap_months))
+        """).format(per_cte=per_cte), (cap_months, cap_months))
         months, n_persons = [], []
         for r in cur.fetchall():
             months.append(int(r["months"]))
@@ -154,7 +166,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         }
 
         # 4) Duration by Gender (quantiles for boxplot)
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             WITH {per_cte},
             per2 AS (
                 SELECT
@@ -177,11 +189,11 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY per2.months) AS p75,
                 PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY per2.months) AS p90
             FROM per2
-            JOIN {person_table} p ON p.person_id = per2.person_id
-            LEFT JOIN {concept_table} c ON c.concept_id = p.gender_concept_id
+            JOIN {schema}.{person} p ON p.person_id = per2.person_id
+            LEFT JOIN {schema}.{concept} c ON c.concept_id = p.gender_concept_id
             GROUP BY p.gender_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
             ORDER BY n DESC
-        """)
+        """).format(per_cte=per_cte, schema=_s, person=_person, concept=_concept))
         rows = []
         for r in cur.fetchall():
             rows.append({
@@ -198,7 +210,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         res["achilles_like"]["duration_by_gender"] = {"rows": rows}
 
         # 5) Cumulative Observation (P11 fix: window function instead of correlated subquery)
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             WITH {per_cte},
             per2 AS (
                 SELECT
@@ -219,7 +231,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
             SELECT m AS thr, ROUND(n_ge::numeric / n_total * 100.0, 2) AS pct
             FROM cum
             ORDER BY m
-        """, (cap_months,))
+        """).format(per_cte=per_cte), (cap_months,))
         thr, pct = [], []
         for r in cur.fetchall():
             thr.append(int(r["thr"]))
@@ -227,7 +239,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
         res["achilles_like"]["cumulative_observation"] = {"months_threshold": thr, "pct_persons": pct}
 
         # 6) Continuous Observation by Year
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             WITH {per_cte},
             years AS (
                 SELECT generate_series(
@@ -241,7 +253,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                     AND per.obs_end >= MAKE_DATE(y.y::int, 12, 31)
             GROUP BY y.y
             ORDER BY y.y
-        """)
+        """).format(per_cte=per_cte))
         yrs, nps = [], []
         for r in cur.fetchall():
             yrs.append(int(r["year"]))

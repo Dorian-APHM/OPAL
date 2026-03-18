@@ -2,7 +2,10 @@
 Person domain analysis — ported from achilles_like/analysis.py.
 """
 import logging
+from psycopg2 import sql as psysql
 from psycopg2.extras import DictCursor
+
+from utils.sql_safety import safe_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -14,32 +17,34 @@ def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
     - Gender distribution
     - Birth year distribution
     """
-    person_table = f"{omop_schema}.person"
-    concept_table = f"{omop_schema}.concept"
+    schema = safe_identifier(omop_schema)
+    _s = psysql.Identifier(schema)
+    _person = psysql.Identifier("person")
+    _concept = psysql.Identifier("concept")
 
     res = {
         "domain": "Person",
-        "table": person_table,
+        "table": f"{schema}.person",
         "achilles_like": {},
         "mapping": {},
     }
 
     with conn.cursor(cursor_factory=DictCursor) as cur:
         # Total persons
-        cur.execute(f"SELECT COUNT(*) AS n FROM {person_table}")
+        cur.execute(psysql.SQL("SELECT COUNT(*) AS n FROM {}.{}").format(_s, _person))
         total_persons = int(cur.fetchone()["n"] or 0)
 
         # Gender distribution
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             SELECT
                 p.gender_concept_id,
                 COALESCE(c.concept_name, 'UNKNOWN') AS concept_name,
                 COUNT(*) AS n
-            FROM {person_table} p
-            LEFT JOIN {concept_table} c ON p.gender_concept_id = c.concept_id
+            FROM {schema}.{person} p
+            LEFT JOIN {schema}.{concept} c ON p.gender_concept_id = c.concept_id
             GROUP BY p.gender_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
             ORDER BY n DESC
-        """)
+        """).format(schema=_s, person=_person, concept=_concept))
         genders, gender_names, gender_counts = [], [], []
         for r in cur.fetchall():
             genders.append(int(r["gender_concept_id"]) if r["gender_concept_id"] is not None else None)
@@ -47,14 +52,14 @@ def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             gender_counts.append(int(r["n"]))
 
         # Birth year distribution
-        cur.execute(f"""
+        cur.execute(psysql.SQL("""
             SELECT year_of_birth::int AS year_of_birth, COUNT(*) AS n
-            FROM {person_table}
+            FROM {schema}.{person}
             WHERE year_of_birth IS NOT NULL
               AND year_of_birth BETWEEN 1850 AND EXTRACT(YEAR FROM CURRENT_DATE)
             GROUP BY year_of_birth
             ORDER BY year_of_birth
-        """)
+        """).format(schema=_s, person=_person))
         years, year_counts = [], []
         for r in cur.fetchall():
             years.append(int(r["year_of_birth"]))
@@ -63,16 +68,16 @@ def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
         # Race distribution (if available)
         race_ids, race_names, race_counts = [], [], []
         try:
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT
                     p.race_concept_id,
                     COALESCE(c.concept_name, 'UNKNOWN') AS concept_name,
                     COUNT(*) AS n
-                FROM {person_table} p
-                LEFT JOIN {concept_table} c ON p.race_concept_id = c.concept_id
+                FROM {schema}.{person} p
+                LEFT JOIN {schema}.{concept} c ON p.race_concept_id = c.concept_id
                 GROUP BY p.race_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
                 ORDER BY n DESC
-            """)
+            """).format(schema=_s, person=_person, concept=_concept))
             for r in cur.fetchall():
                 race_ids.append(int(r["race_concept_id"]) if r["race_concept_id"] is not None else None)
                 race_names.append(r["concept_name"])
@@ -84,16 +89,16 @@ def run_person_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
         # Ethnicity distribution (if available)
         eth_ids, eth_names, eth_counts = [], [], []
         try:
-            cur.execute(f"""
+            cur.execute(psysql.SQL("""
                 SELECT
                     p.ethnicity_concept_id,
                     COALESCE(c.concept_name, 'UNKNOWN') AS concept_name,
                     COUNT(*) AS n
-                FROM {person_table} p
-                LEFT JOIN {concept_table} c ON p.ethnicity_concept_id = c.concept_id
+                FROM {schema}.{person} p
+                LEFT JOIN {schema}.{concept} c ON p.ethnicity_concept_id = c.concept_id
                 GROUP BY p.ethnicity_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
                 ORDER BY n DESC
-            """)
+            """).format(schema=_s, person=_person, concept=_concept))
             for r in cur.fetchall():
                 eth_ids.append(int(r["ethnicity_concept_id"]) if r["ethnicity_concept_id"] is not None else None)
                 eth_names.append(r["concept_name"])
