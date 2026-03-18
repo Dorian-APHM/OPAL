@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 import docker
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -203,8 +203,8 @@ def run_service(service_name: str, req: RunRequest, db: Session = Depends(get_db
 
 
 @router.post("/stop/{service_name}")
-def stop_service(service_name: str):
-    """Stop a running OHDSI service container."""
+def stop_service(service_name: str, request: Request):
+    """Stop a running OHDSI service container. Requires authentication."""
     with _lock:
         task = _tasks.get(service_name)
         if not task or task["status"] != "running" or not task["container_id"]:
@@ -222,8 +222,8 @@ def stop_service(service_name: str):
 
 
 @router.get("/status")
-def get_status():
-    """Return status of all services."""
+def get_status(request: Request):
+    """Return status of all services. Requires authentication."""
     with _lock:
         result = {}
         for svc in SERVICES:
@@ -236,8 +236,8 @@ def get_status():
 
 
 @router.get("/logs/{service_name}/history")
-def get_log_history(service_name: str):
-    """Return all accumulated logs for a service (for page reload / navigation back)."""
+def get_log_history(service_name: str, request: Request):
+    """Return all accumulated logs for a service. Requires authentication."""
     if service_name not in SERVICES:
         raise HTTPException(status_code=400, detail=f"Unknown service: {service_name}")
     with _lock:
@@ -252,8 +252,8 @@ def get_log_history(service_name: str):
 
 
 @router.get("/logs/{service_name}")
-def stream_logs(service_name: str, offset: int = Query(0)):
-    """SSE endpoint for real-time log streaming."""
+def stream_logs(service_name: str, request: Request, offset: int = Query(0)):
+    """SSE endpoint for real-time log streaming. Requires authentication."""
     if service_name not in SERVICES:
         raise HTTPException(status_code=400, detail=f"Unknown service: {service_name}")
 
@@ -283,8 +283,8 @@ def stream_logs(service_name: str, offset: int = Query(0)):
 
 @router.get("/files/{path:path}")
 @router.get("/files/")
-def list_or_download_files(path: str = ""):
-    """Browse output files or download a specific file."""
+def list_or_download_files(request: Request, path: str = ""):
+    """Browse output files or download a specific file. Requires authentication."""
     output_dir = Path(OHDSI_OUTPUT_DIR)
     target = (output_dir / path).resolve() if path else output_dir.resolve()
 
