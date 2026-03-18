@@ -1,0 +1,579 @@
+# CHANGELOG — OPAL v1.1.0
+
+> **Branche** : `claude/ws-notifications-tests-bZV25`
+> **Base** : `OPAL_V1.0.1` (v1.0.1 — securite + optimisations SQL)
+> **Periode** : 15–18 mars 2026 (3 sessions de travail)
+> **Bilan** : 128 fichiers modifies, ~18 200 lignes ajoutees, ~2 000 supprimees
+> **Tests** : 601 backend + 84 frontend = **685 tests** (zero failure)
+
+---
+
+## Table des matieres
+
+1. [Nouveautes fonctionnelles](#1-nouveautes-fonctionnelles)
+   - [Notifications temps reel (WebSocket)](#11-notifications-temps-reel-websocket)
+   - [Pathways Analysis (parcours de soins)](#12-pathways-analysis-parcours-de-soins)
+   - [Theme clair Creme Sauge](#13-theme-clair-creme-sauge)
+   - [Micro-animations et UX avancee](#14-micro-animations-et-ux-avancee)
+2. [Securite](#2-securite)
+3. [Performance](#3-performance)
+4. [Architecture](#4-architecture)
+5. [Tests](#5-tests)
+6. [Infrastructure et DevOps](#6-infrastructure-et-devops)
+7. [Commits detailles](#7-commits-detailles)
+8. [Fichiers crees et modifies](#8-fichiers-crees-et-modifies)
+
+---
+
+## 1. Nouveautes fonctionnelles
+
+### 1.1 Notifications temps reel (WebSocket)
+
+**Commits** : `7d78c53`, `2e185b6`, `080dadc`
+
+Remplacement complet du systeme de notifications par polling par un systeme **temps reel pur via WebSocket**.
+
+#### Backend
+
+- **Endpoint WebSocket** : `GET /api/ws/notifications`
+  - Authentification via ticket SSE a usage unique (TTL 30s)
+  - Suivi des connexions par utilisateur et par role
+  - Reconnexion automatique avec backoff exponentiel
+- **WebSocket Manager** (`utils/ws_manager.py`) :
+  - Broadcast par utilisateur ou par role
+  - Gestion propre des deconnexions
+  - Thread-safe avec verrous
+- **`notify()` enrichi** (`utils/notifications.py`) :
+  - Insertion DB + push WebSocket instantane
+  - 9 nouveaux types de notification : `access_granted`, `access_revoked`, `cdm_created`, `cdm_updated`, `cdm_deleted`, `mapping_applied`, `cohort_deleted`, `cohort_updated`, `group_removed`
+- **Declencheurs** ajoutes dans tous les modules :
+  - `cdm_router` : creation/modification/suppression CDM
+  - `cdm_access_router` : attribution/revocation acces utilisateur et groupe
+  - `cohort/router` : suppression cohorte (notifie les utilisateurs partages)
+  - `cohort_sharing_router` : annulation de partage
+  - `groups_router` : suppression groupe, retrait de membre
+  - `mapping/router` : decision de mapping, application de mapping
+- **Preferences de notification** :
+  - Nouveau modele `NotificationPreference`
+  - `GET/POST /api/notifications/preferences`
+  - Mute par type de notification
+- **Nettoyage automatique** : thread daemon qui purge les notifications lues > 30 jours
+- **Endpoints DELETE** : suppression individuelle et en lot
+
+#### Frontend
+
+- **`useNotificationWs` hook** : connexion WebSocket au montage, reconnexion auto, dispatch d'evenements `opal:notification`
+- **`NotificationCenter` drawer** : historique complet avec :
+  - Filtre tout/non lu
+  - Marquer lu (individuel/tous)
+  - Supprimer (individuel/tous lus)
+  - Navigation vers la page liee au clic
+  - Affichage relatif du temps, icones et couleurs par type
+- **TopNav** : cloche avec badge compteur non lus
+- **Zero polling** : WebSocket gere 100% de la livraison temps reel
+
+#### Nginx
+
+- Bloc `location /api/ws/` avec headers `Upgrade`/`Connection` pour WebSocket
+- Timeout 24h pour les connexions WebSocket longue duree
+- CSP mis a jour : `ws:` et `wss:` dans `connect-src`
+
+---
+
+### 1.2 Pathways Analysis (parcours de soins)
+
+**Commit** : `8da9ed0`
+
+Feature complete d'analyse de parcours de soins ("treatment pathways") basee sur la methodologie OHDSI ATLAS (Hripcsak et al. 2016).
+
+#### Backend — `modules/cohort/pathways.py` (346 lignes)
+
+- **Materialisation** de la cohorte cible via `build_cohort_sql()` dans une table temporaire
+- **Collecte d'evenements** : pour chaque "event cohort" (concepts definis), requete les tables OMOP correspondantes avec support `include_descendants` via `concept_ancestor`
+- **Collapse d'eras** : fusion des intervalles temporels chevauchants en eras contigues (fenetre configurable)
+- **Construction de sequences** : ordonnancement par date, troncature a `max_depth` etapes
+- **Arbre sunburst** : construction hierarchique `{name, value, children}` avec elagage automatique (`min_cell_count`)
+
+| Parametre | Defaut | Description |
+|-----------|--------|-------------|
+| `max_depth` | 5 | Profondeur max des parcours (1-10) |
+| `min_cell_count` | 5 | Seuil minimum de patients par chemin |
+| `combo_window` | 0 | Jours pour fusionner les eras chevauchantes |
+
+#### Endpoints
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/cohorts/pathways` | POST | Lance l'analyse en tache de fond |
+| `/api/cohorts/pathways/status/{task_id}` | GET | Polling du statut + resultats |
+| `/api/cohorts/pathways/cancel/{task_id}` | POST | Annulation d'une analyse en cours |
+
+#### Frontend — `PathwaysPanel.tsx` (826 lignes)
+
+- **Event Cohort Builder** : recherche de concepts, nommage, toggle descendants
+- **Sunburst SVG custom** : arcs concentriques sans dependance D3, tooltips au survol
+- **Legende couleurs** + sequences selectionnees
+- **Table des top pathways** : compte et pourcentage
+- **Barre de progression** + **Export CSV** + **Panneau settings**
+
+---
+
+### 1.3 Theme clair Creme Sauge
+
+**Commits** : `08e5b7b`, `cb1265a`, `e0f747b`, `ae11f5e`, `806fda8`
+
+Implementation d'un mode clair complet sur l'ensemble de l'application.
+
+#### Palette
+
+| Token | Couleur | Usage |
+|-------|---------|-------|
+| `--bg-base` | `#EDE7D9` | Arriere-plan principal |
+| `--bg-surface` | `#E0D9C8` | Surfaces, cartes |
+| `--bg-shadow` | `#CFC8B6` | Ombres neumorphiques |
+| `--accent` | `#8FAE6B` | Accent sauge (boutons, badges) |
+| `--text` | `#2D3B1E` | Texte principal |
+
+#### Implementation
+
+- **CSS** : variables `[data-theme="light"]` dans `opal-theme.css` et `landing.css` — toutes les surfaces sont creme, zero blanc
+- **Ombres neumorphiques** : surcharges completes pour le mode clair (glows, focus rings, scrollbar, tags)
+- **`useTheme` hook** : toggle dark/light avec persistance `localStorage`
+- **TopNav** : bouton soleil/lune entre le selecteur de langue et la cloche
+- **Anti-flash** : script dans `index.html` qui lit `localStorage` avant le premier paint
+- **`tokens.ts`** : export `lightColors` et `lightShadows`
+- **`Card.tsx`** : refactore avec classe CSS `.opal-card-shadow` theme-aware
+
+---
+
+### 1.4 Micro-animations et UX avancee
+
+**Commits** : `942353f`, `c14c08a`
+
+#### Nouveaux composants d'animation (`AnimatedList.tsx`)
+
+| Composant | Description |
+|-----------|-------------|
+| `AnimatedList` | Listes avec apparition en cascade (stagger) via Framer Motion |
+| `FadeIn` | Fondu d'entree pour les sections |
+| `ScaleIn` | Pop-in pour les cartes et elements isoles |
+| `CountUp` | Animation de compteur numerique |
+
+#### Skeleton loaders (`SkeletonPatterns.tsx`)
+
+| Composant | Usage |
+|-----------|-------|
+| `CardSkeleton` | Placeholder de carte |
+| `StatSkeleton` | Placeholder de statistique |
+| `TableSkeleton` | Placeholder de tableau |
+| `DashboardSkeleton` | Placeholder de dashboard complet |
+| `ListSkeleton` | Placeholder de liste |
+| `InlineSkeleton` | Placeholder inline |
+
+#### Etats d'erreur riches (`ErrorState.tsx`)
+
+- 5 variantes : `network`, `server`, `forbidden`, `not-found`, `generic`
+- Detection automatique du type d'erreur (`detectErrorVariant()`)
+- Icones animees, boutons retry/home, mode compact
+- Integre dans `ErrorBoundary` et `ForbiddenPage`
+
+#### Etats vides enrichis (`Empty.tsx`)
+
+- 11 variantes predefinies : `no-cdm`, `no-cohorts`, `no-notifications`, `no-data`, etc.
+- Animation flottante de l'icone, anneau lumineux subtil
+
+#### Toast ameliore (`Toast.tsx`)
+
+- Animations spring physics (apparition/disparition)
+- Spin-in de l'icone, barre de progression countdown
+- Support success/error/info/warning
+
+#### CSS micro-interactions (`opal-theme.css`)
+
+- `.opal-pressable` : scale au clic
+- `bell-ring` : animation de cloche
+- `shimmer` / `skeleton-wave` : effets de chargement
+- `success-flash` / `number-pop` : feedback visuel
+- Transition de theme fluide (0.4s) via classe `opal-theme-transitioning`
+
+---
+
+## 2. Securite
+
+### Audit complet et remediation
+
+3 rounds d'audit ont identifie **80 findings** au total. **59 items corriges** (P0 a P2).
+
+### P0 — Critique
+
+| Correction | Fichiers | Detail |
+|-----------|----------|--------|
+| **Injection SQL** | `concept/router.py`, `search_router.py`, `concept_set/router.py`, `suggest.py`, `clinical.py`, `conformity.py` | Migration systematique des f-strings vers `psycopg2.sql.SQL` + `sql.Identifier`. Nouveau module `utils/sql_safety.py` avec `safe_identifier()` |
+| **Path traversal** | `ohdsi/router.py` | Validation `resolve()` + `startswith()` dans le navigateur de fichiers OHDSI |
+| **SSRF** | `cdm_router.py` | Validation des hosts CDM : rejet localhost, metadata cloud, IPs privees, link-local |
+| **Rate limiting** | `main.py`, `utils/rate_limit.py` | `slowapi` sur endpoints sensibles (inscription, tickets SSE, compute) |
+| **CDM access checks** | `cohort/router.py`, `concept/router.py`, `concept_set/router.py` | `check_cdm_access()` sur 12 endpoints POST non proteges |
+
+### P1 — Eleve
+
+| Correction | Detail |
+|-----------|--------|
+| **IDOR** (6 items) | Verification d'ownership sur notifications, saved queries, concept sets, cohort templates, cohort delete |
+| **Admin RBAC** | `_require_admin()` sur 12 endpoints admin/audit |
+| **Mots de passe temporaires** | `secrets.token_urlsafe(16)` au lieu du username |
+| **Keycloak credentials** | Plus de fallback `admin/admin`, warning si detecte |
+| **CORS restrictif** | Methodes et headers explicites au lieu de `*` |
+| **Masquage erreurs** | Messages generiques, plus de stack traces/SQL dans les reponses HTTP |
+| **CSP** | `Content-Security-Policy`, `Strict-Transport-Security`, `Permissions-Policy` |
+| **Production guards** | `SECRET_KEY` faible + `AUTH_ENABLED=false` en prod → crash immediat |
+| **Thread safety** | `threading.Lock` sur tous les dicts de taches partages |
+| **Credentials hardening** | Permissions fichier cle `0o600`, `ENCRYPTION_KEY` env var, `DecryptionError` explicite |
+| **Audit logs** | Masquage params sensibles (password, token, ticket), permissions `0o640` |
+
+### P2 — Modere
+
+| Correction | Detail |
+|-----------|--------|
+| Bound `page_size` audit (1-500) | Previent les DoS via pagination |
+| Sanitize `Content-Disposition` | Noms de fichiers securises |
+| Escape ILIKE wildcards | Protection contre les patterns malveillants |
+| CSV formula injection | Helper `csv_safe()` pour les exports |
+| `datetime.now(timezone.utc)` | Remplacement de `utcnow()` deprece |
+| Security headers nginx | Headers de securite sur les assets statiques |
+| OHDSI network dedie | Conteneurs Docker sur reseau isole au lieu de host |
+| Dependances pinnees | Versions exactes dans `requirements.txt` |
+
+### Production hardening (`docker-compose.prod.yml`)
+
+- Keycloak en mode production (`start` au lieu de `start-dev`)
+- PostgreSQL pour persistence Keycloak (remplace H2)
+- Socket Docker retire
+- Ports bindes sur localhost
+- Variables d'environnement requises
+
+---
+
+## 3. Performance
+
+### Optimisations SQL
+
+| Optimisation | Fichier | Impact |
+|-------------|---------|--------|
+| **N+1 cohortes** | `cohort/router.py` | Subquery + JOIN au lieu de N requetes individuelles → O(1) |
+| **N+1 mapping dashboard** | `mapping/router.py` | `DISTINCT ON (domain)` en une requete |
+| **N+1 groupes** | `groups_router.py` | JOIN + GROUP BY au lieu de boucle |
+| **N+1 data management** | `datamanagement/router.py` | Batch query au lieu de boucle |
+| **Strategy stats** | `mapping/router.py` | Aggregation SQL (`CASE` + `COUNT`/`AVG`) au lieu de Python |
+| **COUNT(*) OVER()** | `concept/router.py` | Elimination de la requete COUNT separee |
+| **CTE attrition** | `cohort/router.py` | CTE unique au lieu de N requetes sequentielles |
+| **Conformite mergee** | `conformity.py` | `COUNT(*) FILTER (WHERE ...)` : 3→1 requete |
+| **Dashboard UNION ALL** | `dashboard.py` | Stats domaines fusionnees en une requete |
+| **Bulk mapping** | `mapping/router.py` | `IN` clause + `bulk_save_objects` au lieu de boucle |
+| **Concept counts** | `concept/router.py` | `UNION ALL` au lieu de N requetes par domaine |
+
+### Caches
+
+| Cache | TTL | Taille max | Usage |
+|-------|-----|-----------|-------|
+| **Concept details** | 5 min | 500 entrees | Details et hierarchie par CDM+concept_id |
+| **i18n** | Infini | 2 entrees | Traductions chargees au demarrage |
+
+### Pagination
+
+Ajout `limit/offset` sur : `saved_queries`, `favorites`, `cdm_access`, `mapping/reference`, `mapping/sapbert`, `admin_cohorts_by_user`.
+
+### Index composites
+
+| Table | Index | Colonnes |
+|-------|-------|----------|
+| `analysis_snapshots` | `ix_snapshots_cdm_domain` | `(cdm_name, domain)` |
+| `analysis_snapshots` | `ix_snapshots_cdm_domain_version` | `(cdm_name, domain, version)` |
+| `cohort_versions` | `ix_cohort_versions_cohort_version` | `(cohort_id, version)` |
+| `mapping_decisions` | `ix_mapping_decisions_cdm_domain` | `(cdm_name, domain)` |
+| `mapping_decisions` | `ix_mapping_decisions_cdm_domain_sv` | `(cdm_name, domain, source_value)` |
+| `notifications` | `ix_notifications_user_read` | `(username, read)` |
+
+---
+
+## 4. Architecture
+
+### Refactoring majeurs
+
+| Changement | Detail |
+|-----------|--------|
+| **Admin router extrait** | `main.py` → `modules/admin_router.py` (~500 lignes deplacees) |
+| **CDM helper centralise** | `utils/cdm_helper.py` : `get_cdm_connection()` avec `safe_identifier` |
+| **Keycloak middleware ASGI** | Reecrit en ASGI pur (plus de `BaseHTTPMiddleware` qui bufferise le streaming) |
+| **SSE tickets** | Tickets a usage unique (TTL 30s) au lieu de JWT dans les query params |
+| **Token refresh queue** | Intercepteur Axios : une seule requete de refresh, les autres attendent |
+| **GZip middleware** | Compression automatique (seuil 1000 bytes) |
+| **Cascade delete CDM** | Suppression de toutes les entites liees lors de la suppression d'un CDM |
+| **Alembic migrations** | Migration initiale avec 22 tables et tous les index |
+
+### Nouveaux modules
+
+| Module | Lignes | Role |
+|--------|--------|------|
+| `utils/ws_manager.py` | 129 | WebSocket connection manager |
+| `utils/cdm_helper.py` | 67 | Helper centralise connexion CDM |
+| `utils/csv_safety.py` | 9 | Protection injection formules CSV |
+| `utils/rate_limit.py` | 14 | Decorateur rate limiting |
+| `modules/admin_router.py` | 506 | Routes admin (extrait de main.py) |
+| `modules/cohort/pathways.py` | 346 | Moteur pathways analysis |
+| `docker-compose.prod.yml` | 67 | Compose production durci |
+
+---
+
+## 5. Tests
+
+### Statistiques
+
+| Metrique | Avant (v1.0.1) | Apres (v1.1.0) | Delta |
+|----------|----------------|-----------------|-------|
+| **Tests backend** | 315 | 601 | +286 (+91%) |
+| **Tests frontend** | 10 | 94 | +84 |
+| **Total** | 325 | **685** | **+360 (+111%)** |
+| **Fichiers de tests backend** | 22 | 38 | +16 |
+| **Fichiers de tests frontend** | 1 | 7 | +6 |
+| **Coverage estimee** | ~60% | ~75%+ | +15pp |
+
+### Infrastructure de test
+
+- **`omop_mock.py`** : mock reutilisable de connexion psycopg2 avec sequences de reponses pre-configurees
+- **`README.md`** : documentation complete de l'architecture de test
+
+### Nouveaux fichiers de tests backend (16)
+
+| Fichier | Tests | Couverture |
+|---------|-------|------------|
+| `test_dashboard_domain.py` | Stats UNION ALL, sparklines, error recovery |
+| `test_person_domain.py` | Demographics, colonnes manquantes, NULLs |
+| `test_observation_period_domain.py` | 6 sous-analyses, cap mois, donnees vides |
+| `test_clinical_domain.py` | 5 helpers + orchestrateur tous domaines |
+| `test_report_builder.py` | Rapports HTML, comparaison, SVG |
+| `test_extractor.py` | SQL builder, identifiants, CTE, bucketing |
+| `test_cdm_helper.py` | Lookup CDM, auth, schema override |
+| `test_pathways_analysis.py` | Sunburst builder, pruning, chemins profonds |
+| `test_concept_set_api.py` | CRUD complet, ownership, filtres |
+| `test_estimation_router.py` | CRUD estimation |
+| `test_incidence_router.py` | CRUD incidence |
+| `test_datamanagement_router.py` | Tables, colonnes, statut taches |
+| `test_concept_router.py` | Recherche, details, hierarchie, domaines |
+| `test_incidence_engine.py` | compute_incidence, aggregate, poisson_ci |
+| `test_survival.py` | compute_km, median_survival, log_rank_test |
+| `test_role_access.py` | Tests IDOR : saved queries, cohorts, notifications, concept sets |
+| `test_i18n.py` | Parite cles EN/FR, endpoint |
+| `test_ws_manager.py` | WebSocket manager : connect, disconnect, broadcast |
+| `test_ws_endpoint.py` | Endpoint WS : auth, messages, reconnexion |
+| `test_ws_nginx.py` | Config nginx WebSocket |
+| `test_notification_preferences.py` | Preferences par type, mute/unmute |
+| `test_notifications.py` (enrichi) | +400 lignes : delete, bulk, preferences |
+| `test_pagination_gaps.py` | Pagination limit/offset sur tous les endpoints |
+| `test_concept_cache.py` | TTL, eviction, invalidation cache |
+| `test_pathways.py` | Validation API, sunburst, pruning, collapse eras |
+
+### Nouveaux fichiers de tests frontend (6)
+
+| Fichier | Tests | Couverture |
+|---------|-------|------------|
+| `AnimatedList.test.tsx` | FadeIn, ScaleIn, CountUp : rendu, props, className |
+| `SkeletonPatterns.test.tsx` | Card, Stat, Table, Dashboard, List, Inline : structure |
+| `Empty.test.tsx` | 11 variantes, overrides titre/description/icone, children |
+| `ErrorState.test.tsx` | 5 variantes, detectErrorVariant(), retry/home |
+| `Toast.test.tsx` | success/error/info/warning, auto-dismiss, close, a11y |
+| `useTheme.test.ts` | Toggle dark/light, persistance localStorage, classe transition |
+
+---
+
+## 6. Infrastructure et DevOps
+
+### GitHub Actions CI (`.github/workflows/ci.yml`)
+
+4 jobs paralleles :
+
+| Job | Actions |
+|-----|---------|
+| `backend-tests` | Python 3.12, pip install, pytest + coverage, Codecov upload |
+| `frontend-build` | Node 20, npm ci, npm run build |
+| `frontend-tests` | Node 20, npm ci, vitest run |
+| `docker-build` | docker compose build (smoke test) |
+
+### Docker Compose durci
+
+| Changement | Detail |
+|-----------|--------|
+| Credentials parametrises | `POSTGRES_PASSWORD`, `SECRET_KEY` requis (`:?`) |
+| Resource limits | Backend 2G/2CPU, Frontend 512M, DB 1G, Keycloak 1G |
+| Port DB localhost | `127.0.0.1:${DB_EXTERNAL_PORT:-5434}:5432` |
+| Healthcheck Keycloak | TCP health check |
+| Hostnames parametrises | `EXTERNAL_HOSTNAME` pour CORS et Keycloak |
+
+### Nginx
+
+| Ajout | Detail |
+|-------|--------|
+| WebSocket proxy | `/api/ws/` avec headers `Upgrade`, timeout 24h |
+| SSE proxy | `/api/ohdsi/logs/` avec `proxy_buffering off` |
+| Security headers | CSP, HSTS, Permissions-Policy sur tous les assets |
+
+### Dependances ajoutees
+
+**Backend** :
+- `slowapi` — rate limiting
+- `alembic` — migrations de schema
+
+**Frontend** :
+- `framer-motion` — animations
+- `vitest` + `@testing-library/react` + `@testing-library/jest-dom` + `jsdom` — tests
+
+### Variables d'environnement ajoutees
+
+| Variable | Defaut | Description |
+|----------|--------|-------------|
+| `ENVIRONMENT` | `development` | Active les guards en production |
+| `ENCRYPTION_KEY` | — | Cle Fernet base64 (prioritaire sur fichier) |
+| `TESTING` | — | Desactive le rate limiter en mode test |
+| `EXTERNAL_HOSTNAME` | `localhost` | Hostname externe (CORS, Keycloak) |
+| `DB_EXTERNAL_PORT` | `5434` | Port externe PostgreSQL |
+
+---
+
+## 7. Commits detailles
+
+### Session 1 — 15 mars 2026
+
+| Hash | Description |
+|------|-------------|
+| `883ad1b` | Plan d'amelioration : audit complet (securite, perfs, archi, tests, DevOps) |
+| `8da9ed0` | Pathways Analysis : feature complete ATLAS-style |
+| `d6ec563` | Implementation P0/P1 : securite + optimisations + pool connexions + Alembic |
+| `55299f4` | Fix rate limiter : suppression default_limits, fix SAWarning |
+| `0dcfdec` | CHANGELOG session 1 |
+
+### Session 2 — 15-16 mars 2026
+
+| Hash | Description |
+|------|-------------|
+| `41a7128` | Audit V2 : 54 findings |
+| `e8207eb` | Audit V2 : +11 findings (65 total) |
+| `0b6df86` | Audit supplementaire round 2 |
+| `704a46c` | Audit V2 : +10 findings + path traversal critique (75 total) |
+| `05a7f75` | Audit V2 final : 80 findings |
+| `fca2476` | Plan quick wins (25 items) + rapport audit R2 |
+| `8bb8299` | **25 quick wins appliques** (P0/P1/P2) — 327 tests |
+| `3ea0750` | Plan quick wins R2 (20 items) |
+| `f1d768a` | **16 quick wins R2 appliques** — 327 tests |
+| `a7491de` | **Quick wins R3** : securite, perfs, archi, tests |
+| `5d45352` | Rapport de verification R2 |
+| `6cdb46c` | .gitignore : .coverage et htmlcov/ |
+| `145f56f` | **114 nouveaux tests** — 477 total, coverage 60→75%+ |
+| `d316cda` | Rapport de verification R3 |
+| `8771fd9` | **Gaps R2/R3** : pagination, cache, admin refactor, SSE cleanup |
+
+### Session 3 — 16-18 mars 2026
+
+| Hash | Description |
+|------|-------------|
+| `7d78c53` | **Notifications temps reel** : WebSocket endpoint, manager, preferences |
+| `2e185b6` | **Zero polling** : suppression complete du polling, pur WebSocket |
+| `080dadc` | **Nginx WebSocket** : proxy + CSP |
+| `7a51939` | 71 tests : WebSocket, notifications, cache, pagination |
+| `8ea5889` | Documentation WebSocket + tests supplementaires |
+| `08e5b7b` | Mockup theme clair : 3 palettes |
+| `cb1265a` | Rebuild mockup avec layout TopNav |
+| `e0f747b` | **Theme Creme Sauge** : implementation complete |
+| `ae11f5e` | Mockup palette finale + comparaison dark/light |
+| `806fda8` | Ajustement surfaces creme (plus foncees pour mobile) |
+| `1145ce0` | **Hardening securite** : access checks, pinning deps, Alembic migration, prod compose |
+| `942353f` | **Micro-animations** : AnimatedList, skeletons, ErrorState, Empty, Toast, transitions |
+| `c14c08a` | **84 tests frontend** : tous les nouveaux composants UI |
+
+---
+
+## 8. Fichiers crees et modifies
+
+### Nouveaux fichiers (50+)
+
+#### Backend — Modules
+| Fichier | Lignes | Role |
+|---------|--------|------|
+| `modules/admin_router.py` | 506 | Routes admin (extrait de main.py) |
+| `modules/cohort/pathways.py` | 346 | Moteur pathways analysis |
+| `utils/ws_manager.py` | 129 | WebSocket connection manager |
+| `utils/cdm_helper.py` | 67 | Helper centralise connexion CDM |
+| `utils/csv_safety.py` | 9 | Protection injection CSV |
+| `utils/rate_limit.py` | 14 | Decorateur rate limiting |
+| `utils/sql_safety.py` | 28 | Validation identifiants SQL |
+
+#### Backend — Tests (16 nouveaux fichiers)
+| Fichier | Lignes |
+|---------|--------|
+| `tests/omop_mock.py` | 106 |
+| `tests/test_dashboard_domain.py` | 131 |
+| `tests/test_person_domain.py` | 120 |
+| `tests/test_observation_period_domain.py` | 114 |
+| `tests/test_clinical_domain.py` | 236 |
+| `tests/test_report_builder.py` | 211 |
+| `tests/test_extractor.py` | 204 |
+| `tests/test_cdm_helper.py` | 114 |
+| `tests/test_pathways_analysis.py` | 91 |
+| `tests/test_concept_set_api.py` | 139 |
+| `tests/test_estimation_router.py` | 88 |
+| `tests/test_incidence_router.py` | 84 |
+| `tests/test_datamanagement_router.py` | 109 |
+| `tests/test_concept_router.py` | 161 |
+| `tests/test_incidence_engine.py` | 111 |
+| `tests/test_survival.py` | 118 |
+| `tests/test_role_access.py` | 116 |
+| `tests/test_i18n.py` | 65 |
+| `tests/test_ws_manager.py` | 342 |
+| `tests/test_ws_endpoint.py` | 373 |
+| `tests/test_ws_nginx.py` | 207 |
+| `tests/test_notification_preferences.py` | 163 |
+| `tests/test_pagination_gaps.py` | 152 |
+| `tests/test_concept_cache.py` | 124 |
+| `tests/test_pathways.py` | 199 |
+| `tests/README.md` | 184 |
+
+#### Backend — Infrastructure
+| Fichier | Lignes |
+|---------|--------|
+| `alembic.ini` | 149 |
+| `alembic/env.py` | 61 |
+| `alembic/script.py.mako` | 28 |
+| `alembic/versions/26a4acfe5afa_initial_schema.py` | 375 |
+| `requirements-dev.txt` | 4 |
+
+#### Frontend — Composants
+| Fichier | Lignes |
+|---------|--------|
+| `components/NotificationCenter.tsx` | 274 |
+| `components/cohort/PathwaysPanel.tsx` | 826 |
+| `components/ui/AnimatedList.tsx` | 146 |
+| `components/ui/ErrorState.tsx` | 149 |
+| `components/ui/SkeletonPatterns.tsx` | 108 |
+| `hooks/useNotificationWs.ts` | 113 |
+| `hooks/useTheme.ts` | 51 |
+| `theme/tokens.ts` | 52 |
+
+#### Frontend — Tests
+| Fichier | Lignes |
+|---------|--------|
+| `components/ui/AnimatedList.test.tsx` | 68 |
+| `components/ui/Empty.test.tsx` | 99 |
+| `components/ui/ErrorState.test.tsx` | 127 |
+| `components/ui/SkeletonPatterns.test.tsx` | 104 |
+| `components/ui/Toast.test.tsx` | 144 |
+| `hooks/useTheme.test.ts` | 66 |
+
+#### Infrastructure
+| Fichier | Lignes |
+|---------|--------|
+| `.github/workflows/ci.yml` | 66 |
+| `docker-compose.prod.yml` | 67 |
+
+### Fichiers supprimes
+
+| Fichier | Raison |
+|---------|--------|
+| `frontend/src/pages/LandingPage.tsx` | Page inutilisee (524 lignes) |

@@ -16,10 +16,13 @@ Ce document decrit l'architecture interne, les choix de conception, le modele de
 8. [Generateur SQL de cohortes](#8-generateur-sql-de-cohortes)
 9. [Moteur de suggestions de mapping](#9-moteur-de-suggestions-de-mapping)
 10. [Integration OHDSI](#10-integration-ohdsi)
-11. [Audit et tracabilite](#11-audit-et-tracabilite)
-12. [Infrastructure Docker](#12-infrastructure-docker)
-13. [Tests](#13-tests)
-14. [Deploiement en production](#14-deploiement-en-production)
+11. [Notifications temps reel (WebSocket)](#11-notifications-temps-reel-websocket)
+12. [Pathways Analysis](#12-pathways-analysis)
+13. [Theme et UI](#13-theme-et-ui)
+14. [Audit et tracabilite](#14-audit-et-tracabilite)
+15. [Infrastructure Docker](#15-infrastructure-docker)
+16. [Tests](#16-tests)
+17. [Deploiement en production](#17-deploiement-en-production)
 
 ---
 
@@ -49,40 +52,51 @@ Le fichier `main.py` configure l'application FastAPI :
 2. Enregistrement du middleware CORS
 3. Enregistrement conditionnel du middleware Keycloak (`AUTH_ENABLED`)
 4. Enregistrement du middleware d'audit
-5. Inclusion des 18 routers de modules
-6. Endpoints systeme directs (health, i18n, auth, audit, admin, access-requests)
+5. Inclusion des 19 routers de modules
+6. Endpoints systeme directs (health, i18n, auth)
+7. GZip middleware (compression > 1000 bytes)
 
 ### Organisation des modules
 
 ```
 backend/
-├── main.py                    # App FastAPI + endpoints systeme (18 routers)
+├── main.py                    # App FastAPI + endpoints systeme (19 routers)
 ├── config.py                  # Configuration (env vars + DOMAIN_CONFIG)
+├── alembic/                   # Migrations de schema (Alembic)
+│   └── versions/              # Fichiers de migration
 ├── auth/
-│   ├── keycloak.py            # Middleware OIDC + RBAC
+│   ├── keycloak.py            # Middleware ASGI OIDC + RBAC
 │   └── permissions.py         # Permissions YAML loader
 ├── permissions.yaml           # Matrice RBAC declarative
 ├── audit/
-│   └── logger.py              # Middleware d'audit (trace requetes)
+│   └── logger.py              # Middleware d'audit (masquage params sensibles)
 ├── db/
 │   ├── app_db.py              # SQLAlchemy engine + session factory
-│   ├── models.py              # 21 modeles ORM
-│   └── omop_connector.py      # Connexions psycopg2 aux CDM
+│   ├── models.py              # 22 modeles ORM (+ NotificationPreference)
+│   └── omop_connector.py      # Pool de connexions psycopg2 aux CDM
 ├── utils/
 │   ├── crypto.py              # Chiffrement/dechiffrement Fernet
-│   └── notifications.py       # Systeme de notifications
+│   ├── notifications.py       # Systeme de notifications (DB + WebSocket push)
+│   ├── ws_manager.py          # WebSocket connection manager
+│   ├── cdm_helper.py          # Helper centralise connexion CDM
+│   ├── sql_safety.py          # Validation identifiants SQL (safe_identifier)
+│   ├── csv_safety.py          # Protection injection formules CSV
+│   └── rate_limit.py          # Decorateur rate limiting
 ├── modules/
+│   ├── admin_router.py        # /api/admin/ (extrait de main.py)
 │   ├── cdm_router.py          # /api/cdm/
 │   ├── cdm_access_router.py   # /api/cdm-access/
 │   ├── quality/
 │   │   ├── router.py          # /api/quality/
 │   │   ├── engine.py          # Orchestration des analyses
 │   │   ├── comparator.py      # Comparaison inter-CDM
+│   │   ├── report_builder.py  # Generation rapports HTML/PDF
 │   │   ├── conformity.py      # Conformite des donnees
 │   │   └── domains/           # SQL par domaine
 │   ├── cohort/
 │   │   ├── router.py          # /api/cohorts/
 │   │   ├── sql_builder.py     # JSON criteres -> SQL
+│   │   ├── pathways.py        # Pathways Analysis (parcours de soins)
 │   │   ├── characterization.py # Table 1
 │   │   └── comparison.py      # Comparaison SMD
 │   ├── mapping/
@@ -101,7 +115,7 @@ backend/
 │   ├── datamanagement/
 │   │   ├── router.py          # /api/datamanagement/
 │   │   └── extractor.py       # Extraction de donnees
-│   ├── notifications_router.py    # /api/notifications/
+│   ├── notifications_router.py    # /api/notifications/ + /api/ws/notifications
 │   ├── favorites_router.py        # /api/favorites/
 │   ├── saved_queries_router.py    # /api/saved-queries/
 │   ├── cohort_templates_router.py # /api/cohort-templates/
@@ -109,9 +123,9 @@ backend/
 │   ├── search_router.py          # /api/search/
 │   └── groups_router.py          # /api/groups/
 ├── i18n/
-│   ├── en.json                # Traductions EN
-│   └── fr.json                # Traductions FR
-└── tests/                     # 22 fichiers de tests
+│   ├── en.json                # Traductions EN (cache au demarrage)
+│   └── fr.json                # Traductions FR (cache au demarrage)
+└── tests/                     # 38 fichiers de tests (601 tests)
 ```
 
 ### Configuration (`config.py`)
@@ -195,6 +209,7 @@ Configuration via variables d'environnement :
 | TypeScript 5 | Typage statique |
 | Vite 5 | Build / dev server (HMR) |
 | Composants Neumorphic custom | Design system (Card, Select, Tabs, Checkbox) |
+| Framer Motion | Micro-animations (listes, transitions, compteurs) |
 | Lucide React | Icones |
 | CodeMirror 6 | Editeur SQL |
 | Recharts | Visualisations (Bar, Line, Pie, Area) |
@@ -202,6 +217,7 @@ Configuration via variables d'environnement :
 | React Router 6 | Routing SPA |
 | i18next | Internationalisation (FR/EN) |
 | keycloak-js | Client OIDC |
+| Vitest + Testing Library | Tests unitaires et composants (84 tests) |
 
 ### Architecture
 
@@ -215,10 +231,22 @@ src/
 │   └── client.ts             # Client Axios organise par module
 ├── types/
 │   └── index.ts              # Interfaces TypeScript partagees
-├── hooks/                     # Hooks custom (useNotifDots, useSessionState, useIsMobile)
+├── hooks/                     # Hooks custom
+│   ├── useNotifDots.ts        # Pastilles notification (WebSocket)
+│   ├── useNotificationWs.ts   # Hook WebSocket notifications
+│   ├── useTheme.ts            # Toggle dark/light + persistance
+│   ├── useSessionState.ts     # Etat session en memoire
+│   └── useIsMobile.ts         # Detection mobile
+├── theme/
+│   └── tokens.ts              # Design tokens (couleurs, ombres, dark/light)
 ├── i18n/                      # Traductions
-├── pages/                     # 16 pages
-└── components/                # Composants reutilisables (layout, ui, quality, cohort)
+├── pages/                     # 15 pages
+└── components/                # Composants reutilisables
+    ├── layout/                # Sidebar, TopNav
+    ├── NotificationCenter.tsx # Drawer notifications temps reel
+    ├── ui/                    # Composants Neumorphic + animations + skeletons
+    ├── quality/               # Composants analyse qualite
+    └── cohort/                # Composants cohorte (+ PathwaysPanel.tsx)
 ```
 
 ### Client API (`api/client.ts`)
@@ -259,11 +287,18 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
 
 ### Theme et style
 
-- Design system **Neumorphic Emerald Night** entierement custom (pas de framework UI externe)
+- Design system **Neumorphic** entierement custom (pas de framework UI externe)
 - Composants UI dans `components/ui/` : Card, Select, Tabs, Checkbox avec effets neumorphiques
-- Theme CSS dans `opal-theme.css` (couleur primaire : `#2bc459`, fond sombre)
-- Mode sombre natif avec persistance `localStorage`
+- Theme CSS dans `opal-theme.css` (couleur primaire : `#2bc459`)
+- **Deux modes** : sombre (Emerald Night, defaut) et clair (Creme Sauge `#EDE7D9`)
+- Toggle dans TopNav avec persistance `localStorage`, transition fluide 0.4s
+- Anti-flash : script dans `index.html` applique le theme avant le premier paint
 - Design responsive (sidebar collapsible, drawers mobiles)
+- **Micro-animations** : AnimatedList, FadeIn, ScaleIn, CountUp (Framer Motion)
+- **Skeleton loaders** contextuels : CardSkeleton, TableSkeleton, DashboardSkeleton
+- **Etats d'erreur riches** : 5 variantes avec detection automatique
+- **Etats vides** : 11 variantes predefinies avec animations
+- **Toast** : animations spring, countdown progress bar
 
 ---
 
@@ -427,9 +462,21 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
 | `mapping_decisions` | Index composite | `(cdm_name, domain, source_value)` |
 | `notifications` | Index composite | `(username, read)` |
 
+```
+┌──────────────────────────┐
+│ notification_preferences │
+├──────────────────────────┤
+│ id         PK serial     │
+│ username   idx           │
+│ notification_type varchar│
+│ enabled    boolean       │
+│ created_at timestamp     │
+└──────────────────────────┘
+```
+
 ### Conventions
 
-- Pas de systeme de migrations : `create_all()` est idempotent
+- Migrations gerees via **Alembic** (migration initiale : 22 tables + index)
 - Les resultats d'analyse sont stockes en JSON dans `analysis_snapshots.results`
 - Les criteres de cohorte sont stockes en JSON dans `cohort_versions.criteria_json`
 - Index composites sur les colonnes frequemment filtrees ensemble (voir tableau ci-dessus)
@@ -579,11 +626,32 @@ En plus du middleware qui filtre les routes via `permissions.yaml`, chaque endpo
 
 > Meme si le middleware est contourne ou mal configure, les endpoints refusent les appels non autorises avec une **403 Forbidden**.
 
-### Protection contre les injections
+### Protection contre les injections SQL
 
-- Toutes les requetes SQL vers les CDM utilisent des parametres lies (`%s` avec psycopg2)
+- Toutes les requetes SQL vers les CDM utilisent `psycopg2.sql.SQL` + `sql.Identifier` pour les identifiants (schema, table, colonne) — plus aucune f-string SQL
+- Les parametres de valeur utilisent des placeholders `%s` avec binding psycopg2
+- `safe_identifier()` (`utils/sql_safety.py`) valide les identifiants contre `^[A-Za-z_][A-Za-z0-9_]*$` en defense supplementaire
 - L'editeur SQL du constructeur de cohortes n'accepte que `SELECT`, `WITH` et `EXPLAIN`
 - Les noms de schema et tables sont valides contre `DOMAIN_CONFIG`
+- Protection ILIKE : les wildcards (`%`, `_`) dans les recherches sont echappes
+
+### Protection SSRF
+
+- Les hosts CDM sont valides lors de l'enregistrement : rejet de localhost, IPs privees/link-local/multicast, metadata cloud (`169.254.169.254`, `metadata.google.internal`)
+- Resolution DNS des hostnames avec verification de l'IP resolue
+
+### Protection IDOR
+
+- Verification d'ownership sur toutes les ressources utilisateur (notifications, saved queries, concept sets, cohort templates, cohorts)
+- Les non-admin ne voient que leurs propres groupes
+
+### Rate limiting
+
+- `slowapi` avec limites par endpoint :
+  - `/api/access-requests` : 5/min
+  - `/api/auth/sse-ticket` : 10/min
+  - Endpoints de compute (analyse, conformite, pathways) : 3/min
+- Desactive en mode test (`TESTING=1`)
 
 ---
 
@@ -921,7 +989,188 @@ Les resultats OHDSI sont ecrits dans un volume monte. Le navigateur de fichiers 
 
 ---
 
-## 11. Audit et tracabilite
+## 11. Notifications temps reel (WebSocket)
+
+### Architecture
+
+```
+Client (navigateur)
+    │
+    ├── useNotificationWs hook
+    │   ├── Demande ticket SSE (POST /api/auth/sse-ticket)
+    │   ├── Ouvre WebSocket (GET /api/ws/notifications?ticket=xxx)
+    │   ├── Reconnexion auto avec backoff exponentiel
+    │   └── Dispatch evenement 'opal:notification' au DOM
+    │
+    ▼
+Backend (FastAPI)
+    │
+    ├── WebSocket endpoint (main.py)
+    │   ├── Valide le ticket SSE (usage unique, TTL 30s)
+    │   ├── Enregistre la connexion dans WebSocketManager
+    │   └── Boucle de reception (keepalive)
+    │
+    ├── WebSocketManager (utils/ws_manager.py)
+    │   ├── Connexions par utilisateur (dict[str, list[WebSocket]])
+    │   ├── Connexions par role (dict[str, list[WebSocket]])
+    │   ├── send_to_user(username, data) → broadcast personnel
+    │   ├── send_to_role(role, data) → broadcast par role
+    │   └── Gestion propre des deconnexions
+    │
+    └── notify() helper (utils/notifications.py)
+        ├── Insert en DB (Notification model)
+        ├── Verifie les preferences (NotificationPreference)
+        └── Push WebSocket instantane via WebSocketManager
+```
+
+### Types de notification
+
+| Type | Declencheur | Destinataire |
+|------|------------|--------------|
+| `cohort_shared` | Partage de cohorte | Utilisateur cible |
+| `access_request` | Demande d'acces | Admins (par role) |
+| `access_granted` | Attribution d'acces CDM | Utilisateur cible |
+| `access_revoked` | Revocation d'acces CDM | Utilisateur cible |
+| `cdm_created` | Creation CDM | Admins + data-managers |
+| `cdm_updated` | Modification CDM | Admins + data-managers |
+| `cdm_deleted` | Suppression CDM | Admins + data-managers |
+| `mapping_applied` | Application mapping | Admins + data-managers |
+| `cohort_deleted` | Suppression cohorte | Utilisateurs partages |
+| `cohort_updated` | Modification cohorte | Utilisateurs partages |
+| `group_removed` | Retrait d'un groupe | Membre retire |
+
+### Preferences
+
+Les utilisateurs peuvent muter des types de notification specifiques via `POST /api/notifications/preferences`. Le helper `notify()` verifie les preferences avant d'envoyer.
+
+### Nettoyage
+
+Un thread daemon purge les notifications lues datant de plus de 30 jours.
+
+### Configuration Nginx
+
+```nginx
+location /api/ws/ {
+    proxy_pass http://opal-backend:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+}
+```
+
+---
+
+## 12. Pathways Analysis
+
+### Methodologie
+
+Basee sur l'approche OHDSI ATLAS (Hripcsak et al. 2016) : analyse des sequences de traitements des patients d'une cohorte.
+
+### Architecture (`modules/cohort/pathways.py`)
+
+```
+POST /api/cohorts/pathways
+    │
+    ├── 1. Materialiser la cohorte cible (table temp _pw_target)
+    │      └── Reutilise build_cohort_sql() du sql_builder
+    │
+    ├── 2. Collecter les evenements par event cohort
+    │      ├── Requete les tables OMOP (drug_exposure, condition_occurrence, etc.)
+    │      ├── Support include_descendants via concept_ancestor
+    │      └── Extraction (person_id, start_date, end_date, event_name)
+    │
+    ├── 3. Collapse en eras
+    │      └── Fusion des intervalles chevauchants d'un meme evenement
+    │         (fenetre configurable : combo_window jours)
+    │
+    ├── 4. Construction des sequences
+    │      ├── Ordonnancement des eras par date de debut
+    │      └── Troncature a max_depth etapes
+    │
+    ├── 5. Aggregation
+    │      ├── Comptage des sequences identiques
+    │      └── Calcul des pourcentages
+    │
+    └── 6. Construction de l'arbre sunburst
+           ├── Structure hierarchique {name, value, children}
+           ├── Elagage automatique (min_cell_count)
+           └── Attribution de couleurs par evenement
+```
+
+### Execution asynchrone
+
+L'analyse s'execute en tache de fond (FastAPI `BackgroundTasks`) avec progression reportee via un dict en memoire `_pathways_tasks`.
+
+| Endpoint | Methode | Description |
+|----------|---------|-------------|
+| `/api/cohorts/pathways` | POST | Lance l'analyse |
+| `/api/cohorts/pathways/status/{task_id}` | GET | Polling statut + resultats |
+| `/api/cohorts/pathways/cancel/{task_id}` | POST | Annulation |
+
+---
+
+## 13. Theme et UI
+
+### Systeme de themes
+
+OPAL propose deux themes selectionables via le hook `useTheme` :
+
+| Theme | Palette | Fond | Accent |
+|-------|---------|------|--------|
+| **Dark** (Emerald Night) | Vert emeraude | `#1a1a2e` | `#2bc459` |
+| **Light** (Creme Sauge) | Creme/sauge | `#EDE7D9` | `#8FAE6B` |
+
+Le theme est gere par :
+- Variables CSS `[data-theme="light"]` dans `opal-theme.css`
+- Hook `useTheme` avec persistance `localStorage`
+- Script anti-flash dans `index.html`
+- Transition CSS 0.4s via classe `.opal-theme-transitioning`
+- `tokens.ts` : exports `lightColors` et `lightShadows`
+
+### Composants d'animation
+
+| Composant | Description | Dependance |
+|-----------|-------------|------------|
+| `AnimatedList` | Listes avec apparition stagger | Framer Motion |
+| `FadeIn` | Fondu d'entree pour sections | Framer Motion |
+| `ScaleIn` | Pop-in pour cartes | Framer Motion |
+| `CountUp` | Animation de compteur numerique | Framer Motion |
+
+### Skeleton loaders
+
+| Composant | Usage |
+|-----------|-------|
+| `CardSkeleton` | Cartes en chargement |
+| `StatSkeleton` | Statistiques en chargement |
+| `TableSkeleton` | Tableaux en chargement |
+| `DashboardSkeleton` | Dashboard complet |
+| `ListSkeleton` | Listes en chargement |
+
+### Etats d'erreur (`ErrorState.tsx`)
+
+5 variantes avec detection automatique via `detectErrorVariant()` :
+- `network` : erreur reseau
+- `server` : erreur serveur (5xx)
+- `forbidden` : acces refuse (403)
+- `not-found` : ressource introuvable (404)
+- `generic` : erreur generique
+
+### CSS micro-interactions
+
+| Classe | Effet |
+|--------|-------|
+| `.opal-pressable` | Scale au clic |
+| `.bell-ring` | Animation de cloche |
+| `.shimmer` | Effet de brillance |
+| `.skeleton-wave` | Onde de chargement |
+| `.success-flash` | Flash de succes |
+| `.number-pop` | Pop de nombre |
+
+---
+
+## 14. Audit et tracabilite
 
 ### Middleware d'audit (`audit/logger.py`)
 
@@ -957,7 +1206,7 @@ Les decisions de mapping incluent un audit trail complet dans la table `mapping_
 
 ---
 
-## 12. Infrastructure Docker
+## 15. Infrastructure Docker
 
 ### docker-compose.yml
 
@@ -982,13 +1231,23 @@ Tous les services partagent le reseau Docker `opal-network`. Les noms de service
 | `opal_data` | Cle de chiffrement | `.secret_key` |
 | `opal_keycloak_data` | Donnees Keycloak | Utilisateurs, sessions |
 
+### docker-compose.prod.yml (production)
+
+Le fichier `docker-compose.prod.yml` ajoute les durcissements suivants :
+- Keycloak en mode production (`start` au lieu de `start-dev`)
+- PostgreSQL pour persistence Keycloak (remplace H2 en memoire)
+- Socket Docker retire
+- Ports bindes sur localhost uniquement
+- Variables d'environnement requises (`:?`)
+- Limites de ressources (CPU/RAM)
+
 ### Health checks
 
 Le backend expose `GET /api/health` utilise comme health check Docker.
 
 ---
 
-## 13. Tests
+## 16. Tests
 
 ### Configuration de test (`conftest.py`)
 
@@ -1003,14 +1262,21 @@ Base.metadata.create_all(bind=engine)
 app.dependency_overrides[get_db] = override_get_db
 ```
 
-### Couverture de tests (22 fichiers)
+### Infrastructure de test
+
+- **`omop_mock.py`** : Mock reutilisable de connexion psycopg2 avec sequences de reponses pre-configurees (dict→fetchone, list→fetchall, Exception→erreur)
+- **`README.md`** : Documentation complete de l'architecture de test
+
+### Couverture de tests (38 fichiers, 601 tests backend + 84 frontend)
+
+#### Tests existants (v1.0)
 
 | Fichier | Couverture |
 |---------|-----------|
 | `test_api.py` | CDM CRUD, quality endpoints |
 | `test_engine.py` | Moteur d'analyse (mocks psycopg2) |
 | `test_comparator.py` | Logique de comparaison |
-| `test_crypto.py` | Chiffrement/dechiffrement |
+| `test_crypto.py` | Chiffrement/dechiffrement + DecryptionError |
 | `test_cohort_api.py` | Cohort CRUD, SQL generation |
 | `test_mapping_api.py` | Mapping workflow, decisions |
 | `test_suggest.py` | Strategies de suggestion |
@@ -1026,22 +1292,68 @@ app.dependency_overrides[get_db] = override_get_db
 | `test_conformity.py` | Conformite des donnees |
 | `test_favorites.py` | Favoris |
 | `test_groups.py` | Groupes utilisateurs |
-| `test_notifications.py` | Notifications |
+| `test_notifications.py` | Notifications (enrichi +400 lignes) |
 | `test_saved_queries.py` | Requetes sauvegardees |
 | `test_search.py` | Recherche globale |
+
+#### Nouveaux tests (v1.1)
+
+| Fichier | Couverture |
+|---------|-----------|
+| `test_dashboard_domain.py` | Dashboard UNION ALL, sparklines, error recovery |
+| `test_person_domain.py` | Demographics, colonnes manquantes, NULLs |
+| `test_observation_period_domain.py` | 6 sous-analyses, cap mois, donnees vides |
+| `test_clinical_domain.py` | 5 helpers + orchestrateur tous domaines |
+| `test_report_builder.py` | Rapports HTML, comparaison, SVG |
+| `test_extractor.py` | SQL builder, identifiants, CTE, bucketing |
+| `test_cdm_helper.py` | Lookup CDM, auth, schema override |
+| `test_pathways.py` | Validation API pathways |
+| `test_pathways_analysis.py` | Sunburst builder, pruning, chemins profonds |
+| `test_concept_router.py` | Recherche, details, hierarchie |
+| `test_concept_set_api.py` | CRUD, ownership, filtres |
+| `test_concept_cache.py` | TTL, eviction, invalidation cache |
+| `test_estimation_router.py` | CRUD estimation |
+| `test_incidence_router.py` | CRUD incidence |
+| `test_incidence_engine.py` | compute_incidence, aggregate, poisson_ci |
+| `test_survival.py` | compute_km, median_survival, log_rank_test |
+| `test_datamanagement_router.py` | Tables, colonnes, statut taches |
+| `test_role_access.py` | RBAC defense en profondeur + IDOR |
+| `test_i18n.py` | Parite cles EN/FR, endpoint |
+| `test_ws_manager.py` | WebSocket manager : connect, broadcast |
+| `test_ws_endpoint.py` | Endpoint WS : auth, messages |
+| `test_ws_nginx.py` | Config nginx WebSocket |
+| `test_notification_preferences.py` | Preferences par type |
+| `test_pagination_gaps.py` | Pagination limit/offset |
+
+#### Tests frontend (6 fichiers, 84 tests)
+
+| Fichier | Couverture |
+|---------|-----------|
+| `AnimatedList.test.tsx` | FadeIn, ScaleIn, CountUp |
+| `SkeletonPatterns.test.tsx` | Card, Stat, Table, Dashboard, List |
+| `Empty.test.tsx` | 11 variantes, overrides |
+| `ErrorState.test.tsx` | 5 variantes, detection automatique |
+| `Toast.test.tsx` | 4 types, auto-dismiss, a11y |
+| `useTheme.test.ts` | Toggle, persistance, transition |
 
 ### Execution
 
 ```bash
+# Backend (601 tests)
 cd backend
-pytest tests/ -v              # Tous les tests
-pytest tests/test_api.py -v   # Un fichier specifique
+pip install -r requirements-dev.txt
+pytest tests/ -v                          # Tous les tests
+pytest tests/test_api.py -v               # Un fichier specifique
 pytest tests/test_api.py::test_function -v  # Un test specifique
+
+# Frontend (84 tests)
+cd frontend
+npx vitest run
 ```
 
 ---
 
-## 14. Deploiement en production
+## 17. Deploiement en production
 
 ### Installation pas-a-pas
 

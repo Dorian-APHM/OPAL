@@ -32,12 +32,17 @@ npm run build     # Production build via Vite
 
 ### Testing
 ```bash
+# Backend (601 tests)
 cd backend
 pytest tests/ -v              # Run all backend tests
 pytest tests/test_api.py -v   # Run a single test file
 pytest tests/test_api.py::test_function_name -v  # Run a single test
+
+# Frontend (84 tests)
+cd frontend
+npx vitest run
 ```
-Tests use SQLite in-memory via `conftest.py` which overrides `DATABASE_URL` and the FastAPI `get_db` dependency. No external database needed for tests.
+Tests use SQLite in-memory via `conftest.py` which overrides `DATABASE_URL` and the FastAPI `get_db` dependency. OMOP connections are mocked via `tests/omop_mock.py`. No external database needed for tests.
 
 ## Architecture
 
@@ -60,22 +65,23 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Database layer** (`db/`):
 - `app_db.py` — SQLAlchemy engine/session for the internal app database (pool_size, max_overflow, pool_recycle configurable via env vars)
-- `models.py` — 21 models with composite indexes on frequently-filtered columns: `AnalysisSnapshot(cdm_name, domain, version)`, `CohortVersion(cohort_id, version)`, `MappingDecision(cdm_name, domain, source_value)`, `Notification(username, read)`
+- `models.py` — 22 models with composite indexes on frequently-filtered columns: `AnalysisSnapshot(cdm_name, domain, version)`, `CohortVersion(cohort_id, version)`, `MappingDecision(cdm_name, domain, source_value)`, `Notification(username, read)`, `NotificationPreference(username, type)`
 - `omop_connector.py` — Per-CDM `ThreadedConnectionPool` for external OMOP CDM connections. `PooledConnection` wrapper makes `close()` return to pool transparently. Pools auto-evicted after 30min idle, invalidated on CDM update/delete.
 
-**Modules** (`modules/`) — 18 routers:
+**Modules** (`modules/`) — 19 routers:
+- `admin_router.py` — User management, access requests (`/api/admin/`)
 - `cdm_router.py` — CDM registration CRUD, connection testing, settings management (`/api/cdm/`)
 - `quality/router.py` + `quality/engine.py` — Quality analysis with Achilles-like metrics, snapshot versioning, comparison, CSV export (`/api/quality/`)
-- `cohort/router.py` + `cohort/sql_builder.py` — Visual cohort builder, JSON criteria → SQL generation, attrition analysis, patient sampling (`/api/cohorts/`)
+- `cohort/router.py` + `cohort/sql_builder.py` + `cohort/pathways.py` — Visual cohort builder, JSON criteria → SQL generation, attrition analysis, pathways analysis (`/api/cohorts/`)
 - `mapping/router.py` + `mapping/suggest.py` — Mapping workflow with 6 suggestion strategies (SapBERT, exact, relationship, keyword, fuzzy, contextual), audit trail (`/api/mapping/`)
-- `concept/router.py` — Concept search, hierarchy navigation, source value lookup (`/api/concepts/`)
+- `concept/router.py` — Concept search, hierarchy navigation, source value lookup, TTL cache (`/api/concepts/`)
 - `ohdsi/router.py` — OHDSI Docker container orchestration (`/api/ohdsi/`)
 - `concept_set/router.py` — Concept set CRUD (`/api/concept-sets/`)
 - `incidence/router.py` — Incidence rate analysis (`/api/incidence/`)
 - `estimation/router.py` — Population-level estimation (`/api/estimation/`)
 - `datamanagement/router.py` — Data management and ETL monitoring (`/api/datamanagement/`)
 - `cdm_access_router.py` — Per-CDM user/group access control (`/api/cdm-access/`)
-- `notifications_router.py` — User notifications (`/api/notifications/`)
+- `notifications_router.py` — User notifications + WebSocket real-time (`/api/notifications/`, `/api/ws/notifications`)
 - `favorites_router.py` — User favorites (`/api/favorites/`)
 - `saved_queries_router.py` — Saved SQL queries (`/api/saved-queries/`)
 - `cohort_templates_router.py` — Cohort templates (`/api/cohort-templates/`)
@@ -83,19 +89,29 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - `cohort_sharing_router.py` — Cohort sharing between users (`/api/cohorts/`)
 - `groups_router.py` — User groups management (`/api/groups/`)
 
-**Security**: `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`.
+**Security**:
+- `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`
+- `utils/sql_safety.py` — SQL identifier validation (`safe_identifier()`)
+- `utils/csv_safety.py` — CSV formula injection protection
+- `utils/rate_limit.py` — Rate limiting decorator (slowapi)
+- `utils/ws_manager.py` — WebSocket connection manager for real-time notifications
+- `utils/cdm_helper.py` — Centralized CDM connection helper with safe_identifier
 
 **i18n**: `i18n/en.json` and `i18n/fr.json` — Translations cached at module load time (not read per-request). Served via `/api/i18n/{lang}`.
 
 ### Frontend (`frontend/`)
 
-**Stack**: React 18 + TypeScript + Vite + Custom Neumorphic UI components + Recharts + Lucide icons
+**Stack**: React 18 + TypeScript + Vite + Custom Neumorphic UI components + Framer Motion + Recharts + Lucide icons
 
 **Entry**: `src/main.tsx` → `src/App.tsx` — React Router with sidebar layout. Selected CDM stored in `localStorage` and passed as prop to all pages.
 
 **API client**: `src/api/client.ts` — Axios-based client organized by module (`cdmApi`, `qualityApi`, `cohortApi`, `mappingApi`, `conceptApi`). All requests go to `/api` prefix.
 
-**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`, `LandingPage`
+**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`
+
+**UI Components** (`src/components/ui/`): Neumorphic design system + `AnimatedList` (Framer Motion animations), `SkeletonPatterns` (contextual loaders), `ErrorState` (5 error variants), `Empty` (11 empty state variants), `Toast` (animated notifications)
+
+**Hooks**: `useTheme` (dark/light toggle), `useNotificationWs` (WebSocket real-time), `useNotifDots` (notification badges)
 
 **Types**: `src/types/index.ts` — Shared TypeScript interfaces for all API responses.
 
@@ -107,3 +123,8 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - Quality analysis snapshots are versioned for temporal comparison.
 - Cohort criteria use a JSON structure that gets converted to SQL by `sql_builder.py`.
 - Mapping suggestions use 6 ranked strategies: SapBERT (pre-computed), exact match, relationship-based, keyword, fuzzy text, contextual.
+- Notifications are delivered in **real-time via WebSocket** (zero polling). WebSocket connections are authenticated via one-time SSE tickets.
+- The app supports **dark mode** (Emerald Night, default) and **light mode** (Crème Sauge palette). Theme persisted in `localStorage`.
+- **Pathways Analysis** implements OHDSI ATLAS-style treatment pathway visualization with interactive sunburst chart.
+- All SQL identifiers use `psycopg2.sql.SQL` + `sql.Identifier` — no f-string SQL anywhere.
+- Schema migrations managed by **Alembic** (initial migration covers 22 tables).
