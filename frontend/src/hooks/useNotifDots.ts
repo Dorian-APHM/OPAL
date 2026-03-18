@@ -16,18 +16,18 @@ import { notificationsApi } from '../api/client';
 
 export function useNotifDots(notifType: string) {
   const [unreadItems, setUnreadItems] = useState<Set<string>>(new Set());
-  const fetchingRef = useRef(false);
+  const fetchIdRef = useRef(0);
 
   const refresh = useCallback(() => {
-    if (fetchingRef.current) return;
-    fetchingRef.current = true;
+    const id = ++fetchIdRef.current;
     notificationsApi.items(notifType)
       .then(res => {
+        // Only apply if this is still the latest request (prevents stale state)
+        if (id !== fetchIdRef.current) return;
         const items = res.data.items[notifType] || [];
         setUnreadItems(new Set(items.map(i => i.item_id)));
       })
-      .catch(() => {})
-      .finally(() => { fetchingRef.current = false; });
+      .catch(() => {});
   }, [notifType]);
 
   // Initial fetch + periodic refresh via events

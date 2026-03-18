@@ -1040,8 +1040,8 @@ def cohort_characterize(req: CharacterizationRequest, request: Request, db: Sess
         finally:
             conn.close()
 
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"task_id": task_id, "status": "running"}
 
@@ -1171,8 +1171,8 @@ def cohort_pathways(req: PathwaysRequest, request: Request, db: Session = Depend
         finally:
             conn.close()
 
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"task_id": task_id, "status": "running"}
 

@@ -361,9 +361,9 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
         progress_q.put(None)  # sentinel — tells the SSE generator to stop
 
-    # Start the worker thread — it runs independently of the HTTP connection.
-    thread = _threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    # Start the worker in the bounded thread pool (P20 fix).
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     import asyncio as _asyncio
 
@@ -532,8 +532,8 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
             with _active_analyses_lock:
                 _active_analyses.pop(analysis_id, None)
 
-    thread = _threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"cdm_name": cdm_name, "analysis_id": analysis_id, "status": "started"}
 
@@ -585,17 +585,27 @@ def get_conformity(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.get("/snapshots/{cdm_name}/{domain}")
-def list_snapshots(cdm_name: str, domain: str, db: Session = Depends(get_db)):
-    """List all snapshots for a CDM/domain pair."""
-    snapshots = (
-        db.query(AnalysisSnapshot)
+def list_snapshots(
+    cdm_name: str,
+    domain: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """List snapshots for a CDM/domain pair (paginated, without heavy results column)."""
+    base = (
+        db.query(AnalysisSnapshot.id, AnalysisSnapshot.version, AnalysisSnapshot.created_at)
         .filter(AnalysisSnapshot.cdm_name == cdm_name, AnalysisSnapshot.domain == domain)
         .order_by(AnalysisSnapshot.version.desc())
-        .all()
     )
+    total = base.count()
+    snapshots = base.offset((page - 1) * page_size).limit(page_size).all()
     return {
         "cdm_name": cdm_name,
         "domain": domain,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
         "snapshots": [
             {
                 "id": s.id,

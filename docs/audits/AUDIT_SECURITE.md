@@ -13,7 +13,7 @@
 |----------|----------|---------------------------|-----------|
 | CRITIQUE | 5 | 4 | 1 |
 | HAUTE | 12 | 5 | 7 |
-| MOYENNE | 10 | 0 | 10 |
+| MOYENNE | 10 | 7 (M1, M4, M5, M6, M8, M9 + M2/M3 déjà) | 3 |
 | BASSE | 8 | 0 | 8 |
 | **Total** | **35** | **9** | **26** |
 
@@ -238,32 +238,48 @@ Permet le brute-force direct via Resource Owner Password Grant.
 
 ## MOYENNE
 
-### M1 — CSV injection incomplète
-**Fichier** : `backend/utils/csv_safety.py:4-9` — Ne vérifie que le premier caractère. `" =1+1"` passe.
+### M1 — CSV injection incomplète — CORRIGÉ ✓
+**Fichier** : `backend/utils/csv_safety.py:4-9`
 
-### M2 — `safe_identifier()` sans limite de longueur
-**Fichier** : `backend/utils/sql_safety.py:16-28` — PostgreSQL limite à 63 chars.
+**Correction** : `csv_safe()` strip les espaces avant de vérifier le premier caractère. `" =1+1"` → `"'=1+1"`.
 
-### M3 — Keycloak : pas de politique de mots de passe
-**Fichier** : `keycloak/opal-realm.json` — `passwordPolicies` absent.
+### M2 — `safe_identifier()` sans limite de longueur — CORRIGÉ ✓
+**Fichier** : `backend/utils/sql_safety.py:16-28`
 
-### M4 — JWT : pas de tolérance clock skew
-**Fichier** : `backend/auth/keycloak.py:266-287` — `jwt.decode()` sans `leeway`.
+**Correction** : Limite de 63 caractères ajoutée (déjà présent dans le code).
 
-### M5 — JWKS cache TTL trop long (1 heure)
+### M3 — Keycloak : pas de politique de mots de passe — CORRIGÉ ✓
+**Fichier** : `keycloak/opal-realm.json`
+
+**Correction** : `passwordPolicy` ajouté : `length(8) and digits(1) and upperCase(1) and specialChars(1)`.
+
+### M4 — JWT : pas de tolérance clock skew — CORRIGÉ ✓
+**Fichier** : `backend/auth/keycloak.py:266-287`
+
+**Correction** : `leeway=30` ajouté à `jwt.decode()` (30s de tolérance).
+
+### M5 — JWKS cache TTL trop long (1 heure) — CORRIGÉ ✓
 **Fichier** : `backend/auth/keycloak.py:28-29`
 
-### M6 — Nginx CSP : `unsafe-inline` pour les styles
+**Correction** : TTL réduit de 3600s à 300s (5 min).
+
+### M6 — Nginx CSP : `unsafe-inline` pour les styles — ATTÉNUÉ ✓
 **Fichier** : `frontend/nginx.conf:12`
+
+**Correction** : `frame-ancestors 'none'` ajouté, `style-src-attr 'unsafe-inline'` isolé. Note : `unsafe-inline` pour `style-src` reste nécessaire pour React inline styles et Tailwind.
 
 ### M7 — npm packages non pinnés (caret `^`)
 **Fichier** : `frontend/package.json`
 
-### M8 — Database URL avec credentials par défaut
-**Fichier** : `backend/config.py:18` — `postgresql://opal:opal@opal-db:5432/opal`
+### M8 — Database URL avec credentials par défaut — CORRIGÉ ✓
+**Fichier** : `backend/config.py`
 
-### M9 — `.dockerignore` n'exclut pas `.env*`
+**Correction** : `DATABASE_URL` n'a plus de default en production. `RuntimeError` levé si non défini en prod. Warning en dev.
+
+### M9 — `.dockerignore` n'exclut pas `.env*` — CORRIGÉ ✓
 **Fichiers** : `backend/.dockerignore`, `frontend/.dockerignore`
+
+**Correction** : `.env*` ajouté aux deux `.dockerignore`.
 
 ### M10 — Notifications : info disclosure CDM via `item_id`
 **Fichier** : `backend/modules/notifications_router.py`
