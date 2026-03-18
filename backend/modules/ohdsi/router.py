@@ -86,9 +86,11 @@ def _run_container(service_name: str, env_vars: dict) -> None:
     try:
         client = docker.from_env()
     except Exception as e:
+        import time as _time
         with _lock:
             _tasks[service_name]["status"] = "error"
             _tasks[service_name]["logs"].append(f"Docker connection error: {e}")
+            _tasks[service_name]["finished_at"] = _time.time()
         return
 
     image_name = _get_image_name(service_name)
@@ -97,11 +99,13 @@ def _run_container(service_name: str, env_vars: dict) -> None:
     try:
         client.images.get(image_name)
     except docker.errors.ImageNotFound:
+        import time as _time
         with _lock:
             _tasks[service_name]["status"] = "error"
             _tasks[service_name]["logs"].append(
                 f"Image '{image_name}' not found. Run 'docker compose build' in ohdsi-docker first."
             )
+            _tasks[service_name]["finished_at"] = _time.time()
         return
 
     service_cfg = SERVICES[service_name]
@@ -135,6 +139,7 @@ def _run_container(service_name: str, env_vars: dict) -> None:
             with _lock:
                 _tasks[service_name]["logs"].append(line)
 
+        import time as _time
         result = container.wait()
         exit_code = result.get("StatusCode", -1)
         with _lock:
@@ -144,13 +149,16 @@ def _run_container(service_name: str, env_vars: dict) -> None:
             else:
                 _tasks[service_name]["status"] = "error"
                 _tasks[service_name]["logs"].append(f"--- Failed (exit code {exit_code}) ---")
+            _tasks[service_name]["finished_at"] = _time.time()
 
         container.remove()
 
     except Exception as e:
+        import time as _time
         with _lock:
             _tasks[service_name]["status"] = "error"
             _tasks[service_name]["logs"].append(f"Error: {e}")
+            _tasks[service_name]["finished_at"] = _time.time()
 
 
 # ---------------------------------------------------------------------------

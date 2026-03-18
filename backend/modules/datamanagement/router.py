@@ -10,7 +10,10 @@ as cohort characterization / quality analysis).
 import csv
 import io
 import logging
+import os
+import tempfile
 import threading
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -280,8 +283,9 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
             "total": 3,  # count + preview + full CSV
             "current_step": "",
             "result": None,
-            "csv_data": None,
+            "csv_path": None,
             "csv_filename": None,
+            "completed_at": None,
             "error": None,
         }
 
@@ -348,27 +352,35 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                             row[k] = str(v)
             _progress(2, 3, "Fetching preview")
 
-            # Step 3: Build full CSV
+            # Step 3: Build full CSV — stream to temp file to avoid OOM
             _progress(2, 3, "Building CSV...")
-            csv_buf = io.StringIO()
-            writer = csv.writer(csv_buf)
-            with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
-                cur.itersize = 2000
-                cur.execute(extraction_sql)
-                # Named cursors: description is None until first fetch
-                first_row = cur.fetchone()
-                csv_columns = [desc[0] for desc in cur.description] if cur.description else []
-                writer.writerow(csv_columns)
-                if first_row:
-                    writer.writerow([
-                        v.isoformat() if hasattr(v, 'isoformat') else v
-                        for v in (first_row[col] for col in csv_columns)
-                    ])
-                for row in cur:
-                    writer.writerow([
-                        v.isoformat() if hasattr(v, 'isoformat') else v
-                        for v in (row[col] for col in csv_columns)
-                    ])
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".csv", prefix="opal_extract_")
+            try:
+                with os.fdopen(tmp_fd, "w", newline="", encoding="utf-8") as tmp_f:
+                    writer = csv.writer(tmp_f)
+                    with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
+                        cur.itersize = 2000
+                        cur.execute(extraction_sql)
+                        first_row = cur.fetchone()
+                        csv_columns = [desc[0] for desc in cur.description] if cur.description else []
+                        writer.writerow(csv_columns)
+                        if first_row:
+                            writer.writerow([
+                                v.isoformat() if hasattr(v, 'isoformat') else v
+                                for v in (first_row[col] for col in csv_columns)
+                            ])
+                        for row in cur:
+                            writer.writerow([
+                                v.isoformat() if hasattr(v, 'isoformat') else v
+                                for v in (row[col] for col in csv_columns)
+                            ])
+            except Exception:
+                # Clean up temp file on error
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             _progress(3, 3, "Done")
 
             filename = f"dataset_{cohort_name.replace(' ', '_')}_{cohort_id}.csv"
@@ -384,8 +396,9 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                         "cohort_name": cohort_name,
                         "sql": extraction_sql,
                     }
-                    task["csv_data"] = csv_buf.getvalue()
+                    task["csv_path"] = tmp_path
                     task["csv_filename"] = filename
+                    task["completed_at"] = time.time()
                     task["status"] = "completed"
 
             # Send notification
@@ -463,22 +476,36 @@ def extract_download_task(task_id: str):
     if task["status"] != "completed":
         raise HTTPException(status_code=400, detail="Extraction not yet completed")
 
-    csv_data = task.get("csv_data")
+    csv_path = task.get("csv_path")
     filename = task.get("csv_filename", "dataset.csv")
-    if not csv_data:
+    if not csv_path or not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="CSV data not available")
 
-    # Clean up after download — free memory
-    # Use a copy so cleanup doesn't race with the streaming response
-    with _extractions_lock:
-        _active_extractions.pop(task_id, None)
+    file_size = os.path.getsize(csv_path)
+
+    def _stream_and_cleanup():
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                while True:
+                    chunk = f.read(65536)  # 64KB chunks
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            # Clean up temp file and task entry after streaming
+            try:
+                os.unlink(csv_path)
+            except OSError:
+                pass
+            with _extractions_lock:
+                _active_extractions.pop(task_id, None)
 
     return StreamingResponse(
-        iter([csv_data]),
+        _stream_and_cleanup(),
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(len(csv_data.encode("utf-8"))),
+            "Content-Length": str(file_size),
         },
     )
 
@@ -490,6 +517,13 @@ def extract_cancel(task_id: str):
         task = _active_extractions.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    # Clean up temp file if present
+    csv_path = task.get("csv_path")
+    if csv_path:
+        try:
+            os.unlink(csv_path)
+        except OSError:
+            pass
     return {"status": "cancelled"}
 
 
