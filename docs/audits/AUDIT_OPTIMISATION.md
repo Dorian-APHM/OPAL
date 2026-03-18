@@ -13,7 +13,7 @@
 |----------|----------|-----------|-----------|
 | CRITIQUE | 5 | 3 (P1, P2, P3, P5) | 1 (P4) |
 | HAUTE | 9 | 1 (P14) | 8 |
-| MOYENNE | 10 | 3 (P16, P17, P18) | 7 |
+| MOYENNE | 10 | 8 (P15-P20, P22, P23) | 2 |
 | BASSE | 6 | 0 | 6 |
 | **Total** | **30** | **8** | **22** |
 
@@ -242,11 +242,11 @@ Sans `useMemo`, les charts Recharts re-render à chaque changement d'état, mêm
 
 ## MOYENNE
 
-### P15 — Requêtes cliniques : dual COUNT séquentiels au lieu d'un seul
+### P15 — Requêtes cliniques : dual COUNT séquentiels au lieu d'un seul — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/quality/domains/clinical.py:17-40`
 
-Deux requêtes séparées (`COUNT(*)` puis `COUNT(DISTINCT person_id)`) au lieu d'une seule combinée. Doublement du temps sur chaque domaine.
+**Correction** : Combiné en une seule requête `SELECT COUNT(*), COUNT(DISTINCT person_id)`. -50% temps par domaine.
 
 ### P16 — Pathways : ANALYZE manquant sur tables temporaires — CORRIGÉ ✓
 
@@ -269,15 +269,15 @@ Deux requêtes séparées (`COUNT(*)` puis `COUNT(DISTINCT person_id)`) au lieu 
 
 **Correction** : À la déconnexion, les sets de rôles vides sont détectés et supprimés (`del self._user_roles[role]`).
 
-### P19 — Statement timeout 5 min : trop long pour la plupart des opérations
+### P19 — Statement timeout 5 min : trop long pour la plupart des opérations — CORRIGÉ ✓
 
 **Fichier** : `backend/db/omop_connector.py:24`
 
-300 secondes = une requête malformée monopolise 1 connexion du pool pendant 5 min. Devrait être configurable par type d'opération (60s normal, 120s qualité, 180s pathways).
+**Correction** : Timeout configurable via `OMOP_STATEMENT_TIMEOUT_MS` (env var). Default toujours 300s mais ajustable par déploiement.
 
-### P20 — Thread pool exhaustion : pas de ThreadPoolExecutor borné
+### P20 — Thread pool exhaustion : pas de ThreadPoolExecutor borné — CORRIGÉ ✓
 
-Chaque analyse/extraction/suggestion spawne un thread daemon sans borne. 50+ opérations concurrentes = 50+ threads = context switching CPU.
+**Correction** : `utils/thread_pool.py` ajouté avec `ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)` (default 16, configurable). Les 7 modules (quality, cohort, mapping, datamanagement, ohdsi) utilisent maintenant `submit_task()` au lieu de `threading.Thread()`.
 
 ### P21 — ConceptExplorer : recherche sans debounce
 
@@ -285,17 +285,17 @@ Chaque analyse/extraction/suggestion spawne un thread daemon sans borne. 50+ op�
 
 `handleSearch` appelé directement sans debounce → API spam pendant la frappe.
 
-### P22 — AnimatedList : variants Framer Motion créées dans le `.map()`
+### P22 — AnimatedList : variants Framer Motion créées dans le `.map()` — CORRIGÉ ✓
 
 **Fichier** : `frontend/src/components/ui/AnimatedList.tsx:33-40`
 
-Nouvel objet variants créé pour chaque item de la liste à chaque render.
+**Correction** : Variants extraites en constante stable hors du `.map()`. Hot path (stagger=0.05) utilise un objet partagé (zero-alloc).
 
-### P23 — QueryCanvas : `collectAllCriteria()` non memoizé
+### P23 — QueryCanvas : `collectAllCriteria()` non memoizé — CORRIGÉ ✓
 
 **Fichier** : `frontend/src/components/cohort/QueryCanvas.tsx:37-53`
 
-Traversée récursive de l'arbre de critères (50+ items possibles) à chaque render sans memoization.
+**Correction** : `useMemo()` ajouté autour de `collectAllCriteria()` avec `[normInclusion, normExclusion]` comme deps.
 
 ### P24 — Pas de métriques de performance (Prometheus)
 
@@ -351,7 +351,7 @@ Basé sur l'analyse des patterns SQL générés :
 | 2 | Ne poller que quand une analyse tourne (P4) | 30 min | -99% requêtes idle | En attente |
 | 3 | Ajouter `manualChunks` dans Vite config (P14) | 15 min | -30% taille bundle | ✅ FAIT |
 | 4 | Ajouter debounce sur ConceptExplorer search (P21) | 10 min | -80% requêtes recherche | N/A (Enter-only) |
-| 5 | Combiner dual COUNT queries clinical (P15) | 15 min | -50% temps stats globales | En attente |
+| 5 | Combiner dual COUNT queries clinical (P15) | 15 min | -50% temps stats globales | ✅ FAIT |
 | 6 | `ANALYZE` sur tables temp pathways (P16) | 5 min | Plans d'exécution optimaux | ✅ FAIT |
 | 7 | Réduire intervalle evictor à 60s (P17) | 2 min | -40 connexions zombies | ✅ FAIT |
 | 8 | Nettoyer `_user_roles` vides (P18) | 5 min | Prévient fuite mémoire | ✅ FAIT |

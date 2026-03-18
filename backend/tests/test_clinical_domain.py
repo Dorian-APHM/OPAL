@@ -11,8 +11,7 @@ class TestGetGlobalStats:
     def test_basic(self):
         from modules.quality.domains.clinical import _get_global_stats
         cursor = MockCursor([
-            {"total_rows": 5000},
-            {"distinct_persons": 200},
+            {"total_rows": 5000, "distinct_persons": 200},
         ])
         result = _get_global_stats(cursor, "omop_cdm", "condition_occurrence", "person_id")
         assert result["total_rows"] == 5000
@@ -21,8 +20,7 @@ class TestGetGlobalStats:
     def test_zero_rows(self):
         from modules.quality.domains.clinical import _get_global_stats
         cursor = MockCursor([
-            {"total_rows": 0},
-            {"distinct_persons": 0},
+            {"total_rows": 0, "distinct_persons": 0},
         ])
         result = _get_global_stats(cursor, "omop_cdm", "condition_occurrence", "person_id")
         assert result["total_rows"] == 0
@@ -31,8 +29,7 @@ class TestGetGlobalStats:
     def test_null_values(self):
         from modules.quality.domains.clinical import _get_global_stats
         cursor = MockCursor([
-            {"total_rows": None},
-            {"distinct_persons": None},
+            {"total_rows": None, "distinct_persons": None},
         ])
         result = _get_global_stats(cursor, "omop_cdm", "condition_occurrence", "person_id")
         assert result["total_rows"] == 0
@@ -189,10 +186,8 @@ class TestRunClinicalDomainAnalysis:
         from modules.quality.domains.clinical import run_clinical_domain_analysis
 
         responses = [
-            # global stats: total_rows
-            {"total_rows": 5000},
-            # global stats: distinct_persons
-            {"distinct_persons": 200},
+            # global stats: combined single query (P15 fix)
+            {"total_rows": 5000, "distinct_persons": 200},
             # monthly counts
             [{"month_start": date(2025, 1, 1), "n": 100}],
             # records per person
@@ -226,7 +221,7 @@ class TestRunClinicalDomainAnalysis:
 
         for domain_name in DOMAIN_CONFIG:
             responses = [
-                {"total_rows": 10}, {"distinct_persons": 5},
+                {"total_rows": 10, "distinct_persons": 5},
                 [], [], [],
                 {"total_rows": 10, "mapped_rows": 8, "total_terms": 3, "mapped_terms": 2},
                 [],

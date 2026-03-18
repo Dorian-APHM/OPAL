@@ -725,7 +725,8 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
     return {"task_id": task_id, "status": "running"}
 
 

@@ -204,8 +204,8 @@ def run_service(service_name: str, req: RunRequest, db: Session = Depends(get_db
             "logs": [f"Launching {SERVICES[service_name]['label']} for {req.cdm_name}..."],
         }
 
-    thread = threading.Thread(target=_run_container, args=(service_name, env_vars), daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_run_container, service_name, env_vars)
 
     return {"ok": True}
 

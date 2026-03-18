@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from config import OMOP_POOL_MIN_CONN, OMOP_POOL_MAX_CONN, OMOP_POOL_IDLE_TIMEOUT
+from config import OMOP_POOL_MIN_CONN, OMOP_POOL_MAX_CONN, OMOP_POOL_IDLE_TIMEOUT, OMOP_STATEMENT_TIMEOUT_MS
 
-STATEMENT_TIMEOUT_MS = 300_000          # 5 min – prevents runaway queries
+STATEMENT_TIMEOUT_MS = OMOP_STATEMENT_TIMEOUT_MS
 POOL_MIN_CONN = OMOP_POOL_MIN_CONN     # minimum idle connections per CDM
 POOL_MAX_CONN = OMOP_POOL_MAX_CONN     # maximum connections per CDM
 POOL_IDLE_TIMEOUT = OMOP_POOL_IDLE_TIMEOUT  # seconds – evict unused pools

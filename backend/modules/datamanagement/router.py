@@ -438,8 +438,8 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                 except Exception:
                     pass
 
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"task_id": task_id, "status": "running"}
 

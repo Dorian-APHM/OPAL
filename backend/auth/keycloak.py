@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # JWKS client for local JWT validation (caches keys automatically)
 _jwks_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/certs"
-_jwks_client = PyJWKClient(_jwks_url, cache_keys=True, lifespan=3600)
+_jwks_client = PyJWKClient(_jwks_url, cache_keys=True, lifespan=300)
 
 # Public endpoints that don't require authentication
 PUBLIC_PATHS = {"/api/health", "/api/i18n", "/api/access-requests", "/docs", "/openapi.json", "/redoc", "/"}
@@ -274,6 +274,7 @@ async def _validate_token(token: str) -> dict:
             algorithms=["RS256"],
             audience=KEYCLOAK_CLIENT_ID,
             issuer=expected_issuer,
+            leeway=30,  # M4: 30s clock skew tolerance
             options={
                 "verify_iss": True,
                 "verify_exp": True,
