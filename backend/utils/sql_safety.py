@@ -24,5 +24,7 @@ def safe_identifier(name: str) -> str:
     interpolation.
     """
     if not isinstance(name, str) or not _SAFE_IDENTIFIER_RE.match(name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
+        raise ValueError("Invalid SQL identifier")
+    if len(name) > 63:
+        raise ValueError("SQL identifier too long (max 63 characters)")
     return name

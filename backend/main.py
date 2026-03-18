@@ -133,7 +133,8 @@ def _shutdown_pools():
 # Global exception handlers
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
-    return JSONResponse(status_code=400, content={"detail": str(exc)})
+    logger.warning("ValueError on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=400, content={"detail": "Invalid input"})
 
 
 @app.exception_handler(psycopg2.OperationalError)
