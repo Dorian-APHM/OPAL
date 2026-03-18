@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class ConnectionManager:
     """Thread-safe WebSocket connection manager."""
 
+    MAX_CONNECTIONS_PER_USER = 5
+
     def __init__(self):
         # username → set of WebSocket connections
         self._connections: dict[str, set[WebSocket]] = defaultdict(set)
@@ -24,6 +26,16 @@ class ConnectionManager:
         self._user_roles: dict[str, set[str]] = defaultdict(set)
 
     async def connect(self, websocket: WebSocket, username: str, roles: list[str] | None = None):
+        existing = self._connections.get(username)
+        if existing and len(existing) >= self.MAX_CONNECTIONS_PER_USER:
+            # Evict the oldest connection (FIFO approximation)
+            oldest = next(iter(existing))
+            try:
+                await oldest.close(code=1008, reason="Too many connections")
+            except Exception:
+                pass
+            existing.discard(oldest)
+            logger.warning("WS evicted oldest connection for %s (limit=%d)", username, self.MAX_CONNECTIONS_PER_USER)
         await websocket.accept()
         self._connections[username].add(websocket)
         if roles:

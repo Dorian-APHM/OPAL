@@ -101,6 +101,7 @@ def run_pathways_analysis(
               ON p.person_id = op.person_id
         """)
         cur.execute("CREATE INDEX ON _pw_target (person_id)")
+        cur.execute("ANALYZE _pw_target")
         cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM _pw_target")
         target_size = cur.fetchone()["n"]
         _report("Target cohort materialised")
@@ -127,6 +128,17 @@ def run_pathways_analysis(
                 _report(f"Skipped {name}")
                 continue
 
+            # Validate concept_ids: must be positive integers
+            validated_ids = []
+            for cid in concept_ids:
+                cid_int = int(cid)
+                if cid_int <= 0:
+                    continue
+                validated_ids.append(cid_int)
+            if not validated_ids:
+                _report(f"Skipped {name} (no valid concept_ids)")
+                continue
+
             table = cfg["table"]
             cid_col = cfg["concept_id"]
             date_col = cfg["date_col"]
@@ -140,7 +152,7 @@ def run_pathways_analysis(
             end_col = end_date_map.get(domain)
             end_expr = f"COALESCE(t.{end_col}, t.{date_col})" if end_col else f"t.{date_col}"
 
-            ids_str = ",".join(str(int(cid)) for cid in concept_ids)
+            ids_str = ",".join(str(cid) for cid in validated_ids)
 
             if include_desc:
                 concept_filter = f"""
@@ -168,6 +180,7 @@ def run_pathways_analysis(
             _report(f"Events: {name}")
 
         cur.execute("CREATE INDEX ON _pw_events (person_id, event_start)")
+        cur.execute("ANALYZE _pw_events")
 
         # ── Step 3: Build eras (collapse overlapping events of same name) ──
         # Using a gap-merge approach: events of the same type within
@@ -203,6 +216,7 @@ def run_pathways_analysis(
             GROUP BY person_id, event_name, era_group
         """)
         cur.execute("CREATE INDEX ON _pw_eras (person_id, era_start)")
+        cur.execute("ANALYZE _pw_eras")
         _report("Eras collapsed")
 
         # ── Step 4: Build per-person pathway sequences ──

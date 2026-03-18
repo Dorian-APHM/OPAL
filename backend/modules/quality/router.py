@@ -229,6 +229,7 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
 
 
 @router.post("/analyze/batch/stream")
+@limiter.limit("2/minute")
 def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run batch analysis with SSE progress stream."""
     # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
@@ -448,6 +449,7 @@ def list_active_analyses():
 
 
 @router.post("/conformity")
+@limiter.limit("3/minute")
 def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run CDM conformity validation checks in a background thread.
 
