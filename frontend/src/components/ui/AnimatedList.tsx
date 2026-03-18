@@ -22,7 +22,22 @@ const itemVariants = {
   exit: { opacity: 0, y: -8, transition: { duration: 0.15 } },
 };
 
+/** Stable variant factory — avoids recreating objects on every render/item. */
+const makeItemVariants = (stagger: number) => ({
+  hidden: { opacity: 0, y: 12 },
+  visible: (i: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: { delay: i * stagger, duration: 0.25, ease: 'easeOut' as const },
+  }),
+  exit: { opacity: 0, y: -8, transition: { duration: 0.15 } },
+});
+
+// Default variants for the common stagger=0.05 case (zero-alloc hot path)
+const defaultVariants = makeItemVariants(0.05);
+
 export function AnimatedList({ children, stagger = 0.05, className = '' }: AnimatedListProps) {
+  const variants = stagger === 0.05 ? defaultVariants : makeItemVariants(stagger);
   return (
     <div className={className}>
       <AnimatePresence mode="popLayout">
@@ -30,15 +45,7 @@ export function AnimatedList({ children, stagger = 0.05, className = '' }: Anima
           <motion.div
             key={(child as any)?.key ?? i}
             custom={i}
-            variants={{
-              hidden: { opacity: 0, y: 12 },
-              visible: {
-                opacity: 1,
-                y: 0,
-                transition: { delay: i * stagger, duration: 0.25, ease: 'easeOut' },
-              },
-              exit: { opacity: 0, y: -8, transition: { duration: 0.15 } },
-            }}
+            variants={variants}
             initial="hidden"
             animate="visible"
             exit="exit"

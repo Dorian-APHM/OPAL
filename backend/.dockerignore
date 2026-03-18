@@ -10,3 +10,6 @@ data/
 .git
 .gitignore
 *.md
+.env*
+.coverage
+htmlcov/

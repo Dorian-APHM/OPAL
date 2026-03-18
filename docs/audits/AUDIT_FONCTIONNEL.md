@@ -13,7 +13,7 @@
 |----------|----------|-----------|-----------|
 | CRITIQUE | 4 | 3 (F1, F2, F4) | 1 (F3) |
 | HAUTE | 9 | 5 (F5, F7, F11, F12, F13) | 4 |
-| MOYENNE | 12 | 0 | 12 |
+| MOYENNE | 12 | 3 (F15, F16, F19) | 9 |
 | BASSE | 8 | 0 | 8 |
 | **Total** | **33** | **8** | **25** |
 
@@ -214,19 +214,19 @@ Utilisé avec `await` inutilement. Code trompeur.
 
 ---
 
-### F15 — QualityPage : progress bar non reset au cancel
+### F15 — QualityPage : progress bar non reset au cancel — CORRIGÉ ✓
 
 **Fichier** : `frontend/src/pages/QualityPage.tsx:456-467`
 
-Après annulation d'un batch, la barre de progression reste affichée avec les données stale. Le prochain lancement montre un état incohérent.
+**Correction** : `setBatchProgress(null)` ajouté dans `cancelBatchAnalysis()`.
 
 ---
 
-### F16 — Race condition dans useNotifDots
+### F16 — Race condition dans useNotifDots — CORRIGÉ ✓
 
 **Fichier** : `frontend/src/hooks/useNotifDots.ts:21-30`
 
-Flag `fetchingRef` simple qui silencieusement drop les requêtes concurrentes de rafraîchissement de badges. Le dernier état peut être stale.
+**Correction** : Remplacé `fetchingRef` par un compteur `fetchIdRef` incrémental. Seule la dernière requête en vol applique son résultat (pattern "latest wins").
 
 ---
 
@@ -248,11 +248,11 @@ Certaines chaînes sont en français directement dans le JSX au lieu d'utiliser 
 
 ---
 
-### F19 — Quality : pas de pagination sur `list_snapshots`
+### F19 — Quality : pas de pagination sur `list_snapshots` — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/quality/router.py:587-607`
 
-Charge TOUS les snapshots avec leur colonne `results` (JSON volumineux) en mémoire.
+**Correction** : Pagination ajoutée (`page`, `page_size`). Ne charge plus la colonne `results` (projette uniquement `id`, `version`, `created_at`).
 
 ---
 
@@ -397,5 +397,10 @@ Ne couvre pas : snapshots qualité, analyses incidence/estimation, décisions de
 | F11 | Faible | Haute | Semaine 2 | ✅ CORRIGÉ |
 | F12 | Moyen | Haute | Semaine 2 | ✅ CORRIGÉ |
 | F13 | Faible | Haute | Semaine 2 | ✅ CORRIGÉ |
-| F14-F25 | Variable | Moyenne | Semaine 3-4 | En attente |
+| F14 | Faible | Moyenne | — | ❌ FAUX POSITIF (logsUrl EST async) |
+| F15 | Faible | Moyenne | Semaine 3 | ✅ CORRIGÉ |
+| F16 | Faible | Moyenne | Semaine 3 | ✅ CORRIGÉ |
+| F17-F18 | Variable | Moyenne | Semaine 3-4 | En attente |
+| F19 | Moyen | Moyenne | Semaine 3 | ✅ CORRIGÉ |
+| F20-F25 | Variable | Moyenne | Semaine 3-4 | En attente |
 | F26-F33 | Variable | Basse | Backlog | En attente |
