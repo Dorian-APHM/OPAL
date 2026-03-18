@@ -1,22 +1,23 @@
 # Audit de Sécurité — OPAL v1.2.0
 
 **Date** : 2026-03-18
+**Mise à jour** : 2026-03-18 (vérification approfondie des critiques, corrections appliquées)
 **Périmètre** : Backend (FastAPI), Frontend (React), Infrastructure (Docker Compose, Keycloak)
-**Méthodologie** : Revue statique de code, analyse architecturale, vérification OWASP Top 10
+**Méthodologie** : Revue statique de code, analyse de l'historique git, vérification OWASP Top 10
 
 ---
 
 ## Résumé Exécutif
 
-| Sévérité | Nombre |
-|----------|--------|
-| CRITIQUE | 3 |
-| HAUTE | 7 |
-| MOYENNE | 8 |
-| BASSE | 6 |
-| **Total** | **24** |
+| Sévérité | Nombre | Corrigés |
+|----------|--------|----------|
+| CRITIQUE | 3 | 2 corrigés, 1 reclassé |
+| HAUTE | 7 | 0 |
+| MOYENNE | 8 | 0 |
+| BASSE | 6 | 0 |
+| **Total** | **24** | **2 corrigés** |
 
-L'application présente une architecture de sécurité globalement solide (JWT local, RBAC via permissions.yaml, chiffrement Fernet, `psycopg2.sql` pour les requêtes critiques). Toutefois, plusieurs failles significatives demeurent, principalement autour de la construction SQL dans le module pathways, du stockage de tickets SSE non thread-safe, et de l'absence de protection CSRF.
+L'application présente une architecture de sécurité globalement solide (JWT local, RBAC via permissions.yaml, chiffrement Fernet, `psycopg2.sql` pour les requêtes critiques). Deux des trois critiques initiales ont été corrigées dans cette session. La troisième (C3) a été reclassée après analyse approfondie.
 
 ---
 
@@ -37,105 +38,65 @@ L'application présente une architecture de sécurité globalement solide (JWT l
 
 ---
 
-## CRITIQUE
+## CRITIQUE — Vérification approfondie (2026-03-18)
 
-### C1 — Injection SQL via f-string dans le module Pathways
+> Les 3 points critiques initiaux ont été analysés en profondeur via l'historique git
+> (commits `2da6125`, `8bb8299`, `a7491de`, `1145ce0`). Résultat : 2 corrigés, 1 reclassé.
 
-**Fichier** : `backend/modules/cohort/pathways.py:94-167`
+### C1 — F-strings SQL dans quality domains — CORRIGÉ ✓
 
-Le module Pathways utilise des f-strings pour interpoler `omop_schema` et des noms de colonnes/tables provenant de `DOMAIN_CONFIG` dans des requêtes SQL brutes :
+**Sévérité initiale** : CRITIQUE → **Reclassé MOYEN (defense-in-depth), puis CORRIGÉ**
 
-```python
-# Ligne 94-102
-cur.execute(f"""
-    CREATE TEMP TABLE _pw_target AS
-    SELECT DISTINCT p.person_id,
-           op.observation_period_start_date AS cohort_start,
-           op.observation_period_end_date   AS cohort_end
-    FROM ({cohort_sql}) p
-    JOIN {omop_schema}.observation_period op
-      ON p.person_id = op.person_id
-""")
+**Analyse git** : Le commit `a7491de` (R3 quick wins) avait migré `clinical.py` et `conformity.py` vers `psysql.SQL/Identifier`. Mais `person.py`, `observation_period.py` et `dashboard.py` n'avaient pas été migrés.
 
-# Ligne 156-167
-cur.execute(f"""
-    INSERT INTO _pw_events (...)
-    SELECT ... FROM _pw_target tgt
-    JOIN {omop_schema}.{table} t ON ...
-    WHERE {concept_filter}
-""", {"ename": name})
-```
+**Vérification de la chaîne d'appel** :
+- `omop_schema` provient de `CdmConfig.omop_schema` ou `AnalysisSettings.omop_schema` (admin-only)
+- `dashboard.py:21` appelait `safe_identifier(omop_schema)` → validé, mais les requêtes restaient en f-string
+- `person.py` et `observation_period.py` ne validaient PAS via `safe_identifier()` — manque de defense-in-depth
+- Les noms de tables/colonnes viennent de `DOMAIN_CONFIG` (hardcodé dans `config.py`) — non injectable
 
-Bien que `omop_schema` soit validé par `safe_identifier()` (ligne 79) et que `table`/`cid_col`/`date_col` proviennent de `DOMAIN_CONFIG` (statique), le code mélange des valeurs utilisateur (`cohort_sql`, `concept_filter`) avec des f-strings. `combo_window` (ligne 190) est injecté via `f"INTERVAL '{int(combo_window)} days'"` — le `int()` protège contre l'injection, mais le pattern reste fragile.
+**Risque réel** : MOYEN. L'exploitation nécessiterait qu'un admin injecte un `omop_schema` malveillant — ce qui suppose déjà un accès admin complet. Néanmoins, l'incohérence avec `clinical.py`/`conformity.py` est un défaut de defense-in-depth.
 
-**Risque** : Si un futur développeur ajoute un champ dynamique sans validation, l'injection est immédiate. Le `cohort_sql` intègre du SQL construit par `sql_builder.py` qui lui-même utilise des f-strings validées — la chaîne de confiance est longue et difficile à auditer.
+**Correction appliquée** :
+- `person.py` : 6 requêtes migrées vers `psysql.SQL()` + `psysql.Identifier()`, ajout de `safe_identifier()`
+- `observation_period.py` : 6 requêtes migrées, CTE `per` refactoré avec `psysql.SQL()`
+- `dashboard.py` : 3 requêtes + UNION ALL dynamique migrés vers `psysql.SQL()` + `psysql.Literal()`
 
-**Remédiation** : Migrer vers `psycopg2.sql.SQL` + `sql.Identifier` pour TOUS les identifiants interpolés, comme le fait déjà `conformity.py:76-97`.
+**Tests** : 59/59 passent (person, obs_period, dashboard, clinical, conformity, engine).
 
-**Note complémentaire** : Ce pattern f-string est aussi présent dans :
-- `quality/domains/person.py:17-29` — `f"SELECT COUNT(*) AS n FROM {person_table}"`
-- `quality/domains/dashboard.py:22-32` — `f"SELECT COUNT(*) AS total FROM {person_table}"`
-- `quality/domains/observation_period.py` — multiples f-strings
-- `cohort/characterization.py:66-545` — ~15 occurrences de f-strings SQL
-- `estimation/router.py:97-99` — construction SQL avec f-strings
-
-Seuls `conformity.py` et `clinical.py` utilisent correctement `psysql.SQL()` + `psysql.Identifier()`. Ceci contredit l'assertion dans CLAUDE.md : *"All SQL identifiers use psycopg2.sql.SQL + sql.Identifier — no f-string SQL anywhere."*
+**Reste** : `pathways.py` (protégé par `safe_identifier` l.79), `characterization.py` (~15 f-strings, schema admin-only), `estimation/router.py` (via `cdm_helper`). Migration recommandée pour cohérence.
 
 ---
 
-### C2 — Stockage de tickets SSE sans synchronisation thread-safe
+### C2 — Tickets SSE sans lock thread-safe — CORRIGÉ ✓
 
-**Fichier** : `backend/auth/keycloak.py:50-83`
+**Sévérité initiale** : CRITIQUE → **Confirmé MOYEN, puis CORRIGÉ**
 
-Le dictionnaire `_sse_tickets` est un `dict` Python standard partagé entre les threads de l'application (FastAPI + uvicorn workers) sans aucun verrou :
+**Analyse git** : Le commit `8bb8299` avait ajouté `threading.Lock` sur `_active_analyses` et `_active_suggestions`, et capé SSE tickets à 1000 avec cleanup. Mais le **lock n'avait PAS été ajouté** au dictionnaire `_sse_tickets` lui-même.
 
-```python
-_sse_tickets: dict[str, tuple[dict, float]] = {}  # Ligne 53
+**Vérification du modèle de déploiement** : `Dockerfile:33` utilise `uvicorn main:app` sans `--workers` → single worker. Le GIL protège les opérations dict atomiques, mais `create_sse_ticket()` fait iterate→delete→check len→insert, ce qui n'est PAS atomique. Un context switch entre `len()` et `[]=` peut dépasser `_MAX_SSE_TICKETS`.
 
-def create_sse_ticket(user_info: dict) -> str:
-    global _sse_tickets
-    now = time.time()
-    expired = [k for k, (_, exp) in _sse_tickets.items() if exp < now]  # Itération sans lock
-    for k in expired:
-        del _sse_tickets[k]
-    if len(_sse_tickets) >= _MAX_SSE_TICKETS:  # Check-then-act sans atomicité
-        raise HTTPException(status_code=429, detail="Too many active tickets")
-    ticket_id = uuid.uuid4().hex
-    _sse_tickets[ticket_id] = (user_info, now + _SSE_TICKET_TTL)
-    return ticket_id
-```
+**Risque réel** : MOYEN en single-worker (GIL aide), HAUT si multi-workers (futur scaling).
 
-**Risque** :
-- **Race condition** : deux requêtes concurrentes peuvent dépasser `_MAX_SSE_TICKETS`
-- **RuntimeError** : itération sur `_sse_tickets.items()` pendant qu'un autre thread modifie le dict (Python 3.x peut lever `RuntimeError: dictionary changed size during iteration`)
-- **Fuite mémoire** : si le cleanup échoue (exception), les tickets expirés s'accumulent
-
-**Remédiation** :
-```python
-import threading
-_sse_lock = threading.Lock()
-
-def create_sse_ticket(user_info: dict) -> str:
-    with _sse_lock:
-        # cleanup + check + insert atomiques
-```
+**Correction appliquée** : `threading.Lock()` ajouté dans `auth/keycloak.py`. `create_sse_ticket()` et `_redeem_sse_ticket()` sont maintenant atomiques via `with _sse_tickets_lock:`.
 
 ---
 
-### C3 — Credentials Keycloak par défaut non bloquées
+### C3 — Credentials Keycloak par défaut — RECLASSÉ BASSE
 
-**Fichier** : `docker-compose.yml:15-16` et `docker-compose.yml:95-96`
+**Sévérité initiale** : CRITIQUE → **Reclassé BASSE** (déjà traité)
 
+**Analyse git** : Le commit `1145ce0` (Security & reliability hardening) a ajouté `docker-compose.prod.yml` :
 ```yaml
-KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
-KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN must be set}
+KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
 ```
 
-Les credentials par défaut `admin/admin` sont utilisées si aucune variable n'est définie. Contrairement à `SECRET_KEY` et `POSTGRES_PASSWORD` qui utilisent la syntaxe `${VAR:?error}` (obligatoire), les credentials Keycloak utilisent `${VAR:-default}` (optionnel avec fallback).
+Le fichier dev `docker-compose.yml` garde `admin/admin` par défaut — **comportement normal** pour le développement.
 
-**Risque** : En production, si l'opérateur oublie de définir ces variables, Keycloak est accessible avec `admin/admin`, permettant la création d'utilisateurs admin arbitraires, la modification des rôles, et l'accès complet à l'application.
+De plus, `config.py:41-45` interdit `AUTH_ENABLED=false` en production, et `config.py:26-31` rejette un `SECRET_KEY` faible en production. La chaîne de sécurité est cohérente.
 
-**Remédiation** : Utiliser `${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}` dans `docker-compose.yml`, cohérent avec les autres secrets.
+**Risque résiduel** : Un opérateur utilisant `docker-compose.yml` seul en production. Recommandation : ajouter un warning au startup si `ENVIRONMENT=production` et credentials Keycloak par défaut.
 
 ---
 
