@@ -72,6 +72,15 @@ Bien que `omop_schema` soit validé par `safe_identifier()` (ligne 79) et que `t
 
 **Remédiation** : Migrer vers `psycopg2.sql.SQL` + `sql.Identifier` pour TOUS les identifiants interpolés, comme le fait déjà `conformity.py:76-97`.
 
+**Note complémentaire** : Ce pattern f-string est aussi présent dans :
+- `quality/domains/person.py:17-29` — `f"SELECT COUNT(*) AS n FROM {person_table}"`
+- `quality/domains/dashboard.py:22-32` — `f"SELECT COUNT(*) AS total FROM {person_table}"`
+- `quality/domains/observation_period.py` — multiples f-strings
+- `cohort/characterization.py:66-545` — ~15 occurrences de f-strings SQL
+- `estimation/router.py:97-99` — construction SQL avec f-strings
+
+Seuls `conformity.py` et `clinical.py` utilisent correctement `psysql.SQL()` + `psysql.Identifier()`. Ceci contredit l'assertion dans CLAUDE.md : *"All SQL identifiers use psycopg2.sql.SQL + sql.Identifier — no f-string SQL anywhere."*
+
 ---
 
 ### C2 — Stockage de tickets SSE sans synchronisation thread-safe
