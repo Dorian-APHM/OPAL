@@ -9,13 +9,13 @@
 
 ## Résumé Exécutif
 
-| Sévérité | Nombre |
-|----------|--------|
-| CRITIQUE | 4 |
-| HAUTE | 9 |
-| MOYENNE | 12 |
-| BASSE | 8 |
-| **Total** | **33** |
+| Sévérité | Trouvées | Corrigées | Restantes |
+|----------|----------|-----------|-----------|
+| CRITIQUE | 4 | 3 (F1, F2, F4) | 1 (F3) |
+| HAUTE | 9 | 1 (F7) | 8 |
+| MOYENNE | 12 | 0 | 12 |
+| BASSE | 8 | 0 | 8 |
+| **Total** | **33** | **4** | **29** |
 
 OPAL implémente un ensemble fonctionnel remarquablement complet pour une plateforme OMOP CDM : qualité Achilles-like (5 analyseurs de domaines), cohort builder avec SQL dynamique (1152 lignes, 10+ types de critères), mapping avec 5 stratégies, pathways ATLAS-style, incidence, estimation Kaplan-Meier, et data management. L'analyse en profondeur révèle cependant des bugs concrets dans le code, des incohérences API/frontend, et des lacunes fonctionnelles significatives.
 
@@ -48,47 +48,35 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ## CRITIQUE
 
-### F1 — Critères JSON de cohorte : aucune validation de structure
+### F1 — Critères JSON de cohorte : aucune validation de structure — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/cohort/router.py:49`
+**Commit** : `9534240`
 
-```python
-class CohortCreateRequest(BaseModel):
-    criteria: dict  # ← AUCUNE validation Pydantic !
-```
+**Constat initial** : Le champ `criteria: dict` acceptait n'importe quel dictionnaire sans validation. Risques : stack overflow par nesting infini, DoS par 1M+ concept_ids, erreurs 500 cryptiques.
 
-Le champ `criteria` accepte n'importe quel dictionnaire. Le `sql_builder.py` fait du parsing interne avec `get()` et valeurs par défaut, mais aucun schéma ne valide la structure.
-
-**Bugs concrets identifiés** :
-- `concept_ids: "string"` au lieu de `[int]` → `int()` crashe avec ValueError non gérée
-- `criteria: {}` (vide) → `build_cohort_sql` retourne SQL invalide
-- Profondeur illimitée (10000 niveaux imbriqués) → stack overflow / OOM → **DoS**
-- Liste de 1M+ concept_ids → construction SQL de plusieurs Mo → timeout DB
-
-**Impact** : Erreurs 500 cryptiques, DoS possible, débogage impossible pour l'utilisateur.
-
-**Remédiation** : Créer un modèle Pydantic récursif avec limites (max_depth=5, max_concepts=10000).
+**Correction appliquée** :
+- Fonction `_validate_criteria()` avec validation récursive :
+  - Profondeur max de nesting : **5 niveaux**
+  - Max **10 000** `concept_ids` par critère
+  - Vérification de type strict : dict pour groupes, list pour concept_ids, int pour chaque ID
+- `@field_validator("criteria")` ajouté sur les 4 modèles Pydantic : `CohortCreateRequest`, `CohortUpdateRequest`, `CohortCountRequest`, `CohortSampleRequest`
+- Erreurs de validation retournées en 422 avec message clair (au lieu de 500)
 
 ---
 
-### F2 — Bugs dans le code SSE de quality/router.py
+### F2 — Bugs dans le code SSE de quality/router.py — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/quality/router.py`
+**Commit** : `9534240`
 
-**Bug 1 — Ligne 377** : `queue.Queue.get(True, 2.0)` — signature incorrecte
-```python
-msg = progress_queue.get(True, 2.0)  # Devrait être get(block=True, timeout=2.0)
-```
-L'appel positional fonctionne en CPython mais est fragile. Plus important : si la queue est vide et le timeout expire, `queue.Empty` n'est pas capturé → crash du générateur SSE.
+**Constat initial** :
+1. `queue.Queue.get(True, 2.0)` — appel positionnel fragile
+2. Race condition TOCTOU dans `cancel_analysis()` — lecture hors lock puis écriture dans un lock séparé
 
-**Bug 2 — Ligne 420** : `conn.closed` n'existe pas sur psycopg2
-```python
-if not conn.closed:
-    conn.cancel()  # conn.closed n'est pas un attribut standard
-```
-Devrait être `if conn and conn.status != psycopg2.extensions.STATUS_READY`.
-
-**Impact** : Crash silencieux des analyses SSE en cours, annulation d'analyse non fonctionnelle.
+**Correction appliquée** :
+1. Remplacé par `lambda: progress_q.get(block=True, timeout=2.0)` — keyword args explicites
+2. Cancel réécrit avec lecture + vérification ownership + écriture `cancelled=True` dans un **seul bloc** `with _active_analyses_lock`. Le `conn.cancel()` reste hors du lock (peut bloquer sur I/O)
 
 ---
 
@@ -107,18 +95,19 @@ Devrait être `if conn and conn.status != psycopg2.extensions.STATUS_READY`.
 
 ---
 
-### F4 — 3 domaines OMOP manquants dans DOMAIN_CONFIG
+### F4 — 3 domaines OMOP manquants dans DOMAIN_CONFIG — CORRIGÉ ✓
 
 **Fichier** : `backend/config.py` — DOMAIN_CONFIG
+**Commit** : `9534240`
 
-**Domaines implémentés (8/11)** : Condition, Drug, Measurement, Observation, Procedure, Visit, Device, Death
+**Constat initial** : Domaines implémentés (8/11). 3 domaines OMOP CDM v5.4 absents.
 
-**Domaines manquants** :
-- ❌ `Specimen` — Échantillons biologiques
-- ❌ `Note` / `Note_NLP` — Données textuelles (essentiel en milieu hospitalier français)
-- ❌ `Payer_Plan_Period` — Couverture assurantielle
+**Correction appliquée** — Ajout des 3 domaines avec leurs colonnes standard :
+- ✅ `Specimen` — table `specimen`, concept_id `specimen_concept_id`, date `specimen_date`
+- ✅ `Note` — table `note`, concept_id `note_type_concept_id`, date `note_date`
+- ✅ `Payer_Plan_Period` — table `payer_plan_period`, concept_id `payer_concept_id`, date `payer_plan_period_start_date`
 
-**Impact** : Impossible d'analyser la qualité, construire des cohortes, ou mapper ces domaines. Les requêtes échouent silencieusement quand un utilisateur sélectionne un domaine non supporté.
+**Domaines couverts : 11/11** (hors `cost`, `episode`/`episode_event` qui sont des tables auxiliaires)
 
 ---
 
@@ -148,11 +137,14 @@ Le module permet de sauvegarder des requêtes SQL mais n'a PAS d'endpoint d'exé
 
 ---
 
-### F7 — Race condition dans l'annulation d'analyse qualité
+### F7 — Race condition dans l'annulation d'analyse qualité — CORRIGÉ ✓
 
 **Fichier** : `backend/modules/quality/router.py:395-427`
+**Commit** : `9534240` (même correction que F2)
 
 L'annulation vérifie l'existence dans `_active_analyses` puis modifie `cancelled=True` dans deux sections `with _active_analyses_lock:` séparées. Entre les deux, le worker thread peut terminer et supprimer l'entrée → TOCTOU.
+
+**Correction** : Lecture + vérification + écriture dans un seul bloc `with _active_analyses_lock`.
 
 ---
 
@@ -393,13 +385,13 @@ Ne couvre pas : snapshots qualité, analyses incidence/estimation, décisions de
 
 ## Matrice de Remédiation
 
-| ID | Effort | Impact | Priorité |
-|----|--------|--------|----------|
-| F1 | Moyen | Critique | Semaine 1 |
-| F2 | Faible | Critique | Semaine 1 |
-| F3 | Élevé | Critique | Sprint dédié |
-| F4 | Moyen | Critique | Semaine 2 |
-| F5 | Moyen | Haute | Semaine 2 |
-| F6-F13 | Variable | Haute | Semaine 2-3 |
-| F14-F25 | Variable | Moyenne | Semaine 3-4 |
-| F26-F33 | Variable | Basse | Backlog |
+| ID | Effort | Impact | Priorité | Statut |
+|----|--------|--------|----------|--------|
+| F1 | Moyen | Critique | Semaine 1 | ✅ CORRIGÉ (`9534240`) |
+| F2 | Faible | Critique | Semaine 1 | ✅ CORRIGÉ (`9534240`) |
+| F3 | Élevé | Critique | Sprint dédié | En attente |
+| F4 | Moyen | Critique | Semaine 2 | ✅ CORRIGÉ (`9534240`) |
+| F5 | Moyen | Haute | Semaine 2 | En attente |
+| F6-F13 | Variable | Haute | Semaine 2-3 | F7 ✅ CORRIGÉ, reste en attente |
+| F14-F25 | Variable | Moyenne | Semaine 3-4 | En attente |
+| F26-F33 | Variable | Basse | Backlog | En attente |

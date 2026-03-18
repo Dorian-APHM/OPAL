@@ -9,13 +9,13 @@
 
 ## Résumé Exécutif
 
-| Sévérité | Nombre |
-|----------|--------|
-| CRITIQUE | 5 |
-| HAUTE | 9 |
-| MOYENNE | 10 |
-| BASSE | 6 |
-| **Total** | **30** |
+| Sévérité | Trouvées | Corrigées | Restantes |
+|----------|----------|-----------|-----------|
+| CRITIQUE | 5 | 3 (P1, P2, P3, P5) | 1 (P4) |
+| HAUTE | 9 | 0 | 9 |
+| MOYENNE | 10 | 1 (P18) | 9 |
+| BASSE | 6 | 0 | 6 |
+| **Total** | **30** | **5** | **25** |
 
 L'application est globalement bien conçue (connection pooling, GZip, lazy loading, cache i18n). Les problèmes critiques concernent la gestion mémoire (données CSV stockées en RAM, logs chargés intégralement), l'absence de pagination, les requêtes SQL coûteuses dans les modules analytiques, et le polling frontend à 2 req/sec même au repos.
 
@@ -38,56 +38,52 @@ L'application est globalement bien conçue (connection pooling, GZip, lazy loadi
 
 ## CRITIQUE
 
-### P1 — Données CSV d'extraction stockées intégralement en mémoire
+### P1 — Données CSV d'extraction stockées intégralement en mémoire — CORRIGÉ ✓
 
-**Fichier** : `backend/modules/datamanagement/router.py:387`
+**Fichier** : `backend/modules/datamanagement/router.py`
+**Commit** : `9534240`
 
-```python
-task["csv_data"] = csv_buf.getvalue()  # Tout le CSV en RAM
-```
+**Constat initial** : `task["csv_data"] = csv_buf.getvalue()` — tout le CSV en RAM. 10 extractions concurrentes = 1-5 Go.
 
-Une extraction de 1M lignes × 10 colonnes = 100-500 Mo par tâche. Avec `_MAX_ACTIVE_EXTRACTIONS = 100` et aucune éviction automatique des tâches terminées, 10 extractions concurrentes = **1-5 Go** de RAM.
-
-Le cleanup ne se fait que lors du téléchargement (`extract_download`) ou du statut check. Si l'utilisateur abandonne → données persistent en RAM indéfiniment.
-
-**Impact** : OOM du backend, crash de toutes les analyses en cours.
-
-**Remédiation** : Streamer le CSV vers un fichier temporaire sur disque. Stocker le chemin, pas les données. Auto-cleanup après 30 min.
+**Correction appliquée** :
+- CSV écrit vers un **fichier temporaire** (`tempfile.mkstemp`) au lieu de `StringIO`
+- Stockage du chemin (`csv_path`) au lieu des données
+- Download en **streaming par chunks de 64 KB** avec `StreamingResponse`
+- Nettoyage automatique du fichier temporaire après download (dans le générateur `_stream_and_cleanup()`)
+- Auto-cleanup des fichiers orphelins par le thread de nettoyage (P5) après 30 min
 
 ---
 
-### P2 — Logs d'audit chargés intégralement en mémoire
+### P2 — Logs d'audit chargés intégralement en mémoire — CORRIGÉ ✓
 
-**Fichier** : `backend/main.py:310-369`
+**Fichier** : `backend/main.py`
+**Commit** : `9534240`
 
-```python
-entries = []
-for dt_str in dates:
-    for line in f:
-        entries.append(json.loads(line))  # TOUT en mémoire
-entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
-return {"entries": entries[start:start + page_size], ...}
-```
+**Constat initial** : Toutes les entrées chargées en liste, triées, puis slicées — O(N) mémoire pour N entrées.
 
-Pour un système actif (10000+ requêtes/jour), un fichier JSONL quotidien = 50-100 Mo. Export multi-jours = **OOM**.
+**Correction appliquée** — Algorithme en **2 passes** :
+1. **Passe 1** : Comptage du total (pour la pagination metadata) — mémoire O(1)
+2. **Passe 2** : **Min-heap** de taille `start + page_size` — ne garde que les N entrées les plus récentes nécessaires pour la page demandée
+   - `heapq.heappush/heapreplace` pour maintenir le heap borné
+   - Tuple `(timestamp, counter, entry)` — counter évite la comparaison de dicts
+   - Tri final du heap pour ordonner la page
 
-**Impact** : OOM sur le backend, latence 10+ secondes.
-
-**Remédiation** : Streaming avec early-exit après pagination, ou migration vers une table PostgreSQL.
+**Complexité mémoire** : O(page_size) au lieu de O(total_entries)
 
 ---
 
-### P3 — Export CSV sans streaming réel
+### P3 — Export CSV sans streaming réel — CORRIGÉ ✓
 
-**Fichier** : `backend/main.py:477`
+**Fichier** : `backend/main.py`
+**Commit** : `9534240`
 
-```python
-return StreamingResponse(iter([output.getvalue()]))  # Faux streaming
-```
+**Constat initial** : `StreamingResponse(iter([output.getvalue()]))` — faux streaming, tout le CSV en mémoire.
 
-`iter([output.getvalue()])` = un seul élément : la totalité du CSV en mémoire. Consommation 2x (entries + CSV string).
-
-**Remédiation** : Générateur qui yield ligne par ligne.
+**Correction appliquée** :
+- Générateur `_generate_csv()` qui **yield ligne par ligne**
+- Chaque entrée JSONL est lue, filtrée, convertie en CSV row et yield immédiatement
+- Mémoire constante O(1) quelle que soit la taille des logs
+- `csv_safe()` appliqué sur chaque champ (protection injection CSV)
 
 ---
 
@@ -107,21 +103,26 @@ L'intervalle de polling pour `activeAnalyses()` tourne en permanence dès que Qu
 
 ---
 
-### P5 — Dictionnaires d'état in-memory sans limite ni éviction
+### P5 — Dictionnaires d'état in-memory sans limite ni éviction — CORRIGÉ ✓
 
-5 dictionnaires module-level accumulent des données sans borne :
+**Fichier** : `backend/main.py`
+**Commit** : `9534240`
 
-| Dict | Fichier | Taille max | Cleanup | Risque mémoire |
-|------|---------|-----------|---------|----------------|
-| `_active_analyses` | quality/router.py:34 | 100 entries | Worker thread | 200-300 KB (OK) |
-| `_active_suggestions` | mapping/router.py:34 | **Aucune** | `_cleanup_stale_suggestions()` **jamais appelé automatiquement** | **10+ Mo** |
-| `_active_extractions` | datamanagement/router.py:110 | 100 entries | Download only | **1-5 Go** (CSV data) |
-| `_tasks` (OHDSI) | ohdsi/router.py:60 | **Aucune** | **Aucun** | 5+ Mo (logs) |
-| `_sse_tickets` | keycloak.py:51 | 1000 | Create-time only | 500 KB |
+**Constat initial** : 5 dicts module-level accumulent des données sans borne → fuite mémoire progressive.
 
-**Impact** : Fuite mémoire progressive. Après quelques jours d'opération, le backend peut consommer 5-10 Go.
+**Correction appliquée** — Thread daemon `_inmemory_cleanup` (intervalle 5 min) :
 
-**Remédiation** : Thread de cleanup global (5 min) pour tous les dicts, TTL sur chaque entrée, streaming to disk pour les données volumineuses.
+| Dict | Cleanup appliqué |
+|------|-----------------|
+| `_active_suggestions` | Appel automatique de `_cleanup_stale_suggestions()` |
+| `_active_extractions` | Éviction des tâches terminées > 30 min + suppression fichiers CSV temporaires |
+| `_tasks` (OHDSI) | Éviction des tâches terminées/erreur > 30 min (nécessite `finished_at`) |
+| `_user_roles` (WS) | Sets vides nettoyés à la déconnexion (P18) |
+
+**Ajouts complémentaires** :
+- `completed_at = time.time()` ajouté sur les tâches d'extraction terminées
+- `finished_at = time.time()` ajouté sur **tous les chemins de terminaison** OHDSI (succès, erreur Docker, image not found, exception)
+- Le thread est stoppé proprement via `_evictor_stop` au shutdown
 
 ---
 
@@ -276,11 +277,14 @@ Tables temp `_pw_target`, `_pw_events`, `_pw_eras` créées avec index mais sans
 
 Avec idle timeout 30min, un pool peut rester ouvert 35 min. 20 CDMs = 40 connexions zombies.
 
-### P18 — WebSocket `_user_roles` : sets vides non nettoyés
+### P18 — WebSocket `_user_roles` : sets vides non nettoyés — CORRIGÉ ✓
 
 **Fichier** : `backend/utils/ws_manager.py:34-42`
+**Commit** : `9534240`
 
-Après déconnexion de tous les utilisateurs d'un rôle, la clé reste dans le dict.
+**Constat initial** : Après déconnexion de tous les utilisateurs d'un rôle, la clé reste dans le dict.
+
+**Correction** : À la déconnexion, les sets de rôles vides sont détectés et supprimés (`del self._user_roles[role]`).
 
 ### P19 — Statement timeout 5 min : trop long pour la plupart des opérations
 
@@ -358,13 +362,13 @@ Basé sur l'analyse des patterns SQL générés :
 
 ## Quick Wins (Effort faible, impact élevé)
 
-| # | Action | Effort | Gain estimé |
-|---|--------|--------|-------------|
-| 1 | Streamer CSV extraction vers fichier temp (P1) | 1h | -95% mémoire extractions |
-| 2 | Ne poller que quand une analyse tourne (P4) | 30 min | -99% requêtes idle |
-| 3 | Ajouter `manualChunks` dans Vite config (P14) | 15 min | -30% taille bundle |
-| 4 | Ajouter debounce sur ConceptExplorer search (P21) | 10 min | -80% requêtes recherche |
-| 5 | Combiner dual COUNT queries clinical (P15) | 15 min | -50% temps stats globales |
-| 6 | `ANALYZE` sur tables temp pathways (P16) | 5 min | Plans d'exécution optimaux |
-| 7 | Réduire intervalle evictor à 60s (P17) | 2 min | -40 connexions zombies |
-| 8 | Nettoyer `_user_roles` vides (P18) | 5 min | Prévient fuite mémoire |
+| # | Action | Effort | Gain estimé | Statut |
+|---|--------|--------|-------------|--------|
+| 1 | Streamer CSV extraction vers fichier temp (P1) | 1h | -95% mémoire extractions | ✅ FAIT |
+| 2 | Ne poller que quand une analyse tourne (P4) | 30 min | -99% requêtes idle | En attente |
+| 3 | Ajouter `manualChunks` dans Vite config (P14) | 15 min | -30% taille bundle | En attente |
+| 4 | Ajouter debounce sur ConceptExplorer search (P21) | 10 min | -80% requêtes recherche | En attente |
+| 5 | Combiner dual COUNT queries clinical (P15) | 15 min | -50% temps stats globales | En attente |
+| 6 | `ANALYZE` sur tables temp pathways (P16) | 5 min | Plans d'exécution optimaux | En attente |
+| 7 | Réduire intervalle evictor à 60s (P17) | 2 min | -40 connexions zombies | En attente |
+| 8 | Nettoyer `_user_roles` vides (P18) | 5 min | Prévient fuite mémoire | ✅ FAIT |
