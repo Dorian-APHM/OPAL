@@ -9,6 +9,7 @@
  * The CriteriaGroupEditor works with a `children` array internally but
  * denormalises back to `criteria[]` + `groups[]` for backend compatibility.
  */
+import { useMemo } from 'react';
 import { Card, Select, Empty, Tag, NumberInput } from '../../components/ui';
 import { Check, X, Clock, Star } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -64,11 +65,11 @@ export default function QueryCanvas({
   const normInclusion = normaliseGroup(inclusion);
   const normExclusion = normaliseGroup(exclusion);
 
-  // Gather all criteria across both groups for cross-referencing in temporal constraints
-  const allCriteria = [
-    ...collectAllCriteria(normInclusion),
-    ...collectAllCriteria(normExclusion),
-  ];
+  // Gather all criteria across both groups for cross-referencing in temporal constraints (memoized — P23 fix)
+  const allCriteria = useMemo(
+    () => [...collectAllCriteria(normInclusion), ...collectAllCriteria(normExclusion)],
+    [normInclusion, normExclusion],
+  );
 
   const handleInclusionChange = (updated: CriteriaGroup) => {
     // Denormalise so the backend receives criteria[] + groups[]

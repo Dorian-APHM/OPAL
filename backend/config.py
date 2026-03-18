@@ -14,12 +14,20 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# Application database
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://opal:opal@opal-db:5432/opal")
-
 # Security
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
+# Application database
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL:
+    if ENVIRONMENT == "production":
+        raise RuntimeError(
+            "FATAL: DATABASE_URL is not set. "
+            "Set a DATABASE_URL environment variable for production."
+        )
+    DATABASE_URL = "postgresql://opal:opal@opal-db:5432/opal"
+    _logger.warning("DATABASE_URL not set — using default dev credentials")
 
 _INSECURE_KEYS = {"", "change-me-in-production"}
 if SECRET_KEY in _INSECURE_KEYS:
@@ -57,6 +65,10 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost
 OMOP_POOL_MIN_CONN = int(os.getenv("OMOP_POOL_MIN_CONN", "2"))
 OMOP_POOL_MAX_CONN = int(os.getenv("OMOP_POOL_MAX_CONN", "20"))
 OMOP_POOL_IDLE_TIMEOUT = int(os.getenv("OMOP_POOL_IDLE_TIMEOUT", "1800"))
+OMOP_STATEMENT_TIMEOUT_MS = int(os.getenv("OMOP_STATEMENT_TIMEOUT_MS", "300000"))
+
+# Bounded thread pool for background tasks (quality, mapping, extraction)
+MAX_WORKER_THREADS = int(os.getenv("MAX_WORKER_THREADS", "16"))
 
 # App DB pool (SQLAlchemy)
 APP_DB_POOL_SIZE = int(os.getenv("APP_DB_POOL_SIZE", "10"))

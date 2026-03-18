@@ -15,28 +15,18 @@ from utils.sql_safety import safe_identifier
 
 
 def _get_global_stats(cur, schema: str, table: str, person_id: str) -> dict:
-    """Total rows and distinct persons for a clinical table.
-
-    Split into two queries so PostgreSQL can use an index-only scan on
-    person_id for the distinct count (when an index exists).
-    """
-    cur.execute(psysql.SQL("SELECT COUNT(*) AS total_rows FROM {}.{}").format(
-        psysql.Identifier(schema), psysql.Identifier(table)
-    ))
-    total_rows = int(cur.fetchone()["total_rows"] or 0)
-
+    """Total rows and distinct persons for a clinical table (single query)."""
     cur.execute(psysql.SQL(
-        "SELECT COUNT(*) AS distinct_persons"
-        " FROM (SELECT DISTINCT {} FROM {}.{}) t"
+        "SELECT COUNT(*) AS total_rows, COUNT(DISTINCT {}) AS distinct_persons"
+        " FROM {}.{}"
     ).format(
         psysql.Identifier(person_id),
         psysql.Identifier(schema), psysql.Identifier(table),
     ))
-    distinct_persons = int(cur.fetchone()["distinct_persons"] or 0)
-
+    row = cur.fetchone()
     return {
-        "total_rows": total_rows,
-        "distinct_persons": distinct_persons,
+        "total_rows": int(row["total_rows"] or 0),
+        "distinct_persons": int(row["distinct_persons"] or 0),
     }
 
 
