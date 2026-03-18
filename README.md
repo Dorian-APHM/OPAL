@@ -20,6 +20,9 @@ Plateforme web de qualite des donnees, construction de cohortes, mapping de voca
    - [Parametres](#7-parametres)
    - [Audit et Administration](#8-audit-et-administration)
    - [Modules complementaires](#9-modules-complementaires)
+   - [Notifications temps reel](#10-notifications-temps-reel)
+   - [Pathways Analysis](#11-pathways-analysis)
+   - [Theme clair](#12-theme-clair)
 6. [Securite et Authentification](#securite-et-authentification)
 7. [Internationalisation](#internationalisation)
 8. [Developpement](#developpement)
@@ -39,6 +42,9 @@ OPAL est une application web autonome qui se connecte a vos bases OMOP CDM exist
 - **Executer des outils OHDSI** (Achilles, DQD, CDM Onboarding) avec logs en temps reel
 - **Comparer des CDM** et detecter les regressions entre versions
 - **Administrer les utilisateurs** via Keycloak avec controle d'acces par role
+- **Recevoir des notifications temps reel** via WebSocket (zero polling)
+- **Analyser les parcours de soins** (Pathways Analysis) a la maniere d'ATLAS
+- **Basculer entre theme sombre et clair** (palette Creme Sauge)
 
 OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (optionnelle, opt-in) concerne la table `source_to_concept_map` lors de l'application des mappings valides.
 
@@ -419,13 +425,100 @@ Les modules suivants completent les fonctionnalites principales :
 | **Incidence** | `/incidence` | `/api/incidence/` | Analyse de taux d'incidence sur cohortes |
 | **Estimation** | `/estimation` | `/api/estimation/` | Estimation d'effets populationnels |
 | **Controle d'acces CDM** | — | `/api/cdm-access/` | Gestion des permissions utilisateur/groupe par CDM |
-| **Notifications** | — | `/api/notifications/` | Notifications in-app (demandes, partages, alertes) |
+| **Notifications** | — | `/api/notifications/`, `/api/ws/notifications` | Notifications temps reel via WebSocket |
 | **Favoris** | — | `/api/favorites/` | Marquer cohortes, concepts, requetes comme favoris |
 | **Requetes sauvegardees** | — | `/api/saved-queries/` | Persistance des requetes SQL personnalisees |
 | **Templates de cohortes** | — | `/api/cohort-templates/` | Modeles de criteres de cohortes reutilisables |
 | **Partage de cohortes** | — | `/api/cohorts/` | Partage de cohortes entre utilisateurs |
 | **Recherche globale** | — | `/api/search/` | Recherche transversale (cohortes, concepts, requetes) |
 | **Groupes** | — | `/api/groups/` | Gestion de groupes d'utilisateurs |
+
+---
+
+### 10. Notifications temps reel
+
+**API** : `/api/ws/notifications` (WebSocket) + `/api/notifications/` (REST) | **Roles** : tous
+
+Systeme de notifications entierement temps reel via WebSocket, sans aucun polling.
+
+#### Architecture
+
+```
+Client (navigateur)  ──WebSocket──►  Backend (FastAPI)
+                                        │
+                         ┌──────────────┤
+                         ▼              ▼
+                    WebSocket       Insert DB
+                    Manager         (Notification)
+                         │
+                         ▼
+                   Broadcast vers
+                   les connexions
+                   de l'utilisateur
+```
+
+#### Fonctionnalites
+
+- **Connexion WebSocket authentifiee** via ticket SSE a usage unique (TTL 30s)
+- **9 types de notification** : `access_granted`, `access_revoked`, `cdm_created`, `cdm_updated`, `cdm_deleted`, `mapping_applied`, `cohort_deleted`, `cohort_updated`, `group_removed`, `cohort_shared`, `access_request`
+- **Declencheurs automatiques** dans tous les modules (CDM, cohortes, mapping, groupes, acces)
+- **NotificationCenter** : drawer avec historique complet, filtres, actions en lot
+- **Preferences** : mute par type de notification (`GET/POST /api/notifications/preferences`)
+- **Nettoyage automatique** : purge des notifications lues > 30 jours
+- **Reconnexion automatique** avec backoff exponentiel cote client
+
+---
+
+### 11. Pathways Analysis
+
+**Route** : `/cohorts` (onglet Pathways) | **API** : `/api/cohorts/pathways` | **Roles** : admin, data-manager, chercheur, medecin
+
+Analyse de parcours de soins ("treatment pathways") basee sur la methodologie OHDSI ATLAS.
+
+#### Principe
+
+1. Definir des **event cohorts** (groupes de concepts representant un traitement ou une condition)
+2. OPAL collecte les evenements cliniques des patients de la cohorte cible
+3. Les evenements sont collapses en **eras** (periodes contigues)
+4. Les **sequences** de traitements sont aggregees et visualisees en **sunburst**
+
+#### Parametres
+
+| Parametre | Defaut | Description |
+|-----------|--------|-------------|
+| `max_depth` | 5 | Profondeur max des parcours (1-10) |
+| `min_cell_count` | 5 | Seuil minimum de patients par chemin |
+| `combo_window` | 0 | Jours pour fusionner les eras chevauchantes |
+
+#### Interface
+
+- **Event Cohort Builder** : recherche de concepts OMOP, nommage, toggle descendants
+- **Sunburst SVG interactif** : arcs concentriques, tooltips, legende couleurs
+- **Table des top pathways** : sequences classees par frequence
+- **Export CSV** des resultats
+
+---
+
+### 12. Theme clair
+
+OPAL propose un **mode sombre** (defaut) et un **mode clair** (palette Creme Sauge).
+
+#### Activation
+
+- Bouton soleil/lune dans la barre superieure (TopNav)
+- Persistance du choix dans `localStorage`
+- Transition fluide (0.4s) entre les themes
+
+#### Palette Creme Sauge (mode clair)
+
+| Element | Couleur |
+|---------|---------|
+| Arriere-plan | `#EDE7D9` (creme chaud) |
+| Surfaces | `#E0D9C8` (creme fonce) |
+| Accent | `#8FAE6B` (vert sauge) |
+| Texte | `#2D3B1E` (vert fonce) |
+
+Toutes les surfaces sont creme — aucun blanc pur. Les ombres neumorphiques sont adaptees au mode clair.
 
 ---
 
@@ -462,6 +555,22 @@ Le controle s'applique a deux niveaux :
 
 - Toutes les requetes API sont tracees (utilisateur, methode, chemin, statut, duree)
 - Logs stockes par jour, consultables et exportables via l'interface admin
+- Masquage automatique des parametres sensibles (password, token, ticket)
+- Fichiers de logs crees avec permissions `0o640`
+
+### Securite renforcee (v1.1)
+
+| Protection | Detail |
+|-----------|--------|
+| **SQL injection** | Migration complete vers `psycopg2.sql.SQL` + `sql.Identifier` |
+| **Path traversal** | Validation `resolve()` + `startswith()` dans le file browser OHDSI |
+| **SSRF** | Rejet des hosts CDM locaux, metadata cloud, IPs privees |
+| **Rate limiting** | `slowapi` sur endpoints sensibles (inscription, tickets, compute) |
+| **IDOR** | Verification d'ownership sur toutes les ressources utilisateur |
+| **CSP** | `Content-Security-Policy`, `Strict-Transport-Security`, `Permissions-Policy` |
+| **Thread safety** | `threading.Lock` sur tous les dicts de taches partages |
+| **GZip** | Compression automatique des reponses (seuil 1000 bytes) |
+| **Production guards** | `SECRET_KEY` faible ou `AUTH_ENABLED=false` en prod → crash immediat |
 
 ### Recommandations production
 
@@ -473,6 +582,7 @@ Le controle s'applique a deux niveaux :
 | Authentification | Activer Keycloak (`AUTH_ENABLED=true`) |
 | Reseau | Ne pas exposer les ports 8000 et 5432 en production |
 | Keycloak | Changer le mot de passe admin par defaut |
+| Docker | Utiliser `docker-compose.prod.yml` pour le deploiement production |
 
 ---
 
@@ -499,29 +609,39 @@ opal/
 ├── CLAUDE.md                 # Instructions pour Claude Code
 ├── .env.example              # Template de configuration
 │
+├── CHANGELOG.md             # Historique des changements v1.1
+│
 ├── docs/
-│   ├── API.md                # Reference API complete (71+ endpoints)
+│   ├── API.md                # Reference API complete (80+ endpoints)
 │   ├── TECHNICAL.md          # Documentation technique
-│   └── USER_GUIDE.md         # Guide utilisateur
+│   ├── USER_GUIDE.md         # Guide utilisateur
+│   ├── METHODOLOGIE.md       # Methodologie des analyses
+│   └── WEBSOCKET_NOTIFICATIONS.md  # Documentation WebSocket
 │
 ├── backend/
 │   ├── Dockerfile            # Python 3.12-slim + uvicorn
 │   ├── requirements.txt      # Dependances Python
-│   ├── main.py               # Point d'entree FastAPI + endpoints systeme (18 routers)
+│   ├── main.py               # Point d'entree FastAPI + endpoints systeme (19 routers)
 │   ├── config.py             # Variables d'environnement et constantes
+│   ├── alembic/              # Migrations de schema (Alembic)
 │   ├── auth/
-│   │   ├── keycloak.py       # Middleware OIDC + RBAC
+│   │   ├── keycloak.py       # Middleware ASGI OIDC + RBAC
 │   │   └── permissions.py    # Permissions YAML loader
 │   ├── permissions.yaml      # Matrice RBAC declarative
 │   ├── audit/
 │   │   └── logger.py         # Middleware d'audit (trace toutes les requetes)
 │   ├── db/
 │   │   ├── app_db.py         # Engine SQLAlchemy (base OPAL)
-│   │   ├── models.py         # 21 modeles SQLAlchemy
+│   │   ├── models.py         # 22 modeles SQLAlchemy
 │   │   └── omop_connector.py # Connexion dynamique aux CDM (psycopg2)
 │   ├── utils/
 │   │   ├── crypto.py         # Chiffrement Fernet
-│   │   └── notifications.py  # Systeme de notifications
+│   │   ├── notifications.py  # Systeme de notifications
+│   │   ├── ws_manager.py     # WebSocket connection manager
+│   │   ├── cdm_helper.py     # Helper centralise connexion CDM
+│   │   ├── sql_safety.py     # Validation identifiants SQL
+│   │   ├── csv_safety.py     # Protection injection CSV
+│   │   └── rate_limit.py     # Decorateur rate limiting
 │   ├── modules/
 │   │   ├── cdm_router.py          # CRUD des connexions CDM
 │   │   ├── cdm_access_router.py   # Controle d'acces par CDM
@@ -535,9 +655,11 @@ opal/
 │   │   │       ├── person.py
 │   │   │       ├── observation_period.py
 │   │   │       └── clinical.py
+│   │   ├── admin_router.py        # Administration utilisateurs (extrait de main.py)
 │   │   ├── cohort/
 │   │   │   ├── router.py          # CRUD, execution, caracterisation, SQL
 │   │   │   ├── sql_builder.py     # JSON -> SQL
+│   │   │   ├── pathways.py        # Pathways Analysis (parcours de soins)
 │   │   │   ├── characterization.py # Table 1
 │   │   │   └── comparison.py      # Comparaison de cohortes (SMD)
 │   │   ├── mapping/
@@ -566,30 +688,11 @@ opal/
 │   ├── i18n/
 │   │   ├── en.json           # Traductions anglais
 │   │   └── fr.json           # Traductions francais
-│   └── tests/                # 22 fichiers de tests
+│   └── tests/                # 38 fichiers de tests (601 tests)
 │       ├── conftest.py       # Fixtures SQLite in-memory
-│       ├── test_api.py
-│       ├── test_engine.py
-│       ├── test_comparator.py
-│       ├── test_crypto.py
-│       ├── test_cohort_api.py
-│       ├── test_mapping_api.py
-│       ├── test_suggest.py
-│       ├── test_sql_builder.py
-│       ├── test_cohort_comparison.py
-│       ├── test_cohort_diff.py
-│       ├── test_cohort_sharing.py
-│       ├── test_cohort_templates.py
-│       ├── test_admin_api.py
-│       ├── test_audit_api.py
-│       ├── test_access_requests.py
-│       ├── test_cdm_access.py
-│       ├── test_conformity.py
-│       ├── test_favorites.py
-│       ├── test_groups.py
-│       ├── test_notifications.py
-│       ├── test_saved_queries.py
-│       └── test_search.py
+│       ├── omop_mock.py      # Mock reutilisable psycopg2
+│       ├── README.md         # Documentation architecture de test
+│       └── test_*.py         # 36 fichiers de tests couvrant tous les modules
 │
 ├── frontend/
 │   ├── Dockerfile            # Node 20 build + Nginx runtime
@@ -600,22 +703,26 @@ opal/
 │   └── src/
 │       ├── main.tsx          # Point d'entree React
 │       ├── App.tsx           # Routing et layout (16 pages)
-│       ├── opal-theme.css    # Theme Neumorphic Emerald Night
+│       ├── opal-theme.css    # Theme Neumorphic (dark + light Creme Sauge)
 │       ├── auth/
 │       │   └── KeycloakContext.tsx  # Contexte auth + RBAC frontend
 │       ├── api/
 │       │   └── client.ts     # Client Axios (100+ endpoints)
 │       ├── types/
 │       │   └── index.ts      # Interfaces TypeScript
+│       ├── theme/
+│       │   └── tokens.ts     # Design tokens (couleurs, ombres, dark/light)
 │       ├── hooks/
-│       │   ├── useNotifDots.ts    # Pastilles de notification
-│       │   ├── useSessionState.ts # Etat session en memoire
-│       │   └── useIsMobile.ts     # Detection mobile
+│       │   ├── useNotifDots.ts      # Pastilles de notification (WebSocket)
+│       │   ├── useNotificationWs.ts # Hook WebSocket notifications
+│       │   ├── useTheme.ts          # Toggle dark/light avec persistance
+│       │   ├── useSessionState.ts   # Etat session en memoire
+│       │   └── useIsMobile.ts       # Detection mobile
 │       ├── i18n/
 │       │   ├── index.ts      # Configuration i18next
 │       │   ├── en.json       # Traductions anglais
 │       │   └── fr.json       # Traductions francais
-│       ├── pages/            # 16 pages
+│       ├── pages/            # 15 pages
 │       │   ├── HomePage.tsx
 │       │   ├── QualityPage.tsx
 │       │   ├── CohortPage.tsx
@@ -630,17 +737,22 @@ opal/
 │       │   ├── ConceptSetPage.tsx
 │       │   ├── AuditPage.tsx
 │       │   ├── UserManagementPage.tsx
-│       │   ├── LoginPage.tsx
-│       │   └── LandingPage.tsx
+│       │   └── LoginPage.tsx
 │       └── components/
 │           ├── layout/
 │           │   ├── Sidebar.tsx    # Navigation + CDM selector
-│           │   └── TopNav.tsx     # Barre superieure + recherche globale
+│           │   └── TopNav.tsx     # Barre superieure + recherche + theme + notifs
+│           ├── NotificationCenter.tsx  # Drawer notifications temps reel
 │           ├── ui/                # Composants Neumorphic custom
 │           │   ├── Card.tsx
 │           │   ├── Checkbox.tsx
 │           │   ├── Select.tsx
-│           │   └── Tabs.tsx
+│           │   ├── Tabs.tsx
+│           │   ├── AnimatedList.tsx     # Animations (FadeIn, ScaleIn, CountUp)
+│           │   ├── SkeletonPatterns.tsx # Skeleton loaders contextuels
+│           │   ├── ErrorState.tsx       # Etats d'erreur riches
+│           │   ├── Empty.tsx            # Etats vides (11 variantes)
+│           │   └── Toast.tsx            # Toasts animes
 │           ├── GlobalSearch.tsx   # Recherche globale
 │           ├── SqlEditor.tsx      # Editeur SQL (CodeMirror)
 │           ├── quality/
@@ -655,6 +767,7 @@ opal/
 │               ├── ResultsPanel.tsx
 │               ├── CharacterizationPanel.tsx
 │               ├── CohortComparisonPanel.tsx
+│               ├── PathwaysPanel.tsx    # Sunburst parcours de soins
 │               └── PatientJourney.tsx
 │
 ├── keycloak/
@@ -713,6 +826,8 @@ Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP. A
 | Pydantic 2.x | Validation des donnees |
 | cryptography | Chiffrement Fernet |
 | PyJWT | Validation JWT (Keycloak) |
+| slowapi | Rate limiting |
+| Alembic | Migrations de schema |
 
 ### Frontend
 
@@ -722,6 +837,7 @@ Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP. A
 | TypeScript 5 | Typage statique |
 | Vite 5 | Build et dev server |
 | Composants Neumorphic custom | Design system (Card, Select, Tabs, Checkbox…) |
+| Framer Motion | Micro-animations (listes, transitions, compteurs) |
 | Lucide React | Icones |
 | Recharts | Graphiques (barres, courbes, camemberts, aires) |
 | CodeMirror 6 | Editeur SQL |
@@ -729,6 +845,7 @@ Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP. A
 | i18next | Internationalisation |
 | React Router 6 | Routing SPA |
 | keycloak-js | Client OpenID Connect |
+| Vitest + Testing Library | Tests unitaires et composants |
 
 ### Infrastructure
 
@@ -741,13 +858,34 @@ Les tests utilisent une base SQLite en memoire et mockent les connexions OMOP. A
 
 ---
 
+### Tests
+
+```bash
+# Backend (601 tests)
+cd opal/backend
+pip install -r requirements-dev.txt
+pytest tests/ -v
+
+# Frontend (84 tests)
+cd opal/frontend
+npm install
+npx vitest run
+```
+
+Les tests backend utilisent une base SQLite en memoire et un mock psycopg2 (`omop_mock.py`). Aucune base externe requise.
+
+---
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [docs/API.md](docs/API.md) | Reference API complete (71+ endpoints) |
+| [docs/API.md](docs/API.md) | Reference API complete (80+ endpoints) |
 | [docs/TECHNICAL.md](docs/TECHNICAL.md) | Documentation technique (architecture, modeles, securite) |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Guide utilisateur complet |
+| [docs/METHODOLOGIE.md](docs/METHODOLOGIE.md) | Methodologie des analyses (qualite, cohortes, mapping) |
+| [docs/WEBSOCKET_NOTIFICATIONS.md](docs/WEBSOCKET_NOTIFICATIONS.md) | Architecture WebSocket notifications |
+| [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements v1.1 |
 
 ---
 
