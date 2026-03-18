@@ -313,7 +313,9 @@ def save_estimation(body: EstimationSaveRequest, request: Request, db=Depends(ge
 
 
 @router.get("/")
-def list_estimations(cdm_name: str | None = None, db=Depends(get_db)):
+def list_estimations(request: Request, cdm_name: str | None = None, db=Depends(get_db)):
+    if cdm_name:
+        check_cdm_access(request, cdm_name)
     q = db.query(EstimationAnalysis)
     if cdm_name:
         q = q.filter(EstimationAnalysis.cdm_name == cdm_name)
@@ -335,10 +337,11 @@ def list_estimations(cdm_name: str | None = None, db=Depends(get_db)):
 
 
 @router.get("/{analysis_id}")
-def get_estimation(analysis_id: int, db=Depends(get_db)):
+def get_estimation(analysis_id: int, request: Request, db=Depends(get_db)):
     a = db.query(EstimationAnalysis).filter(EstimationAnalysis.id == analysis_id).first()
     if not a:
         raise HTTPException(status_code=404, detail="Estimation analysis not found")
+    check_cdm_access(request, a.cdm_name)
     return {
         "id": a.id,
         "cdm_name": a.cdm_name,
@@ -358,6 +361,7 @@ def delete_estimation_analysis(analysis_id: int, request: Request, db: Session =
     analysis = db.query(EstimationAnalysis).filter(EstimationAnalysis.id == analysis_id).first()
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
+    check_cdm_access(request, analysis.cdm_name)
     db.delete(analysis)
     db.commit()
     return {"message": "Deleted"}

@@ -43,7 +43,9 @@ export const useAuth = () => useContext(AuthContext);
 // Determine Keycloak URL based on browser location
 function getKeycloakUrl(): string {
   const hostname = window.location.hostname;
-  return `http://${hostname}:8080`;
+  const protocol = window.location.protocol;
+  const port = protocol === 'https:' ? '8443' : '8080';
+  return `${protocol}//${hostname}:${port}`;
 }
 
 const keycloak = new Keycloak({

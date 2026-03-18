@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 def _utcnow():
     return datetime.now(timezone.utc)
 
-from sqlalchemy import Column, Index, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -68,10 +68,16 @@ class Cohort(Base):
     cdm_name = Column(String(255), nullable=False, index=True)
     name = Column(String(500), nullable=False)
     description = Column(Text, default="")
-    created_by = Column(String(255), nullable=True, index=True)
+    created_by = Column(String(255), nullable=False, default="system", index=True)
     shared_with_all = Column(Integer, default=0)  # 0=private, 1=public (Integer for SQLite compat)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    # Cascade relationships
+    versions = relationship("CohortVersion", cascade="all, delete-orphan", passive_deletes=True,
+                            primaryjoin="Cohort.id == foreign(CohortVersion.cohort_id)")
+    shares = relationship("CohortShare", cascade="all, delete-orphan", passive_deletes=True,
+                          primaryjoin="Cohort.id == foreign(CohortShare.cohort_id)")
 
 
 class CohortVersion(Base):
@@ -331,6 +337,9 @@ class UserGroup(Base):
     description = Column(Text, default="")
     created_by = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+
+    members = relationship("UserGroupMember", cascade="all, delete-orphan", passive_deletes=True,
+                           primaryjoin="UserGroup.name == foreign(UserGroupMember.group_name)")
 
 
 class UserGroupMember(Base):

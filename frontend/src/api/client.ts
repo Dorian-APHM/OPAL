@@ -166,7 +166,10 @@ export function authDownload(url: string, filename?: string) {
       const cd = xhr.getResponseHeader('Content-Disposition');
       if (cd) {
         const match = cd.match(/filename="?([^";\n]+)"?/);
-        if (match) a.download = match[1];
+        if (match) {
+          // Sanitize: strip path separators to prevent directory traversal
+          a.download = match[1].replace(/[\\/]/g, '_').replace(/\.\./g, '_');
+        }
       }
       document.body.appendChild(a);
       a.click();

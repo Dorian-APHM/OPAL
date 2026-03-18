@@ -47,9 +47,9 @@ import threading as _threading
 
 
 def _pool_evictor():
-    """Background thread that evicts idle OMOP connection pools every 5 min."""
+    """Background thread that evicts idle OMOP connection pools every 60s."""
     while not _evictor_stop.is_set():
-        _evictor_stop.wait(300)
+        _evictor_stop.wait(60)
         if not _evictor_stop.is_set():
             evict_idle_pools()
 
