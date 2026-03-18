@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.cdm_helper import check_cdm_access
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -40,6 +40,41 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
 
 
+# ──── Criteria validation ────
+
+_MAX_CRITERIA_DEPTH = 5
+_MAX_CONCEPT_IDS = 10000
+
+
+def _validate_criteria(criteria: dict, _depth: int = 0) -> dict:
+    """Validate cohort criteria structure: limit nesting depth and concept_ids count."""
+    if _depth > _MAX_CRITERIA_DEPTH:
+        raise ValueError(f"Criteria nesting depth exceeds maximum of {_MAX_CRITERIA_DEPTH}")
+    if not isinstance(criteria, dict):
+        raise ValueError("Criteria must be a JSON object")
+
+    for group_key in ("inclusion", "exclusion"):
+        group = criteria.get(group_key)
+        if group is not None:
+            if not isinstance(group, dict):
+                raise ValueError(f"'{group_key}' must be a JSON object")
+            for crit in group.get("criteria", []):
+                if not isinstance(crit, dict):
+                    raise ValueError(f"Each criterion in '{group_key}' must be a JSON object")
+                cids = crit.get("concept_ids", [])
+                if not isinstance(cids, list):
+                    raise ValueError("concept_ids must be a list")
+                if len(cids) > _MAX_CONCEPT_IDS:
+                    raise ValueError(f"concept_ids count ({len(cids)}) exceeds maximum of {_MAX_CONCEPT_IDS}")
+                for cid in cids:
+                    if not isinstance(cid, (int, float)):
+                        raise ValueError(f"concept_ids must contain integers, got {type(cid).__name__}")
+            for sub_group in group.get("groups", []):
+                _validate_criteria({"inclusion": sub_group}, _depth=_depth + 1)
+
+    return criteria
+
+
 # ──── Request / Response models ────
 
 class CohortCreateRequest(BaseModel):
@@ -48,22 +83,44 @@ class CohortCreateRequest(BaseModel):
     description: str = Field(default="", max_length=5000)
     criteria: dict
 
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict) -> dict:
+        return _validate_criteria(v)
+
 
 class CohortUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=5000)
     criteria: dict | None = None
 
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict | None) -> dict | None:
+        if v is not None:
+            return _validate_criteria(v)
+        return v
+
 
 class CohortCountRequest(BaseModel):
     cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
+
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict) -> dict:
+        return _validate_criteria(v)
 
 
 class CohortSampleRequest(BaseModel):
     cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
     limit: int = Field(default=10, ge=1, le=1000)
+
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict) -> dict:
+        return _validate_criteria(v)
 
 
 class ConceptSearchRequest(BaseModel):
