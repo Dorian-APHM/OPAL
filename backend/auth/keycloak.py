@@ -8,6 +8,7 @@ Uses a pure ASGI middleware (not BaseHTTPMiddleware) so that StreamingResponse
 """
 import logging
 import re
+import threading
 import time
 import uuid
 
@@ -51,30 +52,32 @@ _CDM_CHECK_SKIP_PREFIXES = {"/api/cdm-access"}
 _SSE_TICKET_TTL = 30  # seconds
 _MAX_SSE_TICKETS = 1000
 _sse_tickets: dict[str, tuple[dict, float]] = {}  # ticket_id → (user_info, expires_at)
+_sse_tickets_lock = threading.Lock()
 
 
 def create_sse_ticket(user_info: dict) -> str:
     """Create a one-time-use ticket for SSE connections. Valid for 30 seconds."""
-    global _sse_tickets
-    # Cleanup expired tickets
-    now = time.time()
-    expired = [k for k, (_, exp) in _sse_tickets.items() if exp < now]
-    for k in expired:
-        del _sse_tickets[k]
+    with _sse_tickets_lock:
+        # Cleanup expired tickets
+        now = time.time()
+        expired = [k for k, (_, exp) in _sse_tickets.items() if exp < now]
+        for k in expired:
+            del _sse_tickets[k]
 
-    # Enforce maximum capacity
-    if len(_sse_tickets) >= _MAX_SSE_TICKETS:
-        # Expired tickets already cleaned above; reject if still at capacity
-        raise HTTPException(status_code=429, detail="Too many active tickets")
+        # Enforce maximum capacity
+        if len(_sse_tickets) >= _MAX_SSE_TICKETS:
+            # Expired tickets already cleaned above; reject if still at capacity
+            raise HTTPException(status_code=429, detail="Too many active tickets")
 
-    ticket_id = uuid.uuid4().hex
-    _sse_tickets[ticket_id] = (user_info, now + _SSE_TICKET_TTL)
-    return ticket_id
+        ticket_id = uuid.uuid4().hex
+        _sse_tickets[ticket_id] = (user_info, now + _SSE_TICKET_TTL)
+        return ticket_id
 
 
 def _redeem_sse_ticket(ticket_id: str) -> dict | None:
     """Redeem and consume a one-time-use SSE ticket. Returns user_info or None."""
-    entry = _sse_tickets.pop(ticket_id, None)
+    with _sse_tickets_lock:
+        entry = _sse_tickets.pop(ticket_id, None)
     if entry is None:
         return None
     user_info, expires_at = entry
