@@ -123,6 +123,75 @@ def _start_notification_cleaner():
     logger.info("Notification cleaner started (purges read notifications >30d)")
 
 
+# ---------------------------------------------------------------------------
+# In-memory dict cleanup — evict stale/completed entries every 5 min
+# ---------------------------------------------------------------------------
+_TASK_TTL_SECONDS = 1800  # 30 minutes — auto-evict completed/abandoned tasks
+
+
+def _inmemory_cleanup():
+    """Background thread that cleans up stale entries in all in-memory task dicts."""
+    import time
+    import os
+
+    while not _evictor_stop.is_set():
+        _evictor_stop.wait(300)  # every 5 min
+        if _evictor_stop.is_set():
+            break
+        try:
+            # 1. Mapping suggestions
+            from modules.mapping.router import _active_suggestions, _suggestions_lock, _cleanup_stale_suggestions
+            with _suggestions_lock:
+                _cleanup_stale_suggestions()
+
+            # 2. Data extraction tasks — evict completed tasks older than TTL, clean up temp files
+            from modules.datamanagement.router import _active_extractions, _extractions_lock
+            now = time.time()
+            with _extractions_lock:
+                stale_ids = [
+                    tid for tid, t in _active_extractions.items()
+                    if t["status"] in ("completed", "error")
+                    and t.get("completed_at") and now - t["completed_at"] > _TASK_TTL_SECONDS
+                ]
+                for tid in stale_ids:
+                    task = _active_extractions.pop(tid)
+                    csv_path = task.get("csv_path")
+                    if csv_path:
+                        try:
+                            os.unlink(csv_path)
+                        except OSError:
+                            pass
+                if stale_ids:
+                    logger.info("Cleaned up %d stale extraction tasks", len(stale_ids))
+
+            # 3. OHDSI tasks — evict finished tasks older than TTL
+            from modules.ohdsi.router import _tasks, _lock as _ohdsi_lock
+            with _ohdsi_lock:
+                stale_ohdsi = [
+                    tid for tid, t in _tasks.items()
+                    if t.get("status") in ("completed", "error", "failed")
+                    and t.get("finished_at") and now - t["finished_at"] > _TASK_TTL_SECONDS
+                ]
+                for tid in stale_ohdsi:
+                    _tasks.pop(tid, None)
+                if stale_ohdsi:
+                    logger.info("Cleaned up %d stale OHDSI tasks", len(stale_ohdsi))
+
+        except Exception as e:
+            logger.error("In-memory cleanup error: %s", e)
+
+
+_cleanup_thread: _threading.Thread | None = None
+
+
+@app.on_event("startup")
+def _start_inmemory_cleanup():
+    global _cleanup_thread
+    _cleanup_thread = _threading.Thread(target=_inmemory_cleanup, daemon=True, name="inmemory-cleanup")
+    _cleanup_thread.start()
+    logger.info("In-memory task cleanup started (evicts stale tasks every 5 min)")
+
+
 @app.on_event("shutdown")
 def _shutdown_pools():
     _evictor_stop.set()
@@ -337,7 +406,10 @@ def get_audit_logs(
             dates.append(d.isoformat())
             d -= timedelta(days=1)
 
-    entries = []
+    import heapq as _heapq
+
+    # Two-pass approach: first count total matching entries, then collect only the page
+    # This avoids loading all entries into memory at once.
     total = 0
     for dt_str in dates:
         log_file = AUDIT_LOG_DIR / f"{dt_str}.jsonl"
@@ -355,14 +427,45 @@ def get_audit_logs(
                     if action and not entry.get("action", "").startswith(action):
                         continue
                     total += 1
-                    entries.append(entry)
                 except _json.JSONDecodeError:
                     continue
 
-    entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
+    # Second pass: collect only the entries needed for the requested page
+    # Use a heap to get top-N entries sorted by timestamp (descending)
     start = (page - 1) * page_size
+    need = start + page_size  # We need the top `need` entries by timestamp
+    # Use a min-heap of size `need` — keep the `need` most recent entries
+    # Tuple: (timestamp, counter, entry) — counter avoids comparing dicts
+    heap: list[tuple[str, int, dict]] = []
+    counter = 0
+    for dt_str in dates:
+        log_file = AUDIT_LOG_DIR / f"{dt_str}.jsonl"
+        if not log_file.exists():
+            continue
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                    if user and entry.get("user") != user:
+                        continue
+                    if action and not entry.get("action", "").startswith(action):
+                        continue
+                    ts = entry.get("ts", "")
+                    counter += 1
+                    if len(heap) < need:
+                        _heapq.heappush(heap, (ts, counter, entry))
+                    elif ts > heap[0][0]:
+                        _heapq.heapreplace(heap, (ts, counter, entry))
+                except _json.JSONDecodeError:
+                    continue
+
+    # Sort the heap entries descending and slice for the page
+    sorted_entries = [e for _, _, e in sorted(heap, key=lambda x: x[0], reverse=True)]
     return {
-        "entries": entries[start:start + page_size],
+        "entries": sorted_entries[start:start + page_size],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -440,41 +543,50 @@ def export_audit_csv(
     d_from = _dt.fromisoformat(date_from) if date_from else _dt.today()
     d_to = _dt.fromisoformat(date_to) if date_to else d_from
 
-    entries = []
-    d = d_from
-    while d <= d_to:
-        log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
-        if log_file.exists():
-            with open(log_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = _json.loads(line)
-                        if user and entry.get("user") != user:
-                            continue
-                        if action and not entry.get("action", "").startswith(action):
-                            continue
-                        entries.append(entry)
-                    except _json.JSONDecodeError:
-                        continue
-        d += timedelta(days=1)
-
-    output = io.StringIO()
-    writer = csv.writer(output)
     from utils.csv_safety import csv_safe
-    writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
-    for e in entries:
-        writer.writerow([
-            csv_safe(e.get("ts", "")), csv_safe(e.get("user", "")), csv_safe(",".join(e.get("roles", []))),
-            csv_safe(e.get("action", "")), csv_safe(e.get("method", "")), csv_safe(e.get("path", "")),
-            e.get("status", ""), e.get("duration_ms", ""), csv_safe(e.get("ip", "")),
-        ])
-    output.seek(0)
+
+    def _generate_csv():
+        """Stream CSV line by line to avoid loading all entries in memory."""
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
+        yield buf.getvalue()
+
+        d = d_from
+        while d <= d_to:
+            log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
+            if log_file.exists():
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = _json.loads(line)
+                            if user and entry.get("user") != user:
+                                continue
+                            if action and not entry.get("action", "").startswith(action):
+                                continue
+                            row_buf = io.StringIO()
+                            row_writer = csv.writer(row_buf)
+                            row_writer.writerow([
+                                csv_safe(entry.get("ts", "")),
+                                csv_safe(entry.get("user", "")),
+                                csv_safe(",".join(entry.get("roles", []))),
+                                csv_safe(entry.get("action", "")),
+                                csv_safe(entry.get("method", "")),
+                                csv_safe(entry.get("path", "")),
+                                entry.get("status", ""),
+                                entry.get("duration_ms", ""),
+                                csv_safe(entry.get("ip", "")),
+                            ])
+                            yield row_buf.getvalue()
+                        except _json.JSONDecodeError:
+                            continue
+            d += timedelta(days=1)
 
     return StreamingResponse(
-        iter([output.getvalue()]),
+        _generate_csv(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=audit_logs.csv"},
     )

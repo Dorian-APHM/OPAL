@@ -37,9 +37,14 @@ class ConnectionManager:
             conns.discard(websocket)
             if not conns:
                 del self._connections[username]
-                # Clean up role mappings
-                for role_users in self._user_roles.values():
+                # Clean up role mappings and remove empty role sets
+                empty_roles = []
+                for role, role_users in self._user_roles.items():
                     role_users.discard(username)
+                    if not role_users:
+                        empty_roles.append(role)
+                for role in empty_roles:
+                    del self._user_roles[role]
         logger.info("WS disconnected: %s (total=%d)", username, self._count_total())
 
     async def send_to_user(self, username: str, data: dict):
