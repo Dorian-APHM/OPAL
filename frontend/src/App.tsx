@@ -172,7 +172,6 @@ export default function App() {
           <Route path="/ohdsi" element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/audit" element={<ProtectedRoute path="/audit"><PageSuspense><AuditPage /></PageSuspense></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute path="/users"><PageSuspense><UserManagementPage /></PageSuspense></ProtectedRoute>} />
-          <Route path="/login-preview" element={<PageSuspense><LoginPage onSignIn={() => {}} /></PageSuspense>} />
           <Route path="*" element={<ForbiddenPage />} />
         </Routes>
       </main>
