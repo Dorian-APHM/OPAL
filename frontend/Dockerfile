@@ -9,8 +9,12 @@ WORKDIR /app
 ENV PATH="/app/node_modules/.bin:$PATH"
 
 COPY package.json package-lock.json ./
-RUN if [ -n "$HTTP_PROXY" ]; then npm config set proxy $HTTP_PROXY && npm config set https-proxy $HTTPS_PROXY; fi && \
-    npm install
+RUN if [ -n "$HTTP_PROXY" ]; then \
+      npm config set proxy $HTTP_PROXY && \
+      npm config set https-proxy $HTTPS_PROXY && \
+      npm config set strict-ssl false; \
+    fi && \
+    NODE_TLS_REJECT_UNAUTHORIZED=0 npm install
 
 COPY . .
 RUN npm run build
