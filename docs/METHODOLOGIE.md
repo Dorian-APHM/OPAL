@@ -81,7 +81,7 @@ per AS (
 
 ### 1.3 Domaines cliniques
 
-Pour chaque domaine (Condition, Drug, Measurement, etc.) :
+Pour chaque domaine clinique (Condition, Drug, Measurement, Observation, Procedure, Visit, Device, Death, Specimen, Note, Payer_Plan_Period) :
 
 | Analyse | Méthode |
 |---------|---------|
@@ -354,7 +354,9 @@ Où `p = proportion (0–1)`.
 
 ## 6. Suggestions de mapping
 
-Le moteur de mapping propose des correspondances entre les termes sources (codes locaux) et les concepts standards OMOP, via 7 stratégies exécutées séquentiellement par ordre de confiance.
+Le moteur de mapping propose des correspondances entre les termes sources (codes locaux) et les concepts standards OMOP, via 5 stratégies internes (+ SapBERT en pré-calcul externe) exécutées séquentiellement par ordre de confiance.
+
+> **Note v1.2.1** : Le moteur détecte dynamiquement si la colonne `source_name` existe dans le CDM. Si absente, les stratégies basées sur le libellé (ingredient, fuzzy, keyword) sont limitées au `source_value`. Un tableau de `warnings` est retourné indiquant les limitations rencontrées.
 
 ### 6.1 SapBERT (pré-calculé, externe)
 
@@ -458,9 +460,9 @@ Règle générique : les DCI en `-INE` perdent le `-E` final en anglais.
 
 ### 6.8 Logique d'orchestration
 
-1. Les suggestions SapBERT sont ajoutées en premier (si elles existent)
-2. Les stratégies 2→7 s'exécutent séquentiellement
-3. **Court-circuit** : si les stratégies 2–4 produisent ≥ 5 résultats à ≥ 75% de confiance, les stratégies lentes (5–7) sont ignorées
+1. Les suggestions SapBERT sont ajoutées en premier (si elles existent dans la BDD applicative)
+2. Les stratégies 1→5 (exact, relationship, ingredient, fuzzy+keyword, contextual) s'exécutent séquentiellement
+3. **Court-circuit** : si les stratégies accumulées produisent ≥ `max_suggestions` résultats à ≥ 75% de confiance, les stratégies suivantes sont ignorées
 4. Dédoublonnage par `concept_id` (un concept n'apparaît qu'une fois)
 5. Tri final par confiance décroissante, retour des top N
 
@@ -535,4 +537,4 @@ Format : `{table}__{colonne}` (ex: `condition_occurrence__condition_concept_id`,
 
 ---
 
-*Document généré pour OPAL v1.0.1 — Mars 2026*
+*Document généré pour OPAL v1.2.1 — Mars 2026*

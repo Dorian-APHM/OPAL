@@ -1,21 +1,95 @@
-# CHANGELOG — OPAL v1.2.1
-
-## [1.2.1] — 2026-03-20 — Corrections sécurité HAUTE (S04–S11)
-
-### Sécurité
-
-- **S04** (`sql_builder.py`) : Remplacement de l'échappement manuel des `source_codes` par l'adapteur psycopg2 (`psycopg2.extensions.adapt`), identique au mécanisme interne des requêtes `%s`.
-- **S05** (`datamanagement/router.py`) : Vérification de propriétaire sur `/extract/status`, `/extract/download` et `/extract/cancel` — seul le lanceur de la tâche ou un admin/data-manager peut accéder à ses propres extractions.
-- **S06** (`ohdsi/router.py`) : Ajout de `check_cdm_access()` au début de `run_service` — un utilisateur sans accès au CDM ne peut plus lancer un service OHDSI dessus.
-- **S07** (`cohort/router.py`, `datamanagement/router.py`) : Suppression du champ `sql` dans les réponses de `/cohorts/count` et dans le résultat de tâche d'extraction — le SQL généré n'est plus exposé au frontend.
-- **S08** (`ohdsi/router.py`) : Le mot de passe CDM est écrit dans un fichier temporaire (chmod 0600) monté en lecture seule dans le conteneur OHDSI (`/run/secrets/opal_creds.env`), puis supprimé du disque après le démarrage. `DB_PASSWORD` n'apparaît plus dans `docker inspect`.
-- **S09** (`docker-compose.yml`) : Port Keycloak lié à `127.0.0.1:8080` (accès local uniquement). Ajout d'un avertissement visible documentant que ce compose est réservé au développement local.
-- **S10** (`ohdsi/router.py`) : L'utilisateur ayant lancé chaque service OHDSI est enregistré (`launched_by`). L'arrêt via `/stop/{service}` est restreint au lanceur ou à un admin/data-manager.
-- **S11** (`db/omop_connector.py`) : Le `PoolEntry` ne stocke plus le mot de passe en clair — seul un hash SHA-256 est conservé pour détecter les changements de credentials. La comparaison est faite via `_hash_password()`.
+# CHANGELOG — OPAL
 
 ---
 
-# CHANGELOG — OPAL v1.1.0
+## v1.2.1 (2026-03-20)
+
+> **Branche** : `OPAL_V1.2.1`
+> **Base** : `OPAL_V1.2.0`
+> **Periode** : 18–20 mars 2026
+
+### Securite
+
+- **S04** (`sql_builder.py`) : Remplacement de l'echappement manuel des `source_codes` par l'adapteur psycopg2 (`psycopg2.extensions.adapt`) — meme mecanisme que les requetes parametrees `%s`. (`2e45165`)
+- **S05** (`datamanagement/router.py`) : Verification de propriete sur `/extract/status`, `/extract/download`, `/extract/cancel` — seul le lanceur ou un admin/data-manager y a acces. (`2e45165`)
+- **S06** (`ohdsi/router.py`) : `check_cdm_access()` ajoute au debut de `run_service`. (`2e45165`)
+- **S07** (`cohort/router.py`, `datamanagement/router.py`) : Champ `sql` supprime des reponses `/cohorts/count` et des resultats d'extraction. (`2e45165`)
+- **S08** (`ohdsi/router.py`) : Mot de passe CDM ecrit dans un fichier temporaire (chmod 0600) monte en lecture seule dans le conteneur OHDSI, supprime apres demarrage. `DB_PASSWORD` n'apparait plus dans `docker inspect`. (`2e45165`)
+- **S09** (`docker-compose.yml`) : Port Keycloak lie a `127.0.0.1:8080`. Warning developpement ajoute. (`2e45165`)
+- **S10** (`ohdsi/router.py`) : `launched_by` enregistre dans `_tasks`. Arret via `/stop/{service}` restreint au lanceur ou admin. (`2e45165`)
+- **S11** (`db/omop_connector.py`) : `PoolEntry` stocke uniquement un hash SHA-256 du mot de passe (plus de plaintext). (`2e45165`)
+- **AUTH_ENABLED defaut `true`** : le mode non-authentifie n'est plus le defaut. Un `RuntimeError` est leve en production si `AUTH_ENABLED=false` (`config.py`, `9aa1d2f`)
+- **Rate limiting** : ajout de limites sur les endpoints couteux — quality analyze (3/min), batch stream (2/min), CDM test (5/min), cohorts execute (10/min), mapping suggest batch (3/min), incidence (3/min), estimation (3/min), characterize (3/min), pathways (3/min), conformity (3/min) (`9aa1d2f`)
+
+### Fonctionnalites
+
+- **Colonnes optionnelles** : detection dynamique des colonnes `source_name` dans le CDM via `cdm_helper.get_domain_config()`. Les domaines dont le CDM ne contient pas certaines colonnes optionnelles fonctionnent gracieusement (`0288819`, `3180cfb`)
+- **Warnings mapping** : le moteur de suggestions retourne un tableau `warnings` indiquant les limitations rencontrees (`source_name_missing`, `no_reference_codebook`, `no_sapbert_embeddings`, `source_names_empty`) (`1d006e1`, `3712ecd`)
+- **Mapping UX** : meilleurs etats vides, error toasts, warnings affiches dans l'interface (`3712ecd`, `874a92d`)
+
+### Optimisation
+
+- **N+1 query fix** : optimisation des requetes quality engine pour eviter les requetes N+1 (`9aa1d2f`)
+- **Thread pool borne** : `MAX_WORKER_THREADS` (defaut 16) remplace les threads non-bornes (`0d45e01`)
+- **Nettoyage in-memory** : daemon de nettoyage des taches perimees toutes les 5 min (`0d45e01`)
+
+### UX / Style
+
+- **Login page** : fond avec grille de points, formulaire simplifie (matricule + role uniquement), espacement ameliore (`2d0859d`, `874a92d`)
+- **TopNav** : affichage logo uniquement (pas le nom complet) (`874a92d`)
+- **Listes** : espacement ameliore dans les listes de mapping et suggestions (`2d0859d`)
+
+### Tests
+
+- **+27 tests** : `test_csv_safety.py`, `test_thread_pool.py` couvrant les lacunes identifiees (`0fdde24`)
+- **Nouveaux fichiers** : `test_ohdsi_router.py`, `test_rate_limit.py`, `test_sql_safety.py`
+
+### Audits
+
+- **3 audits exhaustifs** remplaces : securite (26 findings), optimisation (25 findings), fonctionnel (28 findings) — tous mis a jour pour v1.2.1 (`docs/audits/`)
+- Resolution des findings CRITIQUE et HAUTE des audits precedents (`9534240`, `605961f`, `0d45e01`)
+
+### Documentation
+
+- **Mise a jour complete** : README, API.md, TECHNICAL.md, USER_GUIDE.md, METHODOLOGIE.md, WEBSOCKET_NOTIFICATIONS.md alignes avec le code actuel
+- 29 endpoints manquants ajoutes a API.md
+- 13 schemas de modeles corriges dans TECHNICAL.md
+- Navigation sidebar → TopNav refletee dans toute la doc
+
+### Commits
+
+| Hash | Description |
+|------|-------------|
+| `9aa1d2f` | fix(security): AUTH_ENABLED default true, rate limiting, N+1 query optimization |
+| `874a92d` | style: login page polish, TopNav logo only, mapping warnings UX |
+| `2d0859d` | style: polish Login page, improve list spacing |
+| `3180cfb` | Merge branch 'backend-optional-columns' into OPAL_V1.2.1 |
+| `1d006e1` | feat: add warnings to mapping suggestion responses |
+| `3712ecd` | feat: mapping suggestion warnings, better empty states, error toasts |
+| `0288819` | fix: optional source_name columns and dynamic domain detection |
+| `0fdde24` | test: add 27 tests for csv_safety and thread_pool |
+| `0d45e01` | fix: resolve MOYENNE audit findings |
+| `605961f` | fix: resolve HAUTE audit findings |
+
+---
+
+## v1.2.0 (2026-03-18)
+
+> **Branche** : `OPAL_V1.2.0`
+> **Base** : `OPAL_V1.1.0`
+> **Periode** : 18 mars 2026
+
+### Audits et corrections
+
+- 3 audits approfondis (securite, optimisation, fonctionnel) avec 98 findings au total
+- Resolution de tous les findings P0/CRITIQUE (SQL injection f-string, SSE race condition, CSV en RAM, 3 domaines OMOP manquants)
+- Resolution des findings HAUTE (rate limiting, cascade deletes, JWT clock skew, JWKS TTL)
+- Resolution des findings MOYENNE (CSV injection, safe_identifier longueur, Keycloak password policy)
+- 27 tests supplementaires pour les lacunes identifiees
+
+---
+
+## v1.1.0 (2026-03-18)
 
 > **Branche** : `claude/ws-notifications-tests-bZV25`
 > **Base** : `OPAL_V1.0.1` (v1.0.1 — securite + optimisations SQL)
