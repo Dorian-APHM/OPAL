@@ -9,13 +9,13 @@
 
 ## Résumé Exécutif
 
-| Sévérité | Trouvées | Corrigées (cette session) | Restantes |
-|----------|----------|---------------------------|-----------|
-| CRITIQUE | 5 | 4 | 1 |
+| Sévérité | Trouvées | Corrigées | Restantes |
+|----------|----------|-----------|-----------|
+| CRITIQUE | 5 | 5 ✅ | 0 |
 | HAUTE | 12 | 5 | 7 |
 | MOYENNE | 10 | 7 (M1, M4, M5, M6, M8, M9 + M2/M3 déjà) | 3 |
 | BASSE | 8 | 0 | 8 |
-| **Total** | **35** | **9** | **26** |
+| **Total** | **35** | **12** | **23** |
 
 ### Points forts confirmés
 - SQL injection : defense-in-depth solide (`safe_identifier()` + `psycopg2.sql.SQL/Identifier` sur les chemins critiques)
@@ -86,9 +86,9 @@ def list_or_download_files(path: str = ""): ...
 
 ---
 
-### C3 — Docker socket monté dans le conteneur backend (dev)
+### C3 — Docker socket monté dans le conteneur backend (dev) — CORRIGÉ ✓
 
-**Fichier** : `docker-compose.yml:31`
+**Fichier** : `docker-compose.yml:31` (supprimé)
 **OWASP** : A04-Insecure Design
 
 **Constat** :
@@ -99,7 +99,39 @@ volumes:
 
 **Exploitation** : Toute RCE dans le backend FastAPI donne un accès Docker socket → escape du conteneur → root sur l'hôte.
 
-**Atténuation** : `docker-compose.prod.yml` supprime ce montage (commit `1145ce0`). Commentaire ajouté dans le fichier dev.
+**Correction** : Le mount `/var/run/docker.sock` a été supprimé de `docker-compose.yml` (base). Un commentaire détaillé explique comment utiliser un proxy Docker (Tecnativa `docker-socket-proxy`) avec liste blanche d'API pour l'intégration OHDSI. Le `docker-compose.prod.yml` restait déjà protégé (`1145ce0`).
+
+**Résiduel** : L'intégration OHDSI nécessite soit un proxy Docker (recommandé), soit un montage manuel explicite. Le groupe Docker (`group_add: "136"`) a également été retiré.
+
+---
+
+### C6 — AUTH_ENABLED=false accessible depuis des interfaces non-localhost — CORRIGÉ ✓
+
+**Fichier** : `backend/auth/keycloak.py:193-202`
+**OWASP** : A01-Broken Access Control, A07-Identification and Authentication Failures
+
+**Constat** : Quand `AUTH_ENABLED=false`, le middleware Keycloak accorde automatiquement le rôle `admin` à toutes les requêtes sans vérification d'origine. Si le serveur écoute sur `0.0.0.0` (par défaut dans Docker), n'importe quelle machine sur le réseau obtient des droits admin complets.
+
+**Exploitation** : Un attaquant sur le même réseau que le serveur OPAL (LAN hospitalier, VPN) peut accéder à toutes les API sans aucune authentification avec le rôle `admin`.
+
+**Correction** : Le middleware vérifie désormais `request.client.host`. Si l'IP source n'est pas `127.0.0.1` ou `::1` et que `AUTH_ENABLED=false`, la requête est rejetée avec HTTP 403 et un log `CRITICAL` est émis. Le mode sans auth reste fonctionnel pour le développement local uniquement.
+
+---
+
+### C7 — Identifiants Keycloak admin par défaut (`admin/admin`) — CORRIGÉ ✓
+
+**Fichiers** : `docker-compose.yml:16,95-96`, `.env.example:19-20`
+**OWASP** : A07-Identification and Authentication Failures
+
+**Constat** :
+```yaml
+- KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+```
+La syntaxe `:-admin` fournit `admin` comme valeur par défaut si la variable n'est pas définie. Un déploiement sans `.env` configuré utilise silencieusement `admin/admin` comme credentials Keycloak.
+
+**Exploitation** : L'interface d'administration Keycloak (port 8080) est accessible avec `admin/admin`, permettant de créer des utilisateurs OPAL arbitraires ou de prendre le contrôle du realm.
+
+**Correction** : Syntaxe changée en `:?` dans `docker-compose.yml` (backend et service keycloak). Le déploiement échoue immédiatement avec un message explicite si `KEYCLOAK_ADMIN_PASSWORD` n'est pas défini. `.env.example` est mis à jour : `KEYCLOAK_ADMIN_PASSWORD=` (vide, obligatoire à remplir).
 
 ---
 
@@ -361,13 +393,20 @@ Toutes les findings **CRITIQUE** de l'audit de sécurité ont été corrigées :
 |----|---------|--------|--------|
 | C1 | Endpoints OHDSI sans authentification | ✅ CORRIGÉ | `fa9f870` |
 | C2 | Keycloak `sslRequired: "none"` + redirectUris wildcard | ✅ CORRIGÉ | `fa9f870` |
-| C3 | Docker socket monté (dev) | ⚠️ ATTÉNUÉ | `1145ce0` (prod.yml) |
+| C3 | Docker socket monté (dev) | ✅ CORRIGÉ | ce commit |
 | C4 | F-strings SQL dans quality domains | ✅ CORRIGÉ | `5318b57` |
 | C5 | Tickets SSE sans lock thread-safe | ✅ CORRIGÉ | `5318b57` |
+| C6 | AUTH_ENABLED=false accessible depuis non-localhost | ✅ CORRIGÉ | ce commit |
+| C7 | Identifiants Keycloak admin par défaut (admin/admin) | ✅ CORRIGÉ | ce commit |
 
-**Corrections cross-audit** appliquées dans ce commit :
+**Corrections cross-audit** appliquées dans le commit `9534240` :
 - **F1 (fonctionnel/sécurité)** : Validation Pydantic des critères de cohorte — limite profondeur (5), concept_ids (10K), types stricts → prévient DoS par payload
 - **F2 (fonctionnel/sécurité)** : Race condition TOCTOU dans cancel SSE → lecture + écriture atomique sous un seul lock
+
+**Corrections P0 supplémentaires (ce commit)** :
+- **S01** : Suppression du mount `/var/run/docker.sock` dans `docker-compose.yml` + documentation du proxy Docker pour OHDSI
+- **S02** : Rejet des requêtes non-localhost quand `AUTH_ENABLED=false` (HTTP 403 + log CRITICAL)
+- **S03** : `KEYCLOAK_ADMIN_PASSWORD` obligatoire via `:?` dans `docker-compose.yml` — déploiement impossible sans mot de passe défini
 
 ---
 
