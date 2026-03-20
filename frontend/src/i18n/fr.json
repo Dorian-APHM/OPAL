@@ -158,7 +158,10 @@
     "Procedure": "Acte",
     "Visit": "Séjour",
     "Device": "Dispositif médical",
-    "Death": "Décès"
+    "Death": "Décès",
+    "Specimen": "Prélèvement",
+    "Note": "Note clinique",
+    "Payer_Plan_Period": "Période de couverture"
   },
   "settings": {
     "title": "Paramètres",

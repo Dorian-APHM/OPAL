@@ -550,6 +550,7 @@ export const incidenceApi = {
   list: (cdmName?: string) =>
     api.get<{ analyses: IncidenceAnalysisSummary[] }>('/incidence/', { params: { cdm_name: cdmName } }),
   get: (id: number) => api.get('/incidence/' + id),
+  delete: (id: number) => api.delete(`/incidence/${id}`),
 };
 
 // Estimation endpoints (Kaplan-Meier)
@@ -567,6 +568,7 @@ export const estimationApi = {
   list: (cdmName?: string) =>
     api.get<{ analyses: EstimationAnalysisSummary[] }>('/estimation/', { params: { cdm_name: cdmName } }),
   get: (id: number) => api.get('/estimation/' + id),
+  delete: (id: number) => api.delete(`/estimation/${id}`),
 };
 
 // Data Management endpoints
