@@ -191,8 +191,41 @@ class KeycloakMiddleware:
             return
 
         if not AUTH_ENABLED:
+            # SÉCURITÉ (S02) : AUTH_ENABLED=false est réservé au développement local.
+            # Quand l'authentification est désactivée, toutes les requêtes reçoivent
+            # automatiquement le rôle admin. Ce mode NE DOIT PAS être exposé sur une
+            # interface réseau non-localhost (risque d'escalade de privilèges immédiate).
+            #
+            # On vérifie l'IP source de la requête : si elle ne provient pas de
+            # 127.0.0.1 / ::1 (loopback), la requête est rejetée avec une erreur 403
+            # explicite, même si le serveur est techniquement joignable depuis ce réseau.
+            client_host = (request.client.host if request.client else None) or ""
+            _localhost_ips = {"127.0.0.1", "::1", "localhost"}
+            if client_host not in _localhost_ips:
+                logger.critical(
+                    "SECURITY: AUTH_ENABLED=false mais requête reçue depuis %s (non-localhost). "
+                    "Accès refusé. Passez AUTH_ENABLED=true ou restreignez le binding du serveur "
+                    "à 127.0.0.1 pour utiliser le mode sans authentification. "
+                    "(ENVIRONMENT=%s)",
+                    client_host,
+                    ENVIRONMENT,
+                )
+                resp = JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            "AUTH_ENABLED=false : accès refusé depuis une adresse non-localhost. "
+                            "Ce mode est réservé au développement local (127.0.0.1 uniquement)."
+                        )
+                    },
+                )
+                await resp(scope, receive, send)
+                return
+
             logger.warning(
-                "SECURITY: AUTH_ENABLED=false — all requests granted dev access (ENVIRONMENT=%s)",
+                "SECURITY: AUTH_ENABLED=false — accès dev accordé depuis %s (ENVIRONMENT=%s). "
+                "Ne jamais exposer ce mode sur un réseau non-localhost.",
+                client_host,
                 ENVIRONMENT,
             )
             scope.setdefault("state", {})["user"] = {
