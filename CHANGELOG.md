@@ -202,9 +202,9 @@ Implementation d'un mode clair complet sur l'ensemble de l'application.
 
 ### Audit complet et remediation
 
-3 rounds d'audit ont identifie **80 findings** au total. **59 items corriges** (P0 a P2).
+3 rounds d'audit ont identifie **80 findings** au total. **62 items corriges** (P0 a P2).
 
-### P0 — Critique
+### P0 — Critique (7/7 corriges)
 
 | Correction | Fichiers | Detail |
 |-----------|----------|--------|
@@ -213,6 +213,9 @@ Implementation d'un mode clair complet sur l'ensemble de l'application.
 | **SSRF** | `cdm_router.py` | Validation des hosts CDM : rejet localhost, metadata cloud, IPs privees, link-local |
 | **Rate limiting** | `main.py`, `utils/rate_limit.py` | `slowapi` sur endpoints sensibles (inscription, tickets SSE, compute) |
 | **CDM access checks** | `cohort/router.py`, `concept/router.py`, `concept_set/router.py` | `check_cdm_access()` sur 12 endpoints POST non proteges |
+| **S01 — Docker socket** (C3) | `docker-compose.yml` | Suppression du mount `/var/run/docker.sock` dans le fichier de base. Commentaire detaille sur le proxy Docker (Tecnativa `docker-socket-proxy`) pour l'integration OHDSI. |
+| **S02 — AUTH_ENABLED=false non-localhost** (C6) | `backend/auth/keycloak.py` | Rejet HTTP 403 + log CRITICAL si une requete non-localhost arrive avec `AUTH_ENABLED=false`. Le mode dev reste fonctionnel uniquement depuis 127.0.0.1/::1. |
+| **S03 — Keycloak credentials par defaut** (C7) | `docker-compose.yml`, `.env.example` | `KEYCLOAK_ADMIN_PASSWORD` desormais obligatoire (syntaxe `:?`). Le deploiement echoue avec message explicite si la variable n'est pas definie. La valeur par defaut `admin` est supprimee. |
 
 ### P1 — Eleve
 
