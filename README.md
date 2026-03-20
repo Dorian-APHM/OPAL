@@ -35,7 +35,7 @@ Plateforme web de qualite des donnees, construction de cohortes, mapping de voca
 
 OPAL est une application web autonome qui se connecte a vos bases OMOP CDM existantes pour :
 
-- **Analyser la qualite** des donnees selon 11 domaines (Person, Condition, Drug, Measurement, etc.)
+- **Analyser la qualite** des donnees selon 14 domaines (Person, Condition, Drug, Measurement, Specimen, Note, etc.)
 - **Construire des cohortes** de patients via un query builder visuel avec caracterisation Table 1
 - **Mapper les vocabulaires** source vers les concepts standard OMOP (6 strategies de suggestion)
 - **Explorer les concepts** OMOP avec hierarchie, relations et codes source
@@ -61,7 +61,7 @@ OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (op
 | **opal-db** | Base applicative (configs, snapshots, cohortes, decisions) | `postgres:16-alpine` |
 | **opal-keycloak** | Authentification OIDC, gestion des roles | `keycloak:24.0` |
 
-Les 4 services communiquent via le reseau Docker interne `opal-network`. Ports exposes : **3000** (frontend), **8080** (Keycloak).
+Les 4 services communiquent via le reseau Docker interne `opal-network`. Ports exposes : **3000** (frontend), **8000** (API backend), **8080** (Keycloak).
 
 ---
 
@@ -80,6 +80,9 @@ cd opal/
 # Generer une cle secrete pour le chiffrement des mots de passe
 export SECRET_KEY=$(openssl rand -hex 32)
 
+# Definir le mot de passe PostgreSQL (obligatoire)
+export POSTGRES_PASSWORD=yourpassword
+
 # Lancer tous les services
 docker compose up -d
 ```
@@ -94,7 +97,7 @@ Keycloak est accessible sur **http://localhost:8080** (admin/admin par defaut).
 3. Renseigner les coordonnees de connexion PostgreSQL de votre base OMOP
 4. Tester la connexion
 5. Enregistrer le CDM
-6. Selectionner le CDM dans le menu lateral
+6. Selectionner le CDM dans la barre de navigation superieure (TopNav)
 7. Lancer une analyse qualite, construire une cohorte, explorer les mappings ou les concepts
 
 ### Arret
@@ -114,8 +117,8 @@ docker compose down -v       # Arret + suppression des volumes (reset complet)
 |----------|--------|-------------|
 | `DATABASE_URL` | `postgresql://opal:opal@opal-db:5432/opal` | Connexion a la base applicative OPAL |
 | `SECRET_KEY` | `change-me-in-production` | Cle pour le chiffrement Fernet des mots de passe CDM |
-| `AUTH_ENABLED` | `false` | Activer l'authentification Keycloak OIDC |
-| `KEYCLOAK_URL` | `http://opal-keycloak:8080` | URL interne du serveur Keycloak |
+| `AUTH_ENABLED` | `true` | Activer l'authentification Keycloak OIDC |
+| `KEYCLOAK_URL` | `http://keycloak:8080` | URL interne du serveur Keycloak |
 | `KEYCLOAK_REALM` | `opal` | Realm Keycloak |
 | `KEYCLOAK_CLIENT_ID` | `opal-frontend` | Client ID Keycloak |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Origines CORS autorisees |
@@ -125,6 +128,10 @@ docker compose down -v       # Arret + suppression des volumes (reset complet)
 | `APP_DB_POOL_SIZE` | `10` | Taille du pool SQLAlchemy (base app) |
 | `APP_DB_MAX_OVERFLOW` | `20` | Connexions supplementaires sous charge |
 | `APP_DB_POOL_RECYCLE` | `1800` | Recyclage des connexions app (secondes) |
+| `ENVIRONMENT` | `development` | Mode d'execution (`development` ou `production`) |
+| `OMOP_STATEMENT_TIMEOUT_MS` | `300000` | Timeout requetes OMOP en millisecondes |
+| `MAX_WORKER_THREADS` | `16` | Threads max pour taches background |
+| `KEYCLOAK_ISSUER_URL` | *(vide)* | URL issuer Keycloak (si different de `KEYCLOAK_URL`) |
 
 ### Parametres d'analyse (par CDM)
 
@@ -155,7 +162,7 @@ Enregistrez et gerez les connexions aux bases OMOP CDM externes.
 - Liste des CDM enregistres avec test de connectivite et suppression
 - Configuration du schema OMOP par CDM
 
-> **Note** : `GET /api/cdm/` est accessible a tout utilisateur authentifie (necessaire pour le selecteur CDM du menu lateral).
+> **Note** : `GET /api/cdm/` est accessible a tout utilisateur authentifie (necessaire pour le selecteur CDM de la barre de navigation superieure).
 
 ---
 
@@ -165,7 +172,7 @@ Enregistrez et gerez les connexions aux bases OMOP CDM externes.
 
 Moteur d'analyse des donnees type Achilles, execute des requetes SQL sur votre CDM et stocke les resultats sous forme de snapshots versiones.
 
-#### Domaines disponibles (11)
+#### Domaines disponibles (14)
 
 | Domaine | Table OMOP | Analyses |
 |---------|------------|----------|
@@ -180,6 +187,9 @@ Moteur d'analyse des donnees type Achilles, execute des requetes SQL sur votre C
 | **Visit** | `visit_occurrence` | Idem |
 | **Device** | `device_exposure` | Idem |
 | **Death** | `death` | Idem |
+| **Specimen** | `specimen` | Idem |
+| **Note** | `note` | Idem |
+| **Payer_Plan_Period** | `payer_plan_period` | Idem |
 
 #### Analyses par domaine clinique
 
@@ -460,7 +470,7 @@ Client (navigateur)  ──WebSocket──►  Backend (FastAPI)
 #### Fonctionnalites
 
 - **Connexion WebSocket authentifiee** via ticket SSE a usage unique (TTL 30s)
-- **9 types de notification** : `access_granted`, `access_revoked`, `cdm_created`, `cdm_updated`, `cdm_deleted`, `mapping_applied`, `cohort_deleted`, `cohort_updated`, `group_removed`, `cohort_shared`, `access_request`
+- **11 types de notification** : `access_granted`, `access_revoked`, `cdm_created`, `cdm_updated`, `cdm_deleted`, `mapping_applied`, `cohort_deleted`, `cohort_updated`, `group_removed`, `cohort_shared`, `access_request`
 - **Declencheurs automatiques** dans tous les modules (CDM, cohortes, mapping, groupes, acces)
 - **NotificationCenter** : drawer avec historique complet, filtres, actions en lot
 - **Preferences** : mute par type de notification (`GET/POST /api/notifications/preferences`)
@@ -536,7 +546,7 @@ Toutes les surfaces sont creme — aucun blanc pur. Les ombres neumorphiques son
 - **Activation** : `AUTH_ENABLED=true` dans le backend
 - **Validation** : JWT valide localement via JWKS (pas de dependance au hostname de l'issuer)
 - **Refresh** : token renouvele automatiquement toutes les 30 secondes
-- **Desactive par defaut** : tous les utilisateurs sont traites comme admin
+- **Active par defaut** : `AUTH_ENABLED=true` — desactiver explicitement avec `AUTH_ENABLED=false` en developpement uniquement
 
 ### Controle d'acces par role (RBAC)
 
@@ -558,7 +568,7 @@ Le controle s'applique a deux niveaux :
 - Masquage automatique des parametres sensibles (password, token, ticket)
 - Fichiers de logs crees avec permissions `0o640`
 
-### Securite renforcee (v1.1)
+### Securite renforcee (v1.2.1)
 
 | Protection | Detail |
 |-----------|--------|
@@ -584,13 +594,24 @@ Le controle s'applique a deux niveaux :
 | Keycloak | Changer le mot de passe admin par defaut |
 | Docker | Utiliser `docker-compose.prod.yml` pour le deploiement production |
 
+### Nouveautes v1.2.1
+
+| Fonctionnalite | Detail |
+|----------------|--------|
+| **Detection de colonnes optionnelles** | `cdm_helper.py` detecte si `source_name` existe dans la table OMOP avant de l'inclure dans les requetes |
+| **Avertissements de mapping** | Les suggestions affichent des warnings (`source_name_missing`, `no_reference_codebook`, etc.) pour guider l'utilisateur |
+| **Rate limiting** | `slowapi` applique sur les endpoints couteux (inscription, tickets SSE, compute) |
+| **Pool de threads borne** | `MAX_WORKER_THREADS` (defaut 16) limite la concurrence des taches background |
+| **Nettoyage des taches en memoire** | Daemon automatique purge les taches terminees pour eviter les fuites memoire |
+| **3 nouveaux domaines** | Specimen, Note et Payer_Plan_Period ajoutes a `DOMAIN_CONFIG` |
+
 ---
 
 ## Internationalisation
 
 OPAL est disponible en **francais** et **anglais**.
 
-- Changement de langue via le bouton dans le menu lateral
+- Changement de langue via le bouton dans la barre de navigation superieure (TopNav)
 - Persistance du choix dans `localStorage`
 - Backend : fichiers JSON `backend/i18n/en.json` et `backend/i18n/fr.json`
 - Frontend : i18next + react-i18next, fichiers `frontend/src/i18n/en.json` et `frontend/src/i18n/fr.json`
@@ -609,7 +630,7 @@ opal/
 ├── CLAUDE.md                 # Instructions pour Claude Code
 ├── .env.example              # Template de configuration
 │
-├── CHANGELOG.md             # Historique des changements v1.1
+├── CHANGELOG.md             # Historique des changements v1.2.1
 │
 ├── docs/
 │   ├── API.md                # Reference API complete (80+ endpoints)
@@ -641,7 +662,8 @@ opal/
 │   │   ├── cdm_helper.py     # Helper centralise connexion CDM
 │   │   ├── sql_safety.py     # Validation identifiants SQL
 │   │   ├── csv_safety.py     # Protection injection CSV
-│   │   └── rate_limit.py     # Decorateur rate limiting
+│   │   ├── rate_limit.py     # Decorateur rate limiting
+│   │   └── thread_pool.py    # Pool de threads borne (MAX_WORKER_THREADS)
 │   ├── modules/
 │   │   ├── cdm_router.py          # CRUD des connexions CDM
 │   │   ├── cdm_access_router.py   # Controle d'acces par CDM
@@ -650,6 +672,7 @@ opal/
 │   │   │   ├── engine.py          # Orchestration d'analyse
 │   │   │   ├── comparator.py      # Comparaison de snapshots
 │   │   │   ├── conformity.py      # Conformite des donnees
+│   │   │   ├── report_builder.py  # Generation de rapports HTML/PDF
 │   │   │   └── domains/           # SQL par domaine
 │   │   │       ├── dashboard.py
 │   │   │       ├── person.py
@@ -688,11 +711,11 @@ opal/
 │   ├── i18n/
 │   │   ├── en.json           # Traductions anglais
 │   │   └── fr.json           # Traductions francais
-│   └── tests/                # 38 fichiers de tests (601 tests)
+│   └── tests/                # 51 fichiers de tests (601+ tests)
 │       ├── conftest.py       # Fixtures SQLite in-memory
 │       ├── omop_mock.py      # Mock reutilisable psycopg2
 │       ├── README.md         # Documentation architecture de test
-│       └── test_*.py         # 36 fichiers de tests couvrant tous les modules
+│       └── test_*.py         # 49 fichiers de tests (csv_safety, thread_pool, rate_limit, sql_safety, ohdsi_router, etc.)
 │
 ├── frontend/
 │   ├── Dockerfile            # Node 20 build + Nginx runtime
@@ -702,7 +725,7 @@ opal/
 │   ├── tsconfig.json         # TypeScript strict
 │   └── src/
 │       ├── main.tsx          # Point d'entree React
-│       ├── App.tsx           # Routing et layout (16 pages)
+│       ├── App.tsx           # Routing et layout (12 pages routees + 3 non routees)
 │       ├── opal-theme.css    # Theme Neumorphic (dark + light Creme Sauge)
 │       ├── auth/
 │       │   └── KeycloakContext.tsx  # Contexte auth + RBAC frontend
@@ -722,7 +745,7 @@ opal/
 │       │   ├── index.ts      # Configuration i18next
 │       │   ├── en.json       # Traductions anglais
 │       │   └── fr.json       # Traductions francais
-│       ├── pages/            # 15 pages
+│       ├── pages/            # 15 fichiers (12 pages routees, 3 non routees : Incidence, Estimation, ConceptSet)
 │       │   ├── HomePage.tsx
 │       │   ├── QualityPage.tsx
 │       │   ├── CohortPage.tsx
@@ -885,7 +908,7 @@ Les tests backend utilisent une base SQLite en memoire et un mock psycopg2 (`omo
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Guide utilisateur complet |
 | [docs/METHODOLOGIE.md](docs/METHODOLOGIE.md) | Methodologie des analyses (qualite, cohortes, mapping) |
 | [docs/WEBSOCKET_NOTIFICATIONS.md](docs/WEBSOCKET_NOTIFICATIONS.md) | Architecture WebSocket notifications |
-| [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements v1.1 |
+| [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements v1.2.1 |
 
 ---
 
