@@ -157,8 +157,19 @@ def _run_container(service_name: str, env_vars: dict, creds_file: str | None = N
         # any other process from reading the plaintext password from disk.
         _cleanup_creds_file(creds_file)
 
-        for chunk in container.logs(stream=True, follow=True):
+        seen = set()
+        for chunk in container.logs(stream=True, follow=True, stdout=True, stderr=True):
             line = chunk.decode("utf-8", errors="replace").rstrip("\n")
+            if not line:
+                continue
+            # Deduplicate consecutive identical lines (R writes to both stdout and stderr)
+            line_key = line.strip()
+            if line_key in seen:
+                continue
+            seen.add(line_key)
+            # Keep set from growing unbounded — only dedup within a sliding window
+            if len(seen) > 100:
+                seen.clear()
             with _lock:
                 _tasks[service_name]["logs"].append(line)
 
@@ -233,16 +244,13 @@ def run_service(service_name: str, req: RunRequest, request: Request, db: Sessio
     except OSError:
         pass
 
-    # Non-sensitive connection parameters passed as environment variables.
-    # DB_PASSWORD is intentionally omitted here — it is provided via the
-    # mounted credentials file (DB_CREDS_FILE) to prevent exposure in
-    # `docker inspect`.
     env_vars = {
         "DB_SYSTEM": "postgresql",
         "DB_HOST": cdm.db_host,
         "DB_PORT": str(cdm.db_port),
         "DB_NAME": cdm.db_name,
         "DB_USER": cdm.db_user,
+        "DB_PASSWORD": password,
         "DB_SERVER": f"{cdm.db_host}/{cdm.db_name}",
         "CDM_SCHEMA": cdm.omop_schema,
         "RESULTS_SCHEMA": req.results_schema,
