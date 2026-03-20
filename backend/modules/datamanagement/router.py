@@ -45,6 +45,20 @@ router = APIRouter(prefix="/api/datamanagement", tags=["datamanagement"])
 
 # ──── Helpers ────
 
+def _assert_task_owner(request: Request, task: dict) -> None:
+    """Raise HTTP 403 if the current user is not the task owner (or admin/data-manager)."""
+    from config import AUTH_ENABLED
+    if not AUTH_ENABLED:
+        return
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", []) or user.get("realm_access", {}).get("roles", [])
+    if username == task.get("username") or any(r in ("admin", "data-manager") for r in roles):
+        return
+    raise HTTPException(status_code=403, detail="Access denied: not your extraction task")
+
 def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
@@ -398,7 +412,6 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                         "total_count": total_count,
                         "preview_limit": preview_limit,
                         "cohort_name": cohort_name,
-                        "sql": extraction_sql,
                     }
                     task["csv_path"] = tmp_path
                     task["csv_filename"] = filename
@@ -445,12 +458,13 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
 
 
 @router.get("/extract/status/{task_id}")
-def extract_status(task_id: str):
+def extract_status(task_id: str, request: Request):
     """Poll the status of an extraction task."""
     with _extractions_lock:
         task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    _assert_task_owner(request, task)
 
     resp: dict = {
         "task_id": task_id,
@@ -471,12 +485,13 @@ def extract_status(task_id: str):
 
 
 @router.get("/extract/download/{task_id}")
-def extract_download_task(task_id: str):
+def extract_download_task(task_id: str, request: Request):
     """Download the CSV produced by a completed extraction task."""
     with _extractions_lock:
         task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    _assert_task_owner(request, task)
     if task["status"] != "completed":
         raise HTTPException(status_code=400, detail="Extraction not yet completed")
 
@@ -515,8 +530,13 @@ def extract_download_task(task_id: str):
 
 
 @router.post("/extract/cancel/{task_id}")
-def extract_cancel(task_id: str):
+def extract_cancel(task_id: str, request: Request):
     """Cancel/clean up an extraction task."""
+    with _extractions_lock:
+        task = _active_extractions.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _assert_task_owner(request, task)
     with _extractions_lock:
         task = _active_extractions.pop(task_id, None)
     if not task:

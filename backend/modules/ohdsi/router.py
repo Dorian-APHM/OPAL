@@ -5,6 +5,8 @@ and streams their logs in real-time via SSE.
 """
 import json
 import logging
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -24,6 +26,7 @@ from config import (
 )
 from db.app_db import get_db
 from db.models import CdmConfig
+from utils.cdm_helper import check_cdm_access
 from utils.crypto import decrypt_password
 
 logger = logging.getLogger(__name__)
@@ -81,8 +84,15 @@ def _get_image_name(service_name: str) -> str:
     return f"{OHDSI_IMAGE_PREFIX}-{service_name}"
 
 
-def _run_container(service_name: str, env_vars: dict) -> None:
-    """Run an OHDSI container in a background thread and collect logs."""
+def _run_container(service_name: str, env_vars: dict, creds_file: str | None = None) -> None:
+    """Run an OHDSI container in a background thread and collect logs.
+
+    creds_file: path to a temporary credentials file that will be deleted
+    after the container starts (S08: avoid plaintext password in env vars /
+    docker inspect). The file is mounted at /run/secrets/opal_creds.env inside
+    the container so the entrypoint can source it via:
+        [ -f "$DB_CREDS_FILE" ] && export $(grep -v '^#' "$DB_CREDS_FILE" | xargs)
+    """
     try:
         client = docker.from_env()
     except Exception as e:
@@ -91,6 +101,7 @@ def _run_container(service_name: str, env_vars: dict) -> None:
             _tasks[service_name]["status"] = "error"
             _tasks[service_name]["logs"].append(f"Docker connection error: {e}")
             _tasks[service_name]["finished_at"] = _time.time()
+        _cleanup_creds_file(creds_file)
         return
 
     image_name = _get_image_name(service_name)
@@ -106,6 +117,7 @@ def _run_container(service_name: str, env_vars: dict) -> None:
                 f"Image '{image_name}' not found. Run 'docker compose build' in ohdsi-docker first."
             )
             _tasks[service_name]["finished_at"] = _time.time()
+        _cleanup_creds_file(creds_file)
         return
 
     service_cfg = SERVICES[service_name]
@@ -121,6 +133,11 @@ def _run_container(service_name: str, env_vars: dict) -> None:
     if service_name == "cdmonboarding":
         volumes[f"{host_output}/dqd"] = {"bind": "/input/dqd", "mode": "ro"}
 
+    # Mount the credentials file read-only so the container entrypoint can source it.
+    # The file is deleted from the host right after container creation.
+    if creds_file:
+        volumes[creds_file] = {"bind": "/run/secrets/opal_creds.env", "mode": "ro"}
+
     try:
         container = client.containers.run(
             image_name,
@@ -133,6 +150,12 @@ def _run_container(service_name: str, env_vars: dict) -> None:
         )
         with _lock:
             _tasks[service_name]["container_id"] = container.id
+
+        # Delete the credentials file now that the container has started.
+        # The bind-mount keeps the file accessible inside the container via the kernel
+        # inode as long as the container has it open; removing the host path prevents
+        # any other process from reading the plaintext password from disk.
+        _cleanup_creds_file(creds_file)
 
         for chunk in container.logs(stream=True, follow=True):
             line = chunk.decode("utf-8", errors="replace").rstrip("\n")
@@ -159,16 +182,29 @@ def _run_container(service_name: str, env_vars: dict) -> None:
             _tasks[service_name]["status"] = "error"
             _tasks[service_name]["logs"].append(f"Error: {e}")
             _tasks[service_name]["finished_at"] = _time.time()
+        _cleanup_creds_file(creds_file)
+
+
+def _cleanup_creds_file(path: str | None) -> None:
+    """Securely delete a temporary credentials file if it exists."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.post("/run/{service_name}")
-def run_service(service_name: str, req: RunRequest, db: Session = Depends(get_db)):
+def run_service(service_name: str, req: RunRequest, request: Request, db: Session = Depends(get_db)):
     """Launch an OHDSI service container for the given CDM."""
     if service_name not in SERVICES:
         raise HTTPException(status_code=400, detail=f"Unknown service: {service_name}")
+
+    check_cdm_access(request, req.cdm_name)
 
     with _lock:
         if service_name in _tasks and _tasks[service_name]["status"] == "running":
@@ -181,13 +217,32 @@ def run_service(service_name: str, req: RunRequest, db: Session = Depends(get_db
 
     password = decrypt_password(cdm.db_password_encrypted)
 
+    # S08: Write the DB password to a temporary credentials file (mode 0600).
+    # The file is mounted read-only inside the container at /run/secrets/opal_creds.env
+    # and deleted from the host right after the container starts, so the password
+    # never persists on disk beyond container launch.
+    # Container entrypoints should source the file:
+    #   [ -f "$DB_CREDS_FILE" ] && export $(grep -v '^#' "$DB_CREDS_FILE" | xargs)
+    creds_fd, creds_path = tempfile.mkstemp(prefix="opal_ohdsi_creds_", suffix=".env")
+    try:
+        os.write(creds_fd, f"DB_PASSWORD={password}\n".encode())
+    finally:
+        os.close(creds_fd)
+    try:
+        os.chmod(creds_path, 0o600)
+    except OSError:
+        pass
+
+    # Non-sensitive connection parameters passed as environment variables.
+    # DB_PASSWORD is intentionally omitted here — it is provided via the
+    # mounted credentials file (DB_CREDS_FILE) to prevent exposure in
+    # `docker inspect`.
     env_vars = {
         "DB_SYSTEM": "postgresql",
         "DB_HOST": cdm.db_host,
         "DB_PORT": str(cdm.db_port),
         "DB_NAME": cdm.db_name,
         "DB_USER": cdm.db_user,
-        "DB_PASSWORD": password,
         "DB_SERVER": f"{cdm.db_host}/{cdm.db_name}",
         "CDM_SCHEMA": cdm.omop_schema,
         "RESULTS_SCHEMA": req.results_schema,
@@ -195,19 +250,40 @@ def run_service(service_name: str, req: RunRequest, db: Session = Depends(get_db
         "CDM_VERSION": req.cdm_version,
         "CDM_SOURCE_NAME": req.cdm_source_name or req.cdm_name,
         "PATH_TO_DRIVER": "/drivers",
+        "DB_CREDS_FILE": "/run/secrets/opal_creds.env",
     }
+
+    # S10: record who launched this service so stop_service can enforce ownership.
+    user = getattr(request.state, "user", {}) or {}
+    launched_by = user.get("preferred_username", "anonymous")
 
     with _lock:
         _tasks[service_name] = {
             "container_id": None,
             "status": "running",
+            "launched_by": launched_by,
             "logs": [f"Launching {SERVICES[service_name]['label']} for {req.cdm_name}..."],
         }
 
     from utils.thread_pool import submit_task
-    submit_task(_run_container, service_name, env_vars)
+    submit_task(_run_container, service_name, env_vars, creds_path)
 
     return {"ok": True}
+
+
+def _assert_ohdsi_stop_allowed(request: Request, task: dict) -> None:
+    """Raise HTTP 403 if the caller is not the service launcher or an admin."""
+    from config import AUTH_ENABLED
+    if not AUTH_ENABLED:
+        return
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", []) or user.get("realm_access", {}).get("roles", [])
+    if username == task.get("launched_by") or any(r in ("admin", "data-manager") for r in roles):
+        return
+    raise HTTPException(status_code=403, detail="Only the launcher or an admin can stop this service")
 
 
 @router.post("/stop/{service_name}")
@@ -218,6 +294,8 @@ def stop_service(service_name: str, request: Request):
         if not task or task["status"] != "running" or not task["container_id"]:
             raise HTTPException(status_code=400, detail="Nothing to stop")
         container_id = task["container_id"]
+
+    _assert_ohdsi_stop_allowed(request, task)
 
     try:
         client = docker.from_env()
