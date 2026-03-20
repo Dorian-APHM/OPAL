@@ -11,6 +11,7 @@ OPAL (OMOP Platform for Analytics & Lineage) is a full-stack web application for
 ### Full Stack (Docker Compose)
 ```bash
 export SECRET_KEY=$(openssl rand -hex 32)
+export POSTGRES_PASSWORD=yourpassword
 docker compose up -d          # Start all services
 docker compose down            # Stop all services
 ```
@@ -32,7 +33,7 @@ npm run build     # Production build via Vite
 
 ### Testing
 ```bash
-# Backend (601 tests)
+# Backend (51 test files)
 cd backend
 pytest tests/ -v              # Run all backend tests
 pytest tests/test_api.py -v   # Run a single test file
@@ -61,7 +62,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Entry point**: `main.py` — Creates FastAPI app, registers CORS middleware, optional Keycloak auth, and all routers.
 
-**Configuration**: `config.py` — All settings via environment variables. Key vars: `DATABASE_URL`, `SECRET_KEY`, `AUTH_ENABLED`, `KEYCLOAK_URL`, `KEYCLOAK_ISSUER_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD`, `CORS_ORIGINS`. Contains `DOMAIN_CONFIG` dict mapping OMOP domains to their table/column names. See `.env.example` for full reference.
+**Configuration**: `config.py` — All settings via environment variables. Key vars: `DATABASE_URL`, `SECRET_KEY`, `AUTH_ENABLED` (default: true), `ENVIRONMENT`, `KEYCLOAK_URL`, `KEYCLOAK_ISSUER_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD`, `CORS_ORIGINS`, `OMOP_STATEMENT_TIMEOUT_MS`, `MAX_WORKER_THREADS`. Contains `DOMAIN_CONFIG` dict mapping 11 OMOP clinical domains to their table/column names. See `.env.example` for full reference.
 
 **Database layer** (`db/`):
 - `app_db.py` — SQLAlchemy engine/session for the internal app database (pool_size, max_overflow, pool_recycle configurable via env vars)
@@ -95,7 +96,8 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - `utils/csv_safety.py` — CSV formula injection protection
 - `utils/rate_limit.py` — Rate limiting decorator (slowapi)
 - `utils/ws_manager.py` — WebSocket connection manager for real-time notifications
-- `utils/cdm_helper.py` — Centralized CDM connection helper with safe_identifier
+- `utils/cdm_helper.py` — Centralized CDM connection helper: `get_cdm_connection()`, `get_domain_config()` (runtime optional column detection), `check_cdm_access()` for POST body CDM checks
+- `utils/thread_pool.py` — Bounded ThreadPoolExecutor (`MAX_WORKER_THREADS`) for background tasks
 
 **i18n**: `i18n/en.json` and `i18n/fr.json` — Translations cached at module load time (not read per-request). Served via `/api/i18n/{lang}`.
 
@@ -103,7 +105,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Stack**: React 18 + TypeScript + Vite + Custom Neumorphic UI components + Framer Motion + Recharts + Lucide icons
 
-**Entry**: `src/main.tsx` → `src/App.tsx` — React Router with sidebar layout. Selected CDM stored in `localStorage` and passed as prop to all pages.
+**Entry**: `src/main.tsx` → `src/App.tsx` — React Router with TopNav layout. Selected CDM stored in `localStorage` and passed as prop to all pages. 12 pages routed (3 more exist as files but not yet routed: Incidence, Estimation, ConceptSet).
 
 **API client**: `src/api/client.ts` — Axios-based client organized by module (`cdmApi`, `qualityApi`, `cohortApi`, `mappingApi`, `conceptApi`). All requests go to `/api` prefix.
 
@@ -122,9 +124,9 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - All app state (configs, snapshots, cohorts, mapping decisions) lives in the internal PostgreSQL.
 - Quality analysis snapshots are versioned for temporal comparison.
 - Cohort criteria use a JSON structure that gets converted to SQL by `sql_builder.py`.
-- Mapping suggestions use 6 ranked strategies: SapBERT (pre-computed), exact match, relationship-based, keyword, fuzzy text, contextual.
+- Mapping suggestions use 5 internal strategies + SapBERT (pre-computed external): exact match, relationship-based, ingredient/DCI, fuzzy+keyword, contextual. Returns `warnings` array when CDM columns are missing.
 - Notifications are delivered in **real-time via WebSocket** (zero polling). WebSocket connections are authenticated via one-time SSE tickets.
 - The app supports **dark mode** (Emerald Night, default) and **light mode** (Crème Sauge palette). Theme persisted in `localStorage`.
 - **Pathways Analysis** implements OHDSI ATLAS-style treatment pathway visualization with interactive sunburst chart.
-- All SQL identifiers use `psycopg2.sql.SQL` + `sql.Identifier` — no f-string SQL anywhere.
+- All SQL identifiers validated via `safe_identifier()` (63-char limit). Most modules use `psycopg2.sql.SQL` + `sql.Identifier`; cohort `sql_builder.py` and `pathways.py` use f-strings with defense-in-depth (`safe_identifier()` + `int()` casts + date regex).
 - Schema migrations managed by **Alembic** (initial migration covers 22 tables).

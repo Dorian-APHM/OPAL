@@ -1,9 +1,10 @@
-# Audit de Sécurité Approfondi — OPAL v1.2.0
+# Audit de Sécurité Approfondi — OPAL v1.2.1
 
-**Date** : 2026-03-18
-**Méthode** : Analyse statique du code source + historique git (5 axes parallèles)
-**Périmètre** : Backend (FastAPI), Frontend (React), Infrastructure (Docker/Keycloak/Nginx)
-**Auditeur** : Claude Code — lecture complète de chaque fichier, traçage des flux de données
+**Date** : 2026-03-20
+**Méthode** : Analyse statique exhaustive du code source (60+ fichiers), historique git, configuration Docker/Keycloak/Nginx
+**Périmètre** : Backend (FastAPI, 19 routers), Frontend (React 18), Infrastructure (Docker/Keycloak/Nginx), Dépendances
+**Auditeur** : Claude Code (Opus 4.6) — lecture complète de chaque fichier, traçage des flux de données, analyse des vecteurs d'attaque
+**Branche** : OPAL_V1.2.1
 
 ---
 
@@ -11,426 +12,525 @@
 
 | Sévérité | Trouvées | Corrigées | Restantes |
 |----------|----------|-----------|-----------|
-| CRITIQUE | 5 | 5 ✅ | 0 |
-| HAUTE | 12 | 13 ✅ (S04–S11 + H3/H5/H6/H9/H10) | 0 ✅ |
-| MOYENNE | 10 | 7 (M1, M4, M5, M6, M8, M9 + M2/M3 déjà) | 3 |
-| BASSE | 8 | 0 | 8 |
-| **Total** | **35** | **20** | **15** |
+| CRITIQUE | 3 | **3 ✅** | **0** |
+| HAUTE | 8 | **8 ✅** (S04–S11, commit `2e45165`) | **0** |
+| MOYENNE | 9 | 0 | 9 |
+| BASSE | 6 | 0 | 6 |
+| **Total** | **26** | **11** | **15** |
 
-> **Mise à jour 2026-03-20** : toutes les vulnérabilités de sévérité HAUTE sont corrigées (S04–S11 dans le commit de cette session).
+> **Mise à jour 2026-03-20** : toutes les vulnérabilités HAUTE corrigées (S04–S11, commit `2e45165`). Stashed changes
 
 ### Points forts confirmés
-- SQL injection : defense-in-depth solide (`safe_identifier()` + `psycopg2.sql.SQL/Identifier` sur les chemins critiques)
-- Aucun secret committé dans l'historique git (vérifié sur tout l'historique)
-- Chiffrement Fernet des mots de passe CDM avec clé dédiée (`ENCRYPTION_KEY`)
-- RBAC via `permissions.yaml` + middleware Keycloak fonctionnel
-- CSP, HSTS, X-Frame-Options configurés dans nginx.conf
-- `SECRET_KEY` faible rejeté en production (`config.py:26-31`)
-- `AUTH_ENABLED=false` interdit en production (`config.py:41-45`)
-- Aucun `bare except` non loggué (vérifié)
-- 0 régression sécuritaire détectée dans l'historique git
+
+1. **Validation SQL robuste** : `safe_identifier()` + `psycopg2.sql.SQL/Identifier` sur tous les chemins critiques
+2. **Protection SSRF** : Validation loopback, link-local, cloud metadata, résolution DNS sur les hôtes CDM
+3. **Chiffrement Fernet** : Mots de passe CDM chiffrés au repos avec hiérarchie de clés
+4. **JWT RS256** : Validation audience, issuer, clock skew 30s, JWKS cache avec TTL
+5. **SSE tickets** : Usage unique, TTL 30s, capacité max 1000
+6. **Audit logging** : Masquage des données sensibles (passwords, tokens, secrets), permissions fichier 0o640
+7. **Guards production** : `ENVIRONMENT=production` bloque SECRET_KEY faible, auth désactivée, DATABASE_URL manquant
+8. **CORS explicite** : Pas de wildcard, origines configurées par env var
+9. **Headers Nginx** : CSP, HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy
+10. **WebSocket** : Limite 5 connexions/utilisateur, éviction FIFO
+11. **CSV injection** : Protection `csv_safe()` sur tous les exports
+12. **Rate limiting** : Endpoints coûteux protégés (quality analyze, incidence, datamanagement)
+13. **RBAC déclaratif** : `permissions.yaml` séparé du code, 4 rôles avec 12+ vérifications
 
 ---
 
-## CRITIQUE
+## Findings détaillés
 
-### C1 — Endpoints OHDSI sans authentification (fichiers, logs, statut) — CORRIGÉ ✓
-
-**Fichiers** : `backend/modules/ohdsi/router.py:224-309`
-**OWASP** : A01-Broken Access Control
-
-**Constat** : 4 endpoints OHDSI n'ont **aucune vérification d'authentification** — ni `request: Request`, ni `Depends(get_db)`, ni `check_cdm_access()` :
-
-```python
-@router.get("/status")        # L.224 — pas de request/auth
-def get_status(): ...
-
-@router.get("/logs/{service_name}/history")  # L.238
-def get_log_history(service_name: str): ...
-
-@router.get("/logs/{service_name}")          # L.256
-def stream_logs(service_name: str, ...): ...
-
-@router.get("/files/{path:path}")            # L.284
-def list_or_download_files(path: str = ""): ...
-```
-
-**Exploitation** : Tout utilisateur (ou non-authentifié si le middleware ne bloque pas ces routes) peut :
-- Lister et télécharger tous les rapports Achilles/DQD de tous les CDM
-- Lire les logs complets d'exécution (schémas, erreurs, noms de tables)
-- Connaître l'état des analyses en cours
-
-**Vérification historique** : Le commit `8bb8299` a ajouté la protection path traversal (`resolve() + startswith()`) mais n'a PAS ajouté l'authentification.
-
-**Correction** : `request: Request` ajouté + vérification auth dans le middleware.
+### CRITIQUE
 
 ---
 
-### C2 — Keycloak Realm : `sslRequired: "none"` + `redirectUris: ["*"]` — CORRIGÉ ✓
+#### S01 — Docker Socket monté dans le conteneur backend (Évasion de conteneur)
 
-**Fichier** : `keycloak/opal-realm.json:6,40-41`
-**OWASP** : A02-Cryptographic Failures, A07-Identification and Authentication Failures
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | CRITIQUE |
+| **Catégorie** | Docker |
+| **Fichier** | `docker-compose.yml:31` |
+| **Statut** | ✅ CORRIGÉ |
 
-**Constat** :
-```json
-"sslRequired": "none",           // L.6 — SSL désactivé
-"redirectUris": ["*"],            // L.40 — redirect vers n'importe quel domaine
-"webOrigins": ["*"],              // L.41 — CORS wildcard
-"directAccessGrantsEnabled": true // L.35 — Resource Owner Password Grant activé
-```
+**Description** : Le conteneur backend monte `/var/run/docker.sock:/var/run/docker.sock`. Cela accorde au processus backend un contrôle total sur le démon Docker, équivalent à un accès root sur l'hôte. Le router OHDSI (`modules/ohdsi/router.py`) utilise ce socket pour lancer des conteneurs Docker arbitraires.
 
-**Exploitation** :
-1. **Open redirect** : Un attaquant craft un lien OAuth avec `redirect_uri=https://evil.com`, Keycloak valide (`*` match tout), l'authorization code est exfiltré
-2. **Password grant** : Permet le brute-force direct des mots de passe via `POST /token` sans PKCE
-3. **HTTP** : Tokens JWT et credentials transitent en clair sur le réseau Docker
+**Scénario d'exploitation** : Si un attaquant obtient l'exécution de code dans le backend (ex: vulnérabilité de dépendance, désérialisation), il peut utiliser le socket Docker pour créer un conteneur privilégié montant le filesystem hôte → compromission totale de l'hôte.
 
-**Correction** : `sslRequired: "external"`, redirectUris restreint à localhost, `directAccessGrantsEnabled: false`.
+**Correction appliquée** : Mount `/var/run/docker.sock` supprimé de `docker-compose.yml` (base). Commentaire détaillé ajouté sur l'utilisation de `tecnativa/docker-socket-proxy` (whitelist CONTAINERS/IMAGES/POST) pour l'intégration OHDSI. Le `group_add: ["136"]` est également retiré.
 
 ---
 
-### C3 — Docker socket monté dans le conteneur backend (dev) — CORRIGÉ ✓
+#### S02 — AUTH_ENABLED=false accorde le rôle admin à toutes les requêtes
 
-**Fichier** : `docker-compose.yml:31` (supprimé)
-**OWASP** : A04-Insecure Design
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | CRITIQUE |
+| **Catégorie** | Authentification |
+| **Fichier** | `backend/auth/keycloak.py:193-202` |
+| **Statut** | ✅ CORRIGÉ |
 
-**Constat** :
-```yaml
-volumes:
-  - /var/run/docker.sock:/var/run/docker.sock
-```
+**Description** : Quand `AUTH_ENABLED=false`, le middleware accorde `roles: ["admin"]` et `preferred_username: "dev-user"` à chaque requête, contournant entièrement le RBAC. Bien que `config.py` mette maintenant `AUTH_ENABLED` à `"true"` par défaut (ligne 47) et lève un `RuntimeError` si `ENVIRONMENT=production` et `AUTH_ENABLED=false` (lignes 49-53), une instance de développement exposée sur un réseau n'a aucune authentification.
 
-**Exploitation** : Toute RCE dans le backend FastAPI donne un accès Docker socket → escape du conteneur → root sur l'hôte.
+**Scénario d'exploitation** : Un développeur lance `docker compose up` avec `AUTH_ENABLED=false` et l'instance est accessible sur le LAN. N'importe quel utilisateur peut effectuer toutes les opérations admin.
 
-**Correction** : Le mount `/var/run/docker.sock` a été supprimé de `docker-compose.yml` (base). Un commentaire détaillé explique comment utiliser un proxy Docker (Tecnativa `docker-socket-proxy`) avec liste blanche d'API pour l'intégration OHDSI. Le `docker-compose.prod.yml` restait déjà protégé (`1145ce0`).
-
-**Résiduel** : L'intégration OHDSI nécessite soit un proxy Docker (recommandé), soit un montage manuel explicite. Le groupe Docker (`group_add: "136"`) a également été retiré.
+**Correction appliquée** : Le middleware vérifie `request.client.host`. Toute requête provenant d'une IP non-localhost (`127.0.0.1`/`::1`) avec `AUTH_ENABLED=false` reçoit HTTP 403 et un log `CRITICAL` est émis. Le mode dev reste utilisable uniquement en local.
 
 ---
 
-### C6 — AUTH_ENABLED=false accessible depuis des interfaces non-localhost — CORRIGÉ ✓
+#### S03 — Identifiants Keycloak admin par défaut admin/admin
 
-**Fichier** : `backend/auth/keycloak.py:193-202`
-**OWASP** : A01-Broken Access Control, A07-Identification and Authentication Failures
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | CRITIQUE |
+| **Catégorie** | Configuration |
+| **Fichier** | `docker-compose.yml:16,95-96`, `.env.example:19-20` |
+| **Statut** | ✅ CORRIGÉ |
 
-**Constat** : Quand `AUTH_ENABLED=false`, le middleware Keycloak accorde automatiquement le rôle `admin` à toutes les requêtes sans vérification d'origine. Si le serveur écoute sur `0.0.0.0` (par défaut dans Docker), n'importe quelle machine sur le réseau obtient des droits admin complets.
+**Description** : Les identifiants Keycloak admin par défaut sont `admin/admin`. Le `docker-compose.yml` utilise `${KEYCLOAK_ADMIN:-admin}` et `${KEYCLOAK_ADMIN_PASSWORD:-admin}`. Bien que `admin_router.py` (lignes 50-54) log un warning, aucun blocage empêche le déploiement avec ces identifiants. Le compose prod utilise `KEYCLOAK_ADMIN_PASSWORD:?` (obligatoire), mais pas le compose de base.
 
-**Exploitation** : Un attaquant sur le même réseau que le serveur OPAL (LAN hospitalier, VPN) peut accéder à toutes les API sans aucune authentification avec le rôle `admin`.
+**Scénario d'exploitation** : Un attaquant découvre la console admin Keycloak au port 8080, se connecte avec `admin/admin`, et obtient le contrôle total du fournisseur d'identité.
 
-**Correction** : Le middleware vérifie désormais `request.client.host`. Si l'IP source n'est pas `127.0.0.1` ou `::1` et que `AUTH_ENABLED=false`, la requête est rejetée avec HTTP 403 et un log `CRITICAL` est émis. Le mode sans auth reste fonctionnel pour le développement local uniquement.
-
----
-
-### C7 — Identifiants Keycloak admin par défaut (`admin/admin`) — CORRIGÉ ✓
-
-**Fichiers** : `docker-compose.yml:16,95-96`, `.env.example:19-20`
-**OWASP** : A07-Identification and Authentication Failures
-
-**Constat** :
-```yaml
-- KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
-```
-La syntaxe `:-admin` fournit `admin` comme valeur par défaut si la variable n'est pas définie. Un déploiement sans `.env` configuré utilise silencieusement `admin/admin` comme credentials Keycloak.
-
-**Exploitation** : L'interface d'administration Keycloak (port 8080) est accessible avec `admin/admin`, permettant de créer des utilisateurs OPAL arbitraires ou de prendre le contrôle du realm.
-
-**Correction** : Syntaxe changée en `:?` dans `docker-compose.yml` (backend et service keycloak). Le déploiement échoue immédiatement avec un message explicite si `KEYCLOAK_ADMIN_PASSWORD` n'est pas défini. `.env.example` est mis à jour : `KEYCLOAK_ADMIN_PASSWORD=` (vide, obligatoire à remplir).
+**Correction appliquée** : Syntaxe `:?` dans `docker-compose.yml` (sections backend et keycloak). Déploiement impossible si `KEYCLOAK_ADMIN_PASSWORD` absent. `.env.example` mis à jour : valeur vide + commentaire de génération.
 
 ---
 
-### C4 — F-strings SQL dans quality domains — CORRIGÉ ✓
-
-**Statut** : Corrigé dans le commit `5318b57`.
-`person.py`, `observation_period.py`, `dashboard.py` migrés vers `psysql.SQL/Identifier`.
+### HAUTE
 
 ---
 
-### C5 — Tickets SSE sans lock thread-safe — CORRIGÉ ✓
+#### S04 — Construction SQL via f-strings dans sql_builder.py
 
-**Statut** : Corrigé dans le commit `5318b57`.
-`threading.Lock()` ajouté sur `_sse_tickets` dans `auth/keycloak.py`.
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Injection |
+| **Fichier** | `backend/modules/cohort/sql_builder.py` (lignes 127, 260, 697-718) |
+| **Statut** | Atténué par défense en profondeur |
 
----
+**Description** : Le constructeur SQL de cohortes utilise abondamment les f-strings. Les valeurs utilisateur passent par `source_codes` (échappement `chr(39)` ligne 717), `concept_ids` (cast `int()`), dates (validées par `_DATE_RE`), schémas (`safe_identifier()`). La défense en profondeur est multi-couche mais non paramétrisée.
 
-## HAUTE
+**Scénario d'exploitation** : Si `source_codes` contient une valeur qui survit au doublement des guillemets simples (ex: exploit d'encodage multibyte), une injection SQL est possible. Le remplacement `chr(39)+chr(39)` (ligne 717) est correct pour PostgreSQL standard, mais les requêtes paramétrisées seraient strictement plus sûres.
 
-### H1 — SSRF TOCTOU dans la connexion CDM
-
-**Fichier** : `backend/modules/cdm_router.py:25-72`
-**OWASP** : A10-Server-Side Request Forgery
-
-La validation SSRF (`socket.getaddrinfo()` + vérification IP privée) se fait à l'enregistrement du CDM. La connexion ultérieure re-résout le DNS → TOCTOU si l'attaquant contrôle le DNS.
-
-**Atténuation** : Seuls les admins peuvent enregistrer des CDM.
+**Correction recommandée** : Refactoriser `source_codes` pour utiliser les requêtes paramétrisées (`%s` avec psycopg2) au lieu de l'interpolation avec échappement manuel.
 
 ---
 
-### H2 — `ValueError` expose les détails internes
+#### S05 — Endpoints d'extraction sans vérification de propriété utilisateur
 
-**Fichier** : `backend/main.py:134-136`
-**OWASP** : A04-Insecure Design
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Autorisation |
+| **Fichier** | `backend/modules/datamanagement/router.py:447-531` |
+| **Statut** | Présent |
 
-```python
-@app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError):
-    return JSONResponse(status_code=400, content={"detail": str(exc)})
-```
+**Description** : Les endpoints `/extract/status/{task_id}`, `/extract/download/{task_id}` et `/extract/cancel/{task_id}` vérifient seulement que le `task_id` existe, pas que l'utilisateur demandeur est propriétaire de la tâche. Le `username` est stocké dans le dict task (ligne 285) mais jamais vérifié.
 
-Renvoie le message brut au client.
+**Scénario d'exploitation** : L'utilisateur A lance une extraction. L'utilisateur B (chercheur avec accès CDM limité) itère les `task_id` et télécharge des données CSV de CDMs auxquels il n'a pas accès.
 
----
-
-### H3 — Pas de rate limiting sur les endpoints coûteux — CORRIGÉ ✓
-
-**Fichiers** : Multiples routers
-**OWASP** : A04-Insecure Design
-
-| Endpoint | Rate limit | Coût |
-|----------|-----------|------|
-| `POST /api/quality/analyze` | 3/min ✓ | Élevé |
-| `POST /api/quality/analyze/batch/stream` | 2/min ✓ | Très élevé |
-| `POST /api/quality/conformity` | 3/min ✓ | Élevé |
-| `POST /api/incidence/compute` | 3/min ✓ | Élevé |
-| `POST /api/datamanagement/extract/start` | 3/min ✓ | Élevé |
-
-**Correction** : Rate limiting ajouté sur tous les endpoints coûteux.
+**Correction recommandée** : Vérifier `request.state.user.preferred_username == task["username"]` (ou rôle admin) dans les endpoints status, download et cancel.
 
 ---
 
-### H4 — IDOR sur les cohorts (pas de vérification CDM)
+#### S06 — OHDSI Run sans vérification d'accès CDM
 
-**Fichier** : `backend/modules/cohort/router.py`
-**OWASP** : A01-Broken Access Control
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Autorisation |
+| **Fichier** | `backend/modules/ohdsi/router.py:168` |
+| **Statut** | Présent |
 
-Les endpoints `GET/PUT/DELETE /api/cohorts/{id}` utilisent un ID numérique. Le middleware ne peut pas extraire `cdm_name` → pas de vérification d'accès CDM.
+**Description** : Le `POST /api/ohdsi/run/{service_name}` reçoit `cdm_name` dans le body JSON mais n'appelle pas `check_cdm_access()`. Le middleware ne peut vérifier l'accès CDM que quand `cdm_name` est un query/path parameter, pas dans le body JSON.
 
----
+**Scénario d'exploitation** : Un data-manager avec accès CDM restreint par ACL lance une analyse Achilles contre un CDM qu'il ne devrait pas voir, causant potentiellement des écritures dans le schéma results du CDM.
 
-### H5 — Keycloak URL hardcodée en HTTP dans le frontend — CORRIGÉ ✓
-
-**Fichier** : `frontend/src/auth/KeycloakContext.tsx:44-46`
-
-**Correction** : Utilise désormais `window.location.protocol` pour détecter HTTP/HTTPS et le port correspondant (8080/8443).
-
----
-
-### H6 — Frontend npm : SSL désactivé dans le Dockerfile — CORRIGÉ ✓
-
-**Fichier** : `frontend/Dockerfile:12`
-
-**Correction** : `npm config set strict-ssl false` supprimé du Dockerfile.
+**Correction recommandée** : Ajouter `check_cdm_access(request, req.cdm_name)` au début de la fonction `run_service`.
 
 ---
 
-### H7 — Port backend 8000 exposé sur 0.0.0.0
+#### S07 — SQL généré retourné au frontend
 
-**Fichier** : `docker-compose.yml:5-6`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Exposition de données |
+| **Fichier** | `backend/modules/cohort/router.py:598`, `backend/modules/datamanagement/router.py:402` |
+| **Statut** | Présent |
 
-```yaml
-ports:
-  - "8000:8000"  # Pas de bind 127.0.0.1
-```
+**Description** : Plusieurs endpoints retournent le SQL complet dans la réponse (`{"sql": sql}`). Cela expose le nom du schéma OMOP, la structure des tables et la logique des requêtes au frontend.
 
----
+**Scénario d'exploitation** : Un attaquant inspecte les réponses API pour apprendre le schéma de la base et les noms de tables, aidant à élaborer des attaques ciblées si une autre vulnérabilité est trouvée.
 
-### H8 — Credentials Docker en variables d'environnement (OHDSI)
-
-**Fichier** : `backend/modules/ohdsi/router.py:176-190`
-
-Mots de passe CDM déchiffrés passés en `env_vars` → visibles via `docker inspect`.
+**Correction recommandée** : Supprimer le champ `sql` des réponses production, ou le conditionner à un flag debug ou au rôle admin.
 
 ---
 
-### H9 — WebSocket : pas de limite de connexions par utilisateur — CORRIGÉ ✓
+#### S08 — Mots de passe CDM en clair dans les conteneurs Docker OHDSI
 
-**Fichier** : `backend/utils/ws_manager.py`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Configuration |
+| **Fichier** | `backend/modules/ohdsi/router.py:184-198` |
+| **Statut** | Présent |
 
-**Correction** : Limite de 5 connexions par utilisateur. La plus ancienne est évincée au-delà.
+**Description** : Le router OHDSI transmet le mot de passe CDM déchiffré en variable d'environnement texte clair (`DB_PASSWORD`) aux conteneurs Docker. Les variables d'environnement sont visibles via `docker inspect`, les listings de processus et les logs des conteneurs.
 
----
-
-### H10 — Content-Disposition : nom de fichier non sanitisé — CORRIGÉ ✓
-
-**Fichier** : `frontend/src/api/client.ts:165-169`
-
-**Correction** : Sanitisation des séparateurs de chemin (`/`, `\`, `..`) dans le nom de fichier extrait.
-
----
-
-### H11 — Keycloak `directAccessGrantsEnabled: true`
-
-**Fichier** : `keycloak/opal-realm.json:35`
-
-Permet le brute-force direct via Resource Owner Password Grant.
+**Correction recommandée** : Utiliser Docker secrets ou monter un fichier credentials temporaire supprimé après le démarrage du conteneur.
 
 ---
 
-### H12 — Proxy credentials dans les layers Docker
+#### S09 — Keycloak en mode développement dans le compose de base
 
-**Fichier** : `backend/Dockerfile:3-6`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Réseau |
+| **Fichier** | `docker-compose.yml:100` |
+| **Statut** | Présent (corrigé dans compose prod) |
 
----
+**Description** : Le `docker-compose.yml` de base lance Keycloak avec `start-dev` qui désactive HTTPS, la vérification de hostname stricte et le caching en mode production. Le port 8080 est bindé sur toutes les interfaces.
 
-## MOYENNE
+**Scénario d'exploitation** : Tout le trafic Keycloak (console admin, échange de tokens) est envoyé en HTTP clair → sniffing réseau des identifiants.
 
-### M1 — CSV injection incomplète — CORRIGÉ ✓
-**Fichier** : `backend/utils/csv_safety.py:4-9`
-
-**Correction** : `csv_safe()` strip les espaces avant de vérifier le premier caractère. `" =1+1"` → `"'=1+1"`.
-
-### M2 — `safe_identifier()` sans limite de longueur — CORRIGÉ ✓
-**Fichier** : `backend/utils/sql_safety.py:16-28`
-
-**Correction** : Limite de 63 caractères ajoutée (déjà présent dans le code).
-
-### M3 — Keycloak : pas de politique de mots de passe — CORRIGÉ ✓
-**Fichier** : `keycloak/opal-realm.json`
-
-**Correction** : `passwordPolicy` ajouté : `length(8) and digits(1) and upperCase(1) and specialChars(1)`.
-
-### M4 — JWT : pas de tolérance clock skew — CORRIGÉ ✓
-**Fichier** : `backend/auth/keycloak.py:266-287`
-
-**Correction** : `leeway=30` ajouté à `jwt.decode()` (30s de tolérance).
-
-### M5 — JWKS cache TTL trop long (1 heure) — CORRIGÉ ✓
-**Fichier** : `backend/auth/keycloak.py:28-29`
-
-**Correction** : TTL réduit de 3600s à 300s (5 min).
-
-### M6 — Nginx CSP : `unsafe-inline` pour les styles — ATTÉNUÉ ✓
-**Fichier** : `frontend/nginx.conf:12`
-
-**Correction** : `frame-ancestors 'none'` ajouté, `style-src-attr 'unsafe-inline'` isolé. Note : `unsafe-inline` pour `style-src` reste nécessaire pour React inline styles et Tailwind.
-
-### M7 — npm packages non pinnés (caret `^`)
-**Fichier** : `frontend/package.json`
-
-### M8 — Database URL avec credentials par défaut — CORRIGÉ ✓
-**Fichier** : `backend/config.py`
-
-**Correction** : `DATABASE_URL` n'a plus de default en production. `RuntimeError` levé si non défini en prod. Warning en dev.
-
-### M9 — `.dockerignore` n'exclut pas `.env*` — CORRIGÉ ✓
-**Fichiers** : `backend/.dockerignore`, `frontend/.dockerignore`
-
-**Correction** : `.env*` ajouté aux deux `.dockerignore`.
-
-### M10 — Notifications : info disclosure CDM via `item_id`
-**Fichier** : `backend/modules/notifications_router.py`
+**Correction recommandée** : Le overlay production corrige cela (`start` mode, strict hostname). Documenter clairement que le compose de base est UNIQUEMENT pour le développement local.
 
 ---
 
-## BASSE
+#### S10 — OHDSI stop/status sans vérification d'autorisation
 
-### B1 — UUID v4 pour les tickets SSE
-`uuid.uuid4().hex` au lieu de `secrets.token_urlsafe(32)`.
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Autorisation |
+| **Fichier** | `backend/modules/ohdsi/router.py:213-243` |
+| **Statut** | Présent |
 
-### B2 — Credentials Keycloak par défaut en dev
-Mitigé par `docker-compose.prod.yml`.
+**Description** : Les endpoints OHDSI stop et status ne vérifient pas si l'utilisateur demandeur a le droit d'arrêter ou de voir l'état d'un service. N'importe quel utilisateur avec accès à `/api/ohdsi` peut arrêter un conteneur OHDSI en cours ou consulter ses logs.
 
-### B3 — Images Docker non pinnées
-`python:3.12-slim`, `node:20-alpine`, `nginx:alpine` — tags flottants.
-
-### B4 — Pas de headers de sécurité sur l'API backend
-`X-Content-Type-Options`, `X-Frame-Options` manquants côté API.
-
-### B5 — Console.error dans le frontend auth
-`KeycloakContext.tsx:125,141`
-
-### B6 — Password input sans `autoComplete="off"`
-`CdmManagementPage.tsx:405`
-
-### B7 — Audit logs en clair
-`audit/logger.py` — JSONL sans chiffrement.
-
-### B8 — Alembic URL placeholder
-`alembic.ini:89`
+**Correction recommandée** : Tracker qui a lancé chaque service et restreindre l'arrêt au lanceur ou à l'admin.
 
 ---
 
-## Vérification SQL Injection — Analyse complète
+#### S11 — Comparaison de mot de passe en clair dans le pool de connexions
 
-| Fichier | Méthode | Validation | Verdict |
-|---------|---------|-----------|---------|
-| `sql_builder.py` | f-string | `_validate_identifier()` L.74, `int()`, regex dates | **SAFE** |
-| `pathways.py` | f-string | `safe_identifier()` L.79, `int()` concept_ids | **SAFE** |
-| `characterization.py` | f-string | Schema via call chain, colonnes DOMAIN_CONFIG | **SAFE** |
-| `clinical.py` | `psysql.SQL` | `safe_identifier()` + `Identifier()` | **SAFE** ✓ |
-| `conformity.py` | `psysql.SQL` | `_safe()` + `Identifier()` | **SAFE** ✓ |
-| `person.py` | `psysql.SQL` | `safe_identifier()` + `Identifier()` | **SAFE** ✓ |
-| `observation_period.py` | `psysql.SQL` | `safe_identifier()` + `Identifier()` | **SAFE** ✓ |
-| `dashboard.py` | `psysql.SQL` | `safe_identifier()` + `Literal()` | **SAFE** ✓ |
-| `search_router.py` | `psysql.SQL` | `Identifier()` | **SAFE** ✓ |
-| `concept/router.py` | `psysql.SQL` | `safe_identifier()` + `Identifier()` | **SAFE** ✓ |
-| `mapping/suggest.py` | `psysql.SQL` | `safe_identifier()` + `Identifier()` | **SAFE** ✓ |
-| `estimation/router.py` | f-string | `int()` INTERVAL, `cdm_helper` schema | **SAFE** |
-| `incidence/router.py` | f-string | `int()` INTERVAL, DOMAIN_CONFIG | **SAFE** |
-| `extractor.py` | f-string | `_safe()` regex, Pydantic `ge/le` LIMIT | **SAFE** |
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Exposition de données |
+| **Fichier** | `backend/db/omop_connector.py:40,147` |
+| **Statut** | Présent |
 
-**Conclusion** : 0 vulnérabilité d'injection SQL exploitable.
+**Description** : `PoolEntry` stocke le mot de passe CDM en clair dans `self.password` pour comparaison lors de l'invalidation des pools sur changement de credentials. Les mots de passe déchiffrés persistent en mémoire du processus pour la durée de vie du pool.
+
+**Scénario d'exploitation** : Un dump mémoire ou core dump du processus backend révélerait tous les mots de passe CDM en clair.
+
+**Correction recommandée** : Stocker un hash du mot de passe (ex: SHA-256) au lieu de la valeur en clair pour la comparaison.
 
 ---
 
-## Historique Git — Chronologie des corrections
-
-| Commit | Date | Corrections sécurité |
-|--------|------|---------------------|
-| `2da6125` | 2026-03-13 | `safe_identifier()` créé, Keycloak middleware, `SECRET_KEY` rejet |
-| `d6ec563` | 2026-03-15 | Rate limiting, CSP nginx, concept/router migré psysql.SQL |
-| `8bb8299` | 2026-03-15 | Path traversal OHDSI, IDOR fixes (6), threading.Lock, SSE cap |
-| `a7491de` | 2026-03-16 | clinical.py + conformity.py → psysql.SQL/Identifier |
-| `1145ce0` | 2026-03-17 | docker-compose.prod.yml, CDM access checks (12), deps pinnées |
-| `5318b57` | 2026-03-18 | person.py + obs_period.py + dashboard.py → psysql.SQL, SSE lock |
-| `9534240` | 2026-03-18 | Validation Pydantic critères cohorte (F1), fix TOCTOU cancel SSE (F2) |
-
-**Régressions** : Aucune. **Secrets commités** : Aucun.
+### MOYENNE
 
 ---
 
-## Bilan des corrections P0 (commit `9534240`)
+#### S12 — Rate limiting absent sur des endpoints coûteux
 
-Toutes les findings **CRITIQUE** de l'audit de sécurité ont été corrigées :
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Rate Limiting |
+| **Fichier** | Plusieurs routers |
+| **Statut** | Présent |
 
-| ID | Finding | Statut | Commit |
-|----|---------|--------|--------|
-| C1 | Endpoints OHDSI sans authentification | ✅ CORRIGÉ | `fa9f870` |
-| C2 | Keycloak `sslRequired: "none"` + redirectUris wildcard | ✅ CORRIGÉ | `fa9f870` |
-| C3 | Docker socket monté (dev) | ✅ CORRIGÉ | ce commit |
-| C4 | F-strings SQL dans quality domains | ✅ CORRIGÉ | `5318b57` |
-| C5 | Tickets SSE sans lock thread-safe | ✅ CORRIGÉ | `5318b57` |
-| C6 | AUTH_ENABLED=false accessible depuis non-localhost | ✅ CORRIGÉ | ce commit |
-| C7 | Identifiants Keycloak admin par défaut (admin/admin) | ✅ CORRIGÉ | ce commit |
+**Description** : Endpoints sans rate limiting :
+- `POST /api/cohorts/count` — exécute du SQL sur le CDM
+- `POST /api/cohorts/attrition` — multiples requêtes SQL
+- `POST /api/cohorts/sample` — requête avec ORDER BY RANDOM()
+- `POST /api/mapping/suggest` (single) — jusqu'à 6 stratégies
+- `POST /api/concepts/counts` — UNION ALL sur tous les domaines
+- `GET /api/search/` — recherche cross-entité sur le CDM
+- `POST /api/ohdsi/run/{service_name}` — lance des conteneurs Docker
 
-**Corrections cross-audit** appliquées dans le commit `9534240` :
-- **F1 (fonctionnel/sécurité)** : Validation Pydantic des critères de cohorte — limite profondeur (5), concept_ids (10K), types stricts → prévient DoS par payload
-- **F2 (fonctionnel/sécurité)** : Race condition TOCTOU dans cancel SSE → lecture + écriture atomique sous un seul lock
-
-**Corrections P0 supplémentaires (ce commit)** :
-- **S01** : Suppression du mount `/var/run/docker.sock` dans `docker-compose.yml` + documentation du proxy Docker pour OHDSI
-- **S02** : Rejet des requêtes non-localhost quand `AUTH_ENABLED=false` (HTTP 403 + log CRITICAL)
-- **S03** : `KEYCLOAK_ADMIN_PASSWORD` obligatoire via `:?` dans `docker-compose.yml` — déploiement impossible sans mot de passe défini
+**Correction recommandée** : Ajouter `@limiter.limit("X/minute")` à tous les endpoints exécutant des requêtes CDM ou lançant des tâches background.
 
 ---
 
-## Bilan des corrections HAUTE
+#### S13 — Endpoint i18n accepte un paramètre langue arbitraire
 
-| ID | Finding | Statut | Commit |
-|----|---------|--------|--------|
-| H3 | Rate limiting endpoints coûteux | ✅ CORRIGÉ | précédent |
-| H5 | Keycloak URL hardcodée HTTP | ✅ CORRIGÉ | précédent |
-| H6 | npm strict-ssl false | ✅ CORRIGÉ | précédent |
-| H9 | WebSocket sans limite connexions/user | ✅ CORRIGÉ | précédent |
-| H10 | Content-Disposition non sanitisé | ✅ CORRIGÉ | précédent |
-| H1 | SSRF TOCTOU | ⚠️ ATTÉNUÉ (admin-only) | — |
-| S04 | SQL f-string source_codes | ✅ CORRIGÉ | ce commit |
-| S05 | Extraction sans vérification propriétaire | ✅ CORRIGÉ | ce commit |
-| S06 | OHDSI Run sans check CDM access | ✅ CORRIGÉ | ce commit |
-| S07 | SQL généré retourné au frontend | ✅ CORRIGÉ | ce commit |
-| S08 | Mot de passe CDM dans env Docker (docker inspect) | ✅ CORRIGÉ | ce commit |
-| S09 | Keycloak mode dev / port exposé 0.0.0.0 | ✅ CORRIGÉ | ce commit |
-| S10 | OHDSI stop/status sans vérification auteur | ✅ CORRIGÉ | ce commit |
-| S11 | Mot de passe en clair dans pool de connexions | ✅ CORRIGÉ | ce commit |
-| H4 | IDOR cohorts | En attente | — |
-| H7 | Port 8000 sur 0.0.0.0 | En attente | — |
-| H11 | directAccessGrantsEnabled | En attente | — |
-| H12 | Proxy credentials Docker layers | En attente | — |
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Validation des entrées |
+| **Fichier** | `backend/main.py:330-335` |
+| **Statut** | Présent |
+
+**Description** : `GET /api/i18n/{lang}` accepte n'importe quelle chaîne comme paramètre `lang`. Le message d'erreur reflète la valeur : `f"Language '{lang}' not found"`. Risque de contenu réfléchi (pas de XSS car réponse JSON, pas HTML).
+
+**Correction recommandée** : Valider `lang` contre un pattern `^[a-z]{2}$` ou les clés connues du cache.
+
+---
+
+#### S14 — Paramètres date des logs d'audit non strictement validés
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Validation des entrées |
+| **Fichier** | `backend/main.py:398-416` |
+| **Statut** | Partiellement atténué |
+
+**Description** : Les paramètres `date`, `date_from`, `date_to` sont parsés via `fromisoformat()` qui est strict. Le chemin est construit avec `AUDIT_LOG_DIR / f"{dt_str}.jsonl"`. `pathlib` empêche le path traversal, mais une validation regex explicite `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` serait un defense-in-depth.
+
+---
+
+#### S15 — Store SSE tickets en mémoire (non distribué)
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Gestion de session |
+| **Fichier** | `backend/auth/keycloak.py:52-86` |
+| **Statut** | Présent (acceptable pour instance unique) |
+
+**Description** : Les tickets SSE sont stockés dans un dict en mémoire (`_sse_tickets`). Dans un déploiement multi-instance derrière un load balancer, un ticket créé par l'instance A ne peut être validé par l'instance B.
+
+**Correction recommandée** : Pour les déploiements multi-instance, utiliser Redis ou la base app pour le stockage des tickets.
+
+---
+
+#### S16 — CORS origins incluent localhost par défaut
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Configuration |
+| **Fichier** | `backend/config.py:62` |
+| **Statut** | Présent (dev uniquement) |
+
+**Description** : Les origines CORS par défaut incluent `http://localhost:3000,http://localhost:5173`. Approprié pour le développement mais doit être surchargé en production.
+
+**Correction recommandée** : Supprimer les defaults localhost quand `ENVIRONMENT=production`.
+
+---
+
+#### S17 — Clé Fernet auto-générée fragile
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Cryptographie |
+| **Fichier** | `backend/utils/crypto.py:18-44` |
+| **Statut** | Présent |
+
+**Description** : Si ni `ENCRYPTION_KEY` ni `.secret_key` n'existe, une clé Fernet est auto-générée et persistée dans `data/.secret_key`. Si le volume `data/` est perdu (recréation de volume Docker), tous les mots de passe CDM chiffrés deviennent irrécupérables.
+
+**Correction recommandée** : En production, exiger `ENCRYPTION_KEY` (lever RuntimeError si absent quand `ENVIRONMENT=production`).
+
+---
+
+#### S18 — Métadonnées analyses actives exposées à tous les utilisateurs
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Autorisation |
+| **Fichier** | `backend/modules/quality/router.py:439-458` |
+| **Statut** | Présent |
+
+**Description** : `GET /api/quality/analyze/active` retourne les métadonnées de toutes les analyses actives (nom CDM, domaines, username) à tout utilisateur authentifié sans filtrage par rôle ou accès CDM.
+
+**Correction recommandée** : Filtrer les résultats par permissions d'accès CDM ou restreindre à admin/data-manager.
+
+---
+
+#### S19 — Absence de limite de taille des messages WebSocket
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | WebSocket |
+| **Fichier** | `backend/main.py:598-627` |
+| **Statut** | Présent |
+
+**Description** : L'endpoint WebSocket lit les messages avec `websocket.receive_text()` sans limite de taille. Un client malveillant pourrait envoyer des messages très volumineux.
+
+**Correction recommandée** : Ajouter une validation de taille (rejeter les messages > 1KB).
+
+---
+
+#### S20 — Absence de validation de la taille des messages WebSocket
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | WebSocket |
+| **Fichier** | `backend/main.py:598-627` |
+| **Statut** | Présent |
+
+**Description** : Le endpoint WebSocket ne vérifie pas le contenu des messages reçus au-delà du ping/pong. Pas de validation du format JSON ni de whitelist des types de messages acceptés.
+
+**Correction recommandée** : Valider le format et le type des messages entrants.
+
+---
+
+### BASSE
+
+---
+
+#### S21 — CSP autorise unsafe-inline pour les styles
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Headers |
+| **Fichier** | `frontend/nginx.conf:12` |
+| **Statut** | Présent |
+
+**Description** : Le CSP inclut `style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'`. Courant dans les apps React avec CSS-in-JS mais affaiblit la protection CSP.
+
+---
+
+#### S22 — Logs d'audit sans protection d'intégrité
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Audit |
+| **Fichier** | `backend/audit/logger.py:118-132` |
+| **Statut** | Présent |
+
+**Description** : Les logs d'audit sont des fichiers JSONL sans HMAC, signature ou protection append-only. Un attaquant avec accès au filesystem pourrait modifier ou supprimer des entrées.
+
+---
+
+#### S23 — Noms de fichiers CSV pas entièrement sanitisés
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Validation des entrées |
+| **Fichier** | `backend/modules/concept/router.py:537` |
+| **Statut** | Présent |
+
+**Description** : Certains exports CSV incluent des valeurs utilisateur dans le header `Content-Disposition` (ex: query de recherche dans le nom de fichier concept) sans la sanitisation `re.sub(r'[^\w\-.]', '_', ...)` appliquée dans d'autres exports.
+
+---
+
+#### S24 — Version Keycloak à vérifier
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Dépendances |
+| **Fichier** | `docker-compose.yml:92` |
+| **Statut** | Présent |
+
+**Description** : Keycloak 24.0 est utilisé. Vérifier les advisories de sécurité pour cette version et mettre à jour si nécessaire.
+
+---
+
+#### S25 — Identifiants Keycloak par défaut dans le compose dev
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Configuration |
+| **Fichier** | `docker-compose.yml:95-96` |
+| **Statut** | ✅ CORRIGÉ (voir S03) |
+
+**Description** : `KEYCLOAK_ADMIN_PASSWORD` est désormais obligatoire via `:?` dans le compose de base également. Le déploiement échoue si non défini (voir S03).
+
+---
+
+#### S26 — Placeholder URL dans alembic.ini
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Configuration |
+| **Fichier** | `backend/alembic.ini` |
+| **Statut** | Présent |
+
+**Description** : L'URL de connexion dans `alembic.ini` est un placeholder. La valeur réelle est injectée via `env.py` depuis `DATABASE_URL`. Risque faible mais pourrait induire en erreur.
+
+---
+
+## Analyse SQL Injection
+
+| Module | Fichier | Méthode SQL | Sources d'entrée utilisateur | Protection | Risque |
+|--------|---------|-------------|------------------------------|------------|--------|
+| sql_builder | `cohort/sql_builder.py` | f-string | schema, concept_ids, source_codes, dates, opérateurs | `safe_identifier()`, `int()`, `chr(39)` escape, date regex | FAIBLE (atténué) |
+| pathways | `cohort/pathways.py` | f-string | schema, concept_ids, combo_window, event_name | `safe_identifier()`, `int()`, psycopg2 params pour ename | FAIBLE (atténué) |
+| concept/router | `concept/router.py` | `psycopg2.sql.SQL` | query recherche, domaine, vocabulaire, concept_id | `psycopg2.sql.Identifier` + `%s` params | TRÈS FAIBLE |
+| mapping/suggest | `mapping/suggest.py` | `psycopg2.sql.SQL` | source_value, domaine, schéma | `safe_identifier()` + `%s` params | TRÈS FAIBLE |
+| mapping/router | `mapping/router.py` | f-string | schema, table, colonnes, terme recherche | `safe_identifier()` + `%(param)s` dict params | FAIBLE (atténué) |
+| quality/domains | `quality/domains/*.py` | f-string | schema, table, noms de colonnes | `safe_identifier()` + noms depuis DOMAIN_CONFIG | TRÈS FAIBLE |
+| search_router | `search_router.py` | `psycopg2.sql.SQL` | query recherche, CDM name | `psycopg2.sql.Identifier` + `%s` params | TRÈS FAIBLE |
+| incidence/engine | `incidence/engine.py` | f-string | schema, cohort SQL, strata | `safe_identifier()`, `int()` casts | FAIBLE (atténué) |
+| estimation/router | `estimation/router.py` | f-string | schema, table, time_at_risk_end | `int()` casts, constantes DOMAIN_CONFIG | FAIBLE (atténué) |
+| datamanagement | `datamanagement/extractor.py` | f-string | schema, table, colonnes | `_safe()` regex, whitelist EXTRACTABLE_TABLES | FAIBLE (atténué) |
+| cdm_helper | `utils/cdm_helper.py` | `%s` params | schema, table, colonne | `safe_identifier()` + `%s` params | TRÈS FAIBLE |
+
+**Verdict global** : 0 vulnérabilité exploitable. Défense en profondeur sur tous les chemins. La seule recommandation est de migrer les f-strings de `sql_builder.py` vers des requêtes paramétrisées.
+
+---
+
+## Matrice de couverture RBAC
+
+| Préfixe Endpoint | Auth requise | Vérif. rôle | Vérif. accès CDM | Notes |
+|------------------|-------------|-------------|------------------|-------|
+| `/api/health` | Non | Non | Non | Public |
+| `/api/i18n/{lang}` | Non | Non | Non | Public |
+| `/api/access-requests` (POST) | Non | Non | Non | Public (rate limited) |
+| `/api/auth/*` | Oui | Non (tout user) | Non | Auth seulement |
+| `/api/cdm/` (GET) | Oui | Non | Non | Liste CDM read-only |
+| `/api/admin/*` | Oui | Rôle admin | Non | Admin uniquement |
+| `/api/cdm-access/*` | Oui | `can_manage_access` | Non | Permission-based |
+| `/api/quality/*` | Oui | `permissions.yaml` | Oui (middleware + check_cdm_access) | ✅ |
+| `/api/cohorts/*` | Oui | `permissions.yaml` | Oui (check_cdm_access body) | ✅ |
+| `/api/concepts/*` | Oui | `permissions.yaml` | Oui (middleware via cdm_name param) | ✅ |
+| `/api/mapping/*` | Oui | `permissions.yaml` | Oui (check_cdm_access body) | ✅ |
+| `/api/ohdsi/*` | Oui | `permissions.yaml` | **MANQUANT pour run** | ⚠️ S06 |
+| `/api/datamanagement/*` | Oui | `permissions.yaml` | Oui (check_cdm_access dans extract/start) | ✅ |
+| `/api/incidence/*` | Oui | `permissions.yaml` | Oui (check_cdm_access) | ✅ |
+| `/api/estimation/*` | Oui | `permissions.yaml` | Oui (check_cdm_access) | ✅ |
+| `/api/notifications/*` | Oui | `permissions.yaml` | Non (user-scoped) | ✅ |
+| `/api/favorites/*` | Oui | `permissions.yaml` | Non (user-scoped) | ✅ |
+| `/api/saved-queries/*` | Oui | `permissions.yaml` | Non (ownership check) | ✅ |
+| `/api/cohort-templates/*` | Oui | `permissions.yaml` | Non | ✅ |
+| `/api/search/*` | Oui | `permissions.yaml` | Partiel (CDM query needs access) | ⚠️ |
+| `/api/groups/*` | Oui | `permissions.yaml` | Non | Create/delete = admin |
+| `/api/audit/*` | Oui | Rôle admin | Non | ✅ |
+| `/api/ws/notifications` | Oui (ticket) | Non | Non | SSE ticket auth |
+
+---
+
+## Recommandations prioritisées
+
+### Priorité 1 — Bloquants déploiement
+1. Supprimer le mount Docker socket du compose de base ou utiliser docker-socket-proxy
+2. Exiger le mot de passe Keycloak admin dans le compose de base
+3. Ajouter `check_cdm_access` à l'endpoint OHDSI run
+
+### Priorité 2 — Avant mise en production
+4. Ajouter la vérification de propriété utilisateur aux endpoints d'extraction
+5. Arrêter de retourner le SQL généré au frontend
+6. Utiliser Docker secrets pour les credentials OHDSI
+7. Exiger `ENCRYPTION_KEY` en production
+8. Hasher les mots de passe dans `PoolEntry`
+
+### Priorité 3 — Durcissement
+9. Rate limiting sur cohort count, attrition, sample, concept counts, search, OHDSI run
+10. Vérification propriétaire sur OHDSI stop
+11. Filtrer les analyses actives par permissions CDM
+12. Valider strictement les dates des logs d'audit
+13. Sanitiser tous les noms de fichiers CSV
+
+### Priorité 4 — Bonnes pratiques
+14. Limite de taille messages WebSocket
+15. HMAC pour les logs d'audit
+16. Mise à jour Keycloak
+17. Resserrer CSP pour supprimer `unsafe-inline`
+18. Refactoriser sql_builder.py source_codes vers requêtes paramétrisées

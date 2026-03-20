@@ -1,406 +1,535 @@
-# Audit Fonctionnel Approfondi — OPAL v1.2.0
+# Audit Fonctionnel Approfondi — OPAL v1.2.1
 
-**Date** : 2026-03-18
-**Périmètre** : 19 modules backend (200+ endpoints), 15 pages frontend, 48 fichiers de tests backend, 7 fichiers de tests frontend
-**Méthodologie** : Lecture complète de chaque fichier source, traçage des flux de données API→DB→OMOP, analyse ligne par ligne de sql_builder.py (1152 lignes), pathways.py (347 lignes), suggest.py (845 lignes)
-**Auditeur** : Claude Code — audit exhaustif basé sur le code source et l'historique des commits
+**Date** : 2026-03-20
+**Périmètre** : 19 modules backend (200+ endpoints), 15 pages frontend, 50+ fichiers de tests backend, types TypeScript, i18n EN/FR, modèles SQLAlchemy, Alembic
+**Méthodologie** : Lecture complète de chaque fichier source, traçage des flux API→DB→OMOP, comparaison client.ts vs routes backend, analyse couverture i18n, vérification DOMAIN_CONFIG vs CDM OMOP v5.4
+**Auditeur** : Claude Code (Opus 4.6) — audit exhaustif basé sur le code source
+**Branche** : OPAL_V1.2.1
 
 ---
 
 ## Résumé Exécutif
 
-| Sévérité | Trouvées | Corrigées | Restantes |
-|----------|----------|-----------|-----------|
-| CRITIQUE | 4 | 3 (F1, F2, F4) | 1 (F3) |
-| HAUTE | 9 | 5 (F5, F7, F11, F12, F13) | 4 |
-| MOYENNE | 12 | 3 (F15, F16, F19) | 9 |
-| BASSE | 8 | 0 | 8 |
-| **Total** | **33** | **8** | **25** |
+| Sévérité | Trouvées | Statut |
+|----------|----------|--------|
+| CRITIQUE | 3 | 0 corrigé, 3 présents |
+| HAUTE | 7 | 0 corrigé, 7 présents |
+| MOYENNE | 10 | 0 corrigé, 10 présents |
+| BASSE | 8 | 0 corrigé, 8 présents |
+| **Total** | **28** | **28 en attente** |
 
-OPAL implémente un ensemble fonctionnel remarquablement complet pour une plateforme OMOP CDM : qualité Achilles-like (5 analyseurs de domaines), cohort builder avec SQL dynamique (1152 lignes, 10+ types de critères), mapping avec 5 stratégies, pathways ATLAS-style, incidence, estimation Kaplan-Meier, et data management. L'analyse en profondeur révèle cependant des bugs concrets dans le code, des incohérences API/frontend, et des lacunes fonctionnelles significatives.
-
----
-
-## Constats Positifs
-
-### Architecture
-- **19 modules bien découplés** avec routers séparés, logique métier isolée
-- **22 modèles** avec indexes composites pertinents (`cdm_name+domain+version`, `cohort_id+version`, `username+read`)
-- **Système de permissions** piloté par `permissions.yaml` — 4 rôles : admin, data-manager, chercheur, medecin
-- **Notifications temps réel** via WebSocket avec préférences par utilisateur
-- **Versioning** des snapshots qualité et des versions de cohorte
-- **Audit trail complet** avec logs JSONL rotatifs et rétention 30 jours
-
-### Modules métier
-- **Quality** : 5 analyseurs (Person, ObservationPeriod, Dashboard, Clinical×8, Conformity 20+ checks)
-- **Cohort Builder** : Critères JSON → SQL avec relations temporelles d'Allen, same-visit, concept_ancestor, demographics, measurement ranges, occurrence frequency
-- **Mapping** : 5 stratégies (exact, relationship, ingredient/DCI, fuzzy/trigram, contextual) + SapBERT pré-calculé
-- **Pathways** : Algorithme ATLAS-style complet (target cohort → events → eras → sequencing → sunburst)
-- **Incidence** : Taux d'incidence avec stratification âge/sexe
-- **Estimation** : Kaplan-Meier avec test log-rank et IC Greenwood
-
-### Tests
-- **48 fichiers de tests backend** (~9250 lignes) couvrant tous les modules majeurs
-- Tests avec SQLite in-memory via `conftest.py` — pas de dépendance externe
-- Mocks OMOP via `omop_mock.py` pour les connecteurs
+OPAL implémente un ensemble fonctionnel remarquablement complet pour une plateforme OMOP CDM : qualité Achilles-like (5 analyseurs de domaines + conformité), cohort builder avec SQL dynamique (1152 lignes, 10+ types de critères), mapping avec 6 stratégies, pathways ATLAS-style, incidence, estimation Kaplan-Meier, et data management avec extraction streaming. L'analyse en profondeur révèle cependant des pages orphelines non routées, des colonnes OMOP non standard dans la configuration, et des incohérences API/frontend.
 
 ---
 
-## CRITIQUE
+## Findings détaillés
 
-### F1 — Critères JSON de cohorte : aucune validation de structure — CORRIGÉ ✓
-
-**Fichier** : `backend/modules/cohort/router.py:49`
-**Commit** : `9534240`
-
-**Constat initial** : Le champ `criteria: dict` acceptait n'importe quel dictionnaire sans validation. Risques : stack overflow par nesting infini, DoS par 1M+ concept_ids, erreurs 500 cryptiques.
-
-**Correction appliquée** :
-- Fonction `_validate_criteria()` avec validation récursive :
-  - Profondeur max de nesting : **5 niveaux**
-  - Max **10 000** `concept_ids` par critère
-  - Vérification de type strict : dict pour groupes, list pour concept_ids, int pour chaque ID
-- `@field_validator("criteria")` ajouté sur les 4 modèles Pydantic : `CohortCreateRequest`, `CohortUpdateRequest`, `CohortCountRequest`, `CohortSampleRequest`
-- Erreurs de validation retournées en 422 avec message clair (au lieu de 500)
+### CRITIQUE
 
 ---
 
-### F2 — Bugs dans le code SSE de quality/router.py — CORRIGÉ ✓
+#### F01 — 3 pages frontend (Incidence, Estimation, ConceptSet) sans routes dans App.tsx
 
-**Fichier** : `backend/modules/quality/router.py`
-**Commit** : `9534240`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | CRITIQUE |
+| **Catégorie** | Complétude fonctionnelle |
+| **Fichier** | `frontend/src/App.tsx:163-175` |
+| **Statut** | Présent |
 
-**Constat initial** :
-1. `queue.Queue.get(True, 2.0)` — appel positionnel fragile
-2. Race condition TOCTOU dans `cancel_analysis()` — lecture hors lock puis écriture dans un lock séparé
+**Description** : Les fichiers `IncidencePage.tsx`, `EstimationPage.tsx` et `ConceptSetPage.tsx` existent dans le répertoire pages mais ne sont jamais lazy-loaded ni routés dans `App.tsx`. Les routers backend correspondants (`/api/incidence/`, `/api/estimation/`, `/api/concept-sets/`) existent et sont pleinement fonctionnels. Les utilisateurs n'ont **aucun moyen** d'atteindre ces pages via la navigation.
 
-**Correction appliquée** :
-1. Remplacé par `lambda: progress_q.get(block=True, timeout=2.0)` — keyword args explicites
-2. Cancel réécrit avec lecture + vérification ownership + écriture `cancelled=True` dans un **seul bloc** `with _active_analyses_lock`. Le `conn.cancel()` reste hors du lock (peut bloquer sur I/O)
+**Comportement attendu** : Les 3 pages devraient avoir des entrées `<Route>` dans `App.tsx` (ex: `/incidence`, `/estimation`, `/concept-sets`).
 
----
-
-### F3 — Couverture de tests frontend très faible (7 fichiers / 15 pages)
-
-**Tests existants** : `client.test.ts`, `AnimatedList.test.tsx`, `SkeletonPatterns.test.tsx`, `ErrorState.test.tsx`, `Toast.test.tsx`, `Empty.test.tsx`, `useTheme.test.ts`
-
-**Tests manquants critiques** :
-- **0 test de page** (QualityPage, CohortPage, MappingPage, etc.)
-- **0 test d'authentification** (KeycloakContext.tsx)
-- **0 test WebSocket** (useNotificationWs.ts)
-- **0 test du cohort builder** (QueryCanvas, CriteriaGroupEditor)
-- **0 test de routage/protection** (ProtectedRoute)
-
-**Impact** : Régressions frontend non détectées. Bug lors de refactoring silencieux.
+**Correction recommandée** : Ajouter les imports lazy et les entrées Route pour `/incidence`, `/estimation`, `/concept-sets` dans `App.tsx`. Aussi les ajouter au tableau `ALL_PAGES` et aux listes de pages dans `permissions.yaml`.
 
 ---
 
-### F4 — 3 domaines OMOP manquants dans DOMAIN_CONFIG — CORRIGÉ ✓
+#### F02 — Colonne `note_source_value` du domaine Note inexistante dans OMOP CDM v5.4
 
-**Fichier** : `backend/config.py` — DOMAIN_CONFIG
-**Commit** : `9534240`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | CRITIQUE |
+| **Catégorie** | Conformité OMOP |
+| **Fichier** | `backend/config.py:167` |
+| **Statut** | Présent |
 
-**Constat initial** : Domaines implémentés (8/11). 3 domaines OMOP CDM v5.4 absents.
+**Description** : La table OMOP CDM `note` n'a pas de colonne `note_source_value`. Les colonnes standard sont `note_text`, `note_title`, etc. Le `DOMAIN_CONFIG` pour "Note" référence `"source_value": "note_source_value"` qui causera des erreurs SQL runtime sur tout CDM ayant une table `note`. De même, `note_source_concept_id` n'est pas standard.
 
-**Correction appliquée** — Ajout des 3 domaines avec leurs colonnes standard :
-- ✅ `Specimen` — table `specimen`, concept_id `specimen_concept_id`, date `specimen_date`
-- ✅ `Note` — table `note`, concept_id `note_type_concept_id`, date `note_date`
-- ✅ `Payer_Plan_Period` — table `payer_plan_period`, concept_id `payer_concept_id`, date `payer_plan_period_start_date`
-
-**Domaines couverts : 11/11** (hors `cost`, `episode`/`episode_event` qui sont des tables auxiliaires)
-
----
-
-## HAUTE
-
-### F5 — Gestion d'erreurs inconsistante entre modules — PARTIELLEMENT CORRIGÉ ✓
-
-| Module | 404 pattern | Auth check | CDM access check |
-|--------|-------------|------------|-----------------|
-| `cohort/router.py` | `HTTPException(404)` | Middleware | `check_cdm_access()` ✓ |
-| `mapping/router.py` | `HTTPException(404)` | Middleware | `check_cdm_access()` ✓ |
-| `saved_queries_router.py` | `HTTPException(404)` | Owner check L.89 | **Non** |
-| `favorites_router.py` | `HTTPException(404)` | Username filter | **Non** |
-| `concept_set/router.py` | `JSONResponse(404)` | Middleware | **4 endpoints sur 7** ✓ |
-| `incidence/router.py` | `HTTPException(404)` | Middleware | **5 endpoints sur 5** ✓ |
-| `estimation/router.py` | `HTTPException(404)` | Middleware | **5 endpoints sur 5** ✓ |
-
-**Correction** : `check_cdm_access()` ajouté sur tous les endpoints incidence, estimation, concept_set (create, resolve, counts) et datamanagement (extract).
+**Correction recommandée** : Mettre `"source_value": None` pour le domaine Note. Le code d'analyse qualité, mapping et recherche qui itère sur `DOMAIN_CONFIG` gère déjà gracieusement `None` comme source_value (grâce aux checks dans `cdm_helper.py`).
 
 ---
 
-### F6 — Endpoint d'exécution de requêtes sauvegardées absent
+#### F03 — `CohortVersion.cohort_id` n'a pas de contrainte ForeignKey en base
 
-**Fichier** : `backend/modules/saved_queries_router.py`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | CRITIQUE |
+| **Catégorie** | Intégrité des données |
+| **Fichier** | `backend/db/models.py:92` |
+| **Statut** | Présent |
 
-Le module permet de sauvegarder des requêtes SQL mais n'a PAS d'endpoint d'exécution. Les requêtes sauvegardées ne sont qu'un carnet de notes.
+**Description** : `CohortVersion.cohort_id` est déclaré comme `Column(Integer, nullable=False, index=True)` sans `ForeignKey("cohorts.id")`. La relation sur `Cohort.versions` utilise `primaryjoin="Cohort.id == foreign(CohortVersion.cohort_id)"` qui fonctionne au niveau ORM mais ne crée **pas** de contrainte foreign key en base. Des lignes `CohortVersion` orphelines peuvent exister si la suppression bypasse l'ORM. Même problème pour `CohortShare.cohort_id`.
 
----
-
-### F7 — Race condition dans l'annulation d'analyse qualité — CORRIGÉ ✓
-
-**Fichier** : `backend/modules/quality/router.py:395-427`
-**Commit** : `9534240` (même correction que F2)
-
-L'annulation vérifie l'existence dans `_active_analyses` puis modifie `cancelled=True` dans deux sections `with _active_analyses_lock:` séparées. Entre les deux, le worker thread peut terminer et supprimer l'entrée → TOCTOU.
-
-**Correction** : Lecture + vérification + écriture dans un seul bloc `with _active_analyses_lock`.
+**Correction recommandée** : Ajouter `ForeignKey("cohorts.id", ondelete="CASCADE")` et créer une migration Alembic.
 
 ---
 
-### F8 — Mapping `apply` : écriture CDM sans dry-run ni backup
-
-**Fichier** : `backend/modules/mapping/router.py`
-
-`POST /api/mapping/apply/{cdm_name}/{domain}` écrit dans `source_to_concept_map` du CDM externe — la SEULE opération d'écriture. Pas de mode `dry_run`, pas de backup automatique, pas de rollback sur erreur partielle.
+### HAUTE
 
 ---
 
-### F9 — Pas de soft-delete pour les cohortes
+#### F04 — Endpoints delete Incidence/Estimation absents du client frontend
 
-**Fichier** : `backend/modules/cohort/router.py`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Contrat API |
+| **Fichier** | `frontend/src/api/client.ts:540-570` |
+| **Statut** | Présent |
 
-`DELETE /api/cohorts/{id}` supprime définitivement la cohorte, ses versions, caractérisations et pathways. Les analyses d'incidence/estimation référençant cette cohorte deviennent orphelines.
+**Description** : Le backend a `DELETE /api/incidence/{analysis_id}` et `DELETE /api/estimation/{analysis_id}` mais le frontend `incidenceApi` et `estimationApi` n'ont pas de méthode `delete`. Les utilisateurs ne peuvent pas supprimer les analyses sauvegardées depuis l'UI.
 
----
-
-### F10 — Incidence/Estimation : pas de gestion d'erreur sur cohortes inexistantes
-
-**Fichier** : `backend/modules/incidence/router.py`, `estimation/router.py`
-
-Si une cohorte référencée est supprimée entre la création de l'analyse et son exécution → erreur 500 non gérée.
-
----
-
-### F11 — Pas de validation des `concept_ids` dans pathways — CORRIGÉ ✓
-
-**Fichier** : `backend/modules/cohort/pathways.py:119-143`
-
-**Correction** : Validation des concept_ids — filtrage des IDs négatifs/nuls, skip si liste vide après validation.
+**Correction recommandée** : Ajouter `delete: (id) => api.delete(`/incidence/${id}`)` aux deux objets API.
 
 ---
 
-### F12 — Pas de cascade delete dans les modèles — CORRIGÉ ✓
+#### F05 — 3 domaines OMOP manquants dans les i18n (Specimen, Note, Payer_Plan_Period)
 
-**Fichier** : `backend/db/models.py`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | i18n |
+| **Fichier** | Backend et frontend `i18n/en.json`, `i18n/fr.json` |
+| **Statut** | Présent |
 
-**Correction** : Cascade `all, delete-orphan` ajouté sur :
-- `Cohort` → `CohortVersion`, `CohortShare`
-- `UserGroup` → `UserGroupMember`
+**Description** : `DOMAIN_CONFIG` couvre 11 domaines dont Specimen, Note et Payer_Plan_Period. Mais la section `domains` des fichiers i18n ne liste que 9 domaines. Quand ces 3 domaines apparaissent dans les UIs qualité ou mapping, leurs noms apparaîtront comme clés brutes au lieu de labels localisés.
 
----
-
-### F13 — `created_by` nullable sur Cohort sans NULL guards — CORRIGÉ ✓
-
-**Fichier** : `backend/db/models.py:71`
-
-**Correction** : `created_by` changé en `nullable=False, default="system"` — plus de cohorts sans propriétaire.
+**Correction recommandée** : Ajouter les traductions pour `domains.Specimen`, `domains.Note`, `domains.Payer_Plan_Period` dans les 4 fichiers i18n.
 
 ---
 
-## MOYENNE
+#### F06 — Analyse SSE : pas de protection contre les analyses concurrentes pour le même CDM/domaine
 
-### F14 — API/Frontend : ohdsiApi.logsUrl est `async` sans opération async
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Race Condition |
+| **Fichier** | `backend/modules/quality/router.py:241-403` |
+| **Statut** | Présent |
 
-**Fichier** : `frontend/src/api/client.ts:455-463` et `OhdsiPage.tsx:132`
+**Description** : Deux utilisateurs peuvent lancer des analyses streaming batch pour le même CDM simultanément. Les deux écriront des versions de snapshot. La fonction `_save_snapshot` utilise `max(version) + 1` qui sous écritures concurrentes pourrait générer le même numéro de version, violant la contrainte unique `uq_snapshot_cdm_domain_version`.
 
-```typescript
-logsUrl: async (service: string, offset?: number): Promise<string> => {
-  // Aucune opération async, juste construction d'URL
-  return `/api/ohdsi/logs/${service}${qs}`;
-}
-```
-Utilisé avec `await` inutilement. Code trompeur.
-
----
-
-### F15 — QualityPage : progress bar non reset au cancel — CORRIGÉ ✓
-
-**Fichier** : `frontend/src/pages/QualityPage.tsx:456-467`
-
-**Correction** : `setBatchProgress(null)` ajouté dans `cancelBatchAnalysis()`.
+**Correction recommandée** : Wrapper `_save_snapshot` dans une boucle retry catchant IntegrityError, ou utiliser `SELECT ... FOR UPDATE` sur la requête version.
 
 ---
 
-### F16 — Race condition dans useNotifDots — CORRIGÉ ✓
+#### F07 — `permissions.yaml` manque les pages incidence, estimation, concept-sets
 
-**Fichier** : `frontend/src/hooks/useNotifDots.ts:21-30`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Complétude fonctionnelle |
+| **Fichier** | `backend/permissions.yaml:24-31` |
+| **Statut** | Présent |
 
-**Correction** : Remplacé `fetchingRef` par un compteur `fetchIdRef` incrémental. Seule la dernière requête en vol applique son résultat (pattern "latest wins").
-
----
-
-### F17 — ConceptSetPage/IncidencePage/EstimationPage : routes dupliquées
-
-Ces pages sont BOTH :
-- Embarquées comme tabs dans CohortPage
-- Routes standalone dans App.tsx
-
-Risque de state management dupliqué si ouvertes simultanément.
+**Description** : Le rôle `data-manager` liste des pages comme `/quality`, `/cohorts`, `/mapping` etc. mais ne liste pas `/incidence`, `/estimation`, ni `/concept-sets`. Si ces routes sont ajoutées au frontend (correction de F01), le composant `ProtectedRoute` vérifiera `hasPageAccess` et refusera l'accès même aux data-managers. Les rôles `chercheur` et `medecin` manquent aussi ces entrées.
 
 ---
 
-### F18 — i18n incomplète : LoginPage et OhdsiPage ont des strings français hardcodées
+#### F08 — `UserFavorite` non nettoyé lors de la suppression d'un CDM
 
-**Fichiers** : `frontend/src/pages/LoginPage.tsx`, `OhdsiPage.tsx`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Intégrité des données |
+| **Fichier** | `backend/modules/cdm_router.py:260-315` |
+| **Statut** | Présent |
 
-Certaines chaînes sont en français directement dans le JSX au lieu d'utiliser les clés i18n.
-
----
-
-### F19 — Quality : pas de pagination sur `list_snapshots` — CORRIGÉ ✓
-
-**Fichier** : `backend/modules/quality/router.py:587-607`
-
-**Correction** : Pagination ajoutée (`page`, `page_size`). Ne charge plus la colonne `results` (projette uniquement `id`, `version`, `created_at`).
+**Description** : Lors de la suppression d'un CDM, le cascade delete supprime Cohorts, Snapshots, MappingDecisions, ConceptSets, etc. Mais les entrées `UserFavorite` référençant des éléments du CDM supprimé ne sont **pas** nettoyées. Cela crée des favoris orphelins pointant vers des entités inexistantes.
 
 ---
 
-### F20 — Concept Explorer : navigation hiérarchique limitée
+#### F09 — Templates built-in impossibles à supprimer
 
-**Fichier** : `backend/modules/concept/router.py`
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Edge Case |
+| **Fichier** | `backend/modules/cohort_templates_router.py:256-268` |
+| **Statut** | Présent |
 
-Pas de navigation par vocabulaire, pas de filtrage par concept_class, pas d'affichage complet des relations concept_relationship.
+**Description** : Les templates built-in ont `author = "OPAL"`. L'endpoint delete vérifie `if t.author != current_user: raise 403`. Cela signifie que personne ne peut supprimer les templates built-in car aucun utilisateur n'a le username "OPAL". Les admins devraient pouvoir supprimer tout template.
 
----
-
-### F21 — Cohort sharing : pas de notification de retrait de partage
-
-L'utilisateur perd l'accès silencieusement quand un partage est retiré.
-
----
-
-### F22 — Data Management : pas de preview avant extraction
-
-Pas de preview (10 premières lignes) ni d'estimation du volume avant lancement.
+**Correction recommandée** : Les rôles admin/data-manager devraient bypasser la vérification d'auteur.
 
 ---
 
-### F23 — OHDSI : dépendance Docker-in-Docker non documentée pour l'utilisateur
+#### F10 — Concept set update/delete sans override admin
 
-Le prérequis du socket Docker n'est pas documenté dans le guide utilisateur.
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | HAUTE |
+| **Catégorie** | Edge Case |
+| **Fichier** | `backend/modules/concept_set/router.py:120-152` |
+| **Statut** | Présent |
 
----
-
-### F24 — Groups : pas de hiérarchie ni de nested groups
-
-Structure plate, insuffisante pour un hôpital avec services/pôles.
-
----
-
-### F25 — Search : recherche globale ne couvre pas tous les types
-
-Ne couvre pas : snapshots qualité, analyses incidence/estimation, décisions de mapping, groupes.
+**Description** : Même pattern que F09 : update et delete vérifient `cs.created_by != current_user` et lèvent 403. Les admins ne peuvent pas gérer les concept sets créés par d'autres utilisateurs. Incohérent avec le cohort sharing où les admins peuvent gérer toute cohorte.
 
 ---
 
-## BASSE
-
-### F26 — `AccessRequest` : pas de notification email (uniquement in-app)
-### F27 — Cohort templates : catégorisation par string libre, pas de système structuré
-### F28 — Pas de versioning d'API (`/api/v1/`)
-### F29 — OpenAPI : pas de descriptions détaillées ni exemples
-### F30 — Pas de mode offline/dégradé côté frontend
-### F31 — Pas de raccourcis clavier
-### F32 — Pas de mécanisme d'export/import de définitions de cohortes
-### F33 — Pas de backup/restore intégré
+### MOYENNE
 
 ---
 
-## Couverture de Tests — Analyse Détaillée
+#### F11 — `saved_queries_router.py` sans vérification d'accès CDM
 
-### Backend (48 fichiers, ~9250 lignes)
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Validation |
+| **Fichier** | `backend/modules/saved_queries_router.py` |
+| **Statut** | Présent |
 
-| Module | Fichiers de test | Couverture | Lacunes |
-|--------|-----------------|-----------|---------|
-| Quality (engine, domains, comparator, conformity, report) | 7 | Bonne | Pas de test de cancellation, SSE non testé |
-| Cohort (builder, router, pathways, comparison, diff) | 6 | Bonne | Pas de test de critères malformés |
-| Mapping (router, suggest) | 2 | Moyenne | Pas de test de batch suggest |
-| Concept (router, cache) | 2 | Moyenne | Pas de test de hiérarchie |
-| Notifications (endpoints, preferences, WS) | 4 | Bonne | — |
-| Admin (API, role access, access requests) | 3 | Bonne | — |
-| CDM (access, helper) | 2 | Moyenne | SSRF non testé |
-| Saved queries, favorites, groups, templates | 4 | Moyenne | — |
-| Incidence, estimation, datamanagement | 5 | Bonne | — |
-| Search, audit, i18n, crypto | 4 | Bonne | — |
-| SQL builder | 1 | Bonne | Pas de test temporal/occurrence |
-
-**Lacunes critiques** :
-- Pas de tests d'intégration end-to-end
-- Pas de tests de performance/charge
-- Pas de tests de concurrence (race conditions)
-- Pas de tests des edge cases JSON malformés dans les critères de cohorte
-
-### Frontend (7 fichiers, ~84 tests)
-
-| Composant | Testé ? |
-|-----------|---------|
-| Composants UI (5 fichiers) | ✅ |
-| Client API | ✅ |
-| Hook thème | ✅ |
-| Pages (15 pages) | ❌ |
-| Auth context | ❌ |
-| WebSocket hook | ❌ |
-| Cohort components | ❌ |
-| Quality components | ❌ |
-| GlobalSearch | ❌ |
-| Routing / ProtectedRoute | ❌ |
+**Description** : Les endpoints `create_query` et `list_queries` n'appellent pas `check_cdm_access`. Un utilisateur pourrait sauvegarder des requêtes contre des CDMs auxquels il n'a pas accès.
 
 ---
 
-## Conformité OMOP CDM
+#### F12 — `search_router.py` sans vérification d'accès CDM
 
-### Tables supportées
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Validation |
+| **Fichier** | `backend/modules/search_router.py:23-28` |
+| **Statut** | Présent |
 
-| Table CDM | Qualité | Cohort | Mapping | Concept | Pathways |
-|-----------|---------|--------|---------|---------|----------|
-| person | ✅ | ✅ | — | — | — |
-| observation_period | ✅ | ✅ | — | — | ✅ |
-| visit_occurrence | ✅ | ✅ | ✅ | ✅ | ✅ |
-| condition_occurrence | ✅ | ✅ | ✅ | ✅ | ✅ |
-| drug_exposure | ✅ | ✅ | ✅ | ✅ | ✅ |
-| measurement | ✅ | ✅ | ✅ | ✅ | ✅ |
-| procedure_occurrence | ✅ | ✅ | ✅ | ✅ | ✅ |
-| observation | ✅ | ✅ | ✅ | ✅ | — |
-| device_exposure | ✅ | ✅ | ✅ | ✅ | ✅ |
-| death | ✅ | ✅ | ✅ | ✅ | — |
-| concept | — | ✅ | ✅ | ✅ | — |
-| concept_ancestor | — | ✅ | — | ✅ | ✅ |
-| concept_relationship | — | — | ✅ | ✅ | — |
-| vocabulary | — | — | — | ✅ | — |
-| source_to_concept_map | — | — | ✅ (write) | — | — |
-
-### Tables non supportées (CDM v5.4)
-
-- `specimen` — Échantillons biologiques
-- `note` / `note_nlp` — Données textuelles
-- `cost` — Données de coûts
-- `payer_plan_period` — Couverture assurantielle
-- `episode` / `episode_event` — Épisodes de soins (v5.4)
+**Description** : La recherche globale interroge cohortes, mappings et concepts à travers les CDMs sans vérifier que l'utilisateur a accès au `cdm_name` demandé.
 
 ---
 
-## Matrice de Remédiation
+#### F13 — `concept/router.py` search sans vérification d'accès CDM
 
-| ID | Effort | Impact | Priorité | Statut |
-|----|--------|--------|----------|--------|
-| F1 | Moyen | Critique | Semaine 1 | ✅ CORRIGÉ (`9534240`) |
-| F2 | Faible | Critique | Semaine 1 | ✅ CORRIGÉ (`9534240`) |
-| F3 | Élevé | Critique | Sprint dédié | En attente |
-| F4 | Moyen | Critique | Semaine 2 | ✅ CORRIGÉ (`9534240`) |
-| F5 | Moyen | Haute | Semaine 2 | ✅ PARTIELLEMENT CORRIGÉ |
-| F6 | Moyen | Haute | Semaine 2-3 | En attente |
-| F7 | Faible | Haute | Semaine 1 | ✅ CORRIGÉ |
-| F8 | Moyen | Haute | Semaine 2-3 | En attente |
-| F9 | Moyen | Haute | Semaine 2-3 | En attente |
-| F10 | Faible | Haute | Semaine 2 | En attente |
-| F11 | Faible | Haute | Semaine 2 | ✅ CORRIGÉ |
-| F12 | Moyen | Haute | Semaine 2 | ✅ CORRIGÉ |
-| F13 | Faible | Haute | Semaine 2 | ✅ CORRIGÉ |
-| F14 | Faible | Moyenne | — | ❌ FAUX POSITIF (logsUrl EST async) |
-| F15 | Faible | Moyenne | Semaine 3 | ✅ CORRIGÉ |
-| F16 | Faible | Moyenne | Semaine 3 | ✅ CORRIGÉ |
-| F17-F18 | Variable | Moyenne | Semaine 3-4 | En attente |
-| F19 | Moyen | Moyenne | Semaine 3 | ✅ CORRIGÉ |
-| F20-F25 | Variable | Moyenne | Semaine 3-4 | En attente |
-| F26-F33 | Variable | Basse | Backlog | En attente |
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Validation |
+| **Fichier** | `backend/modules/concept/router.py:81-147` |
+| **Statut** | Présent |
+
+**Description** : L'endpoint `/concepts/search` accepte `cdm_name` en query parameter mais ne vérifie pas l'accès CDM via `check_cdm_access`. D'autres endpoints concept comme `/counts` font cette vérification.
+
+---
+
+#### F14 — `admin_router.py` — `submit_access_request` accepte un `dict` brut
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Validation |
+| **Fichier** | `backend/modules/admin_router.py:207` |
+| **Statut** | Présent |
+
+**Description** : L'endpoint utilise `body: dict` au lieu d'un modèle Pydantic, bypassant la validation automatique, la coercion de types et la génération de schéma OpenAPI.
+
+---
+
+#### F15 — `add_user_direct` endpoint async incohérent
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Error Handling |
+| **Fichier** | `backend/modules/admin_router.py:377` |
+| **Statut** | Présent |
+
+**Description** : Seul endpoint utilisant `async def` avec `await request.json()` au lieu d'un body model Pydantic. Bypasse la validation et est incohérent avec le reste du codebase.
+
+---
+
+#### F16 — `CohortTemplate._ensure_builtins` race condition en multi-worker
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Race Condition |
+| **Fichier** | `backend/modules/cohort_templates_router.py:173-179` |
+| **Statut** | Présent |
+
+**Description** : `_ensure_builtins` vérifie `count == 0` puis insère les templates. Sous plusieurs workers, deux requêtes pourraient voir count=0 et insérer des doublons. La table n'a pas de contrainte unique sur `(name, author)`.
+
+---
+
+#### F17 — Export CSV quality : filename non quoté dans Content-Disposition
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Edge Case |
+| **Fichier** | `backend/modules/quality/router.py:734` |
+| **Statut** | Présent |
+
+**Description** : `Content-Disposition: attachment; filename={filename}` — le filename n'est pas quoté. Si les noms CDM contiennent des espaces ou caractères spéciaux, le header sera malformé.
+
+---
+
+#### F18 — `concept_cache` est process-local et non invalidé entre workers
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Edge Case |
+| **Fichier** | `backend/modules/concept/router.py:30-52` |
+| **Statut** | Présent (acceptable avec TTL 5 min) |
+
+**Description** : Le dict `_concept_cache` est per-process. En déploiement multi-worker (Gunicorn), chaque worker a son propre cache. L'invalidation dans un worker n'affecte pas les autres. Le TTL de 5 min atténue le problème.
+
+---
+
+#### F19 — `Notification.read` utilise Integer(0/1) au lieu de Boolean
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Intégrité des données |
+| **Fichier** | `backend/db/models.py:284,72` |
+| **Statut** | Présent (choix de compatibilité SQLite) |
+
+**Description** : `Notification.read` et `Cohort.shared_with_all` utilisent `Integer` avec valeurs 0/1 au lieu de `Boolean`, commenté "for SQLite compat". Pas de CHECK constraint assurant que les valeurs soient uniquement 0 ou 1.
+
+---
+
+#### F20 — `cohort_sharing_router.py` vérifie l'accès CDM par grant direct uniquement
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | MOYENNE |
+| **Catégorie** | Edge Case |
+| **Fichier** | `backend/modules/cohort_sharing_router.py:68-79` |
+| **Statut** | Présent |
+
+**Description** : Lors du partage avec un utilisateur, le check ne regarde que `CdmAccess` (grants directs) mais pas `CdmGroupAccess` (grants de groupe). Un utilisateur avec accès basé sur un groupe pourrait être rejeté.
+
+---
+
+### BASSE
+
+---
+
+#### F21 — `chercheur` et `medecin` n'ont pas accès à `/api/concept-sets`
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Complétude fonctionnelle |
+| **Fichier** | `backend/permissions.yaml:62-96` |
+| **Statut** | Présent |
+
+**Description** : Les chercheurs et médecins ne peuvent pas accéder aux concept sets via l'API, même s'ils peuvent accéder aux concepts. Les concept sets sont une extension naturelle de la navigation de concepts.
+
+---
+
+#### F22 — `quality/engine.py` — `get_available_domains` avale les exceptions silencieusement
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Error Handling |
+| **Fichier** | `backend/modules/quality/engine.py:33-48` |
+| **Statut** | Présent |
+
+**Description** : Si la requête `information_schema` échoue (ex: permission denied), le bloc `except` retombe sur le retour de tous les domaines sans logger de warning. Cela peut masquer des problèmes de permissions.
+
+---
+
+#### F23 — Colonne `payer_source_value` du domaine Payer_Plan_Period non standard OMOP CDM v5.4
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Conformité OMOP |
+| **Fichier** | `backend/config.py:170-177` |
+| **Statut** | Présent |
+
+**Description** : La table OMOP `payer_plan_period` n'a pas de colonne `payer_source_value` ni `payer_source_concept_id`. Causera des erreurs SQL similaires à F02. Toutefois, ce domaine est rarement présent dans les CDMs.
+
+---
+
+#### F24 — Extraction background ignore la révocation d'accès
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Validation |
+| **Fichier** | `backend/modules/datamanagement/router.py`, `extractor.py` |
+| **Statut** | Présent |
+
+**Description** : La tâche d'extraction tourne en thread background après le check initial d'accès CDM. Si l'accès est révoqué entre la requête et l'exécution background, l'extraction se poursuit.
+
+---
+
+#### F25 — Alembic n'a qu'un seul fichier de migration
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Intégrité des données |
+| **Fichier** | `backend/alembic/versions/26a4acfe5afa_initial_schema.py` |
+| **Statut** | Présent |
+
+**Description** : Un seul fichier de migration existe. Si `models.py` a évolué depuis, la migration et les modèles peuvent être désynchronisés.
+
+---
+
+#### F26 — `CohortTemplate.criteria_json` ne valide pas le schéma JSON
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Validation |
+| **Fichier** | `backend/modules/cohort_templates_router.py:238` |
+| **Statut** | Présent |
+
+**Description** : `CreateTemplateRequest` accepte n'importe quel `dict` comme `criteria_json` sans valider sa conformité au schéma de critères de cohorte. Des templates invalides pourraient être sauvegardés.
+
+---
+
+#### F27 — Structures i18n frontend/backend différentes
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | i18n |
+| **Statut** | Choix architectural |
+
+**Description** : Les fichiers i18n frontend ont des clés (`app.subtitle`) absentes du backend, et inversement. C'est un choix de design (systèmes séparés) mais impose une synchronisation manuelle.
+
+---
+
+#### F28 — Pas de test unitaire dédié pour le moteur de caractérisation
+
+| Attribut | Valeur |
+|----------|--------|
+| **Sévérité** | BASSE |
+| **Catégorie** | Couverture de tests |
+| **Fichier** | `backend/modules/cohort/characterization.py` |
+| **Statut** | Présent |
+
+**Description** : Le fichier `characterization.py` n'a pas de fichier de test dédié (`test_characterization.py`). La couverture est indirecte via les tests d'intégration du router cohort.
+
+---
+
+## Matrice de couverture de tests
+
+| Module | Fichier(s) de test | Couverture |
+|--------|--------------------|------------|
+| CDM CRUD | `test_api.py` | ✅ Couvert |
+| CDM Access | `test_cdm_access.py` | ✅ Couvert |
+| CDM Helper | `test_cdm_helper.py` | ✅ Couvert |
+| Quality Engine | `test_engine.py`, `test_clinical_domain.py`, `test_dashboard_domain.py`, `test_person_domain.py`, `test_observation_period_domain.py` | ✅ Bien couvert |
+| Quality Comparator | `test_comparator.py` | ✅ Couvert |
+| Quality Conformity | `test_conformity.py` | ✅ Couvert |
+| Quality Report | `test_report_builder.py` | ✅ Couvert |
+| Cohort API | `test_cohort_api.py` | ✅ Couvert |
+| Cohort SQL Builder | `test_sql_builder.py` | ✅ Couvert |
+| Cohort Pathways | `test_pathways.py`, `test_pathways_analysis.py` | ✅ Couvert |
+| Cohort Comparison | `test_cohort_comparison.py`, `test_cohort_diff.py` | ✅ Couvert |
+| Cohort Sharing | `test_cohort_sharing.py` | ✅ Couvert |
+| Cohort Templates | `test_cohort_templates.py` | ✅ Couvert |
+| **Cohort Characterization** | *Pas de test dédié* | ⚠️ **GAP** |
+| Mapping API | `test_mapping_api.py` | ✅ Couvert |
+| Mapping Suggest | `test_suggest.py` | ✅ Couvert |
+| Concept Router | `test_concept_router.py` | ✅ Couvert |
+| Concept Cache | `test_concept_cache.py` | ✅ Couvert |
+| Concept Set API | `test_concept_set_api.py` | ✅ Couvert |
+| Incidence Engine | `test_incidence_engine.py` | ✅ Couvert |
+| Incidence Router | `test_incidence_router.py` | ✅ Couvert |
+| Estimation Router | `test_estimation_router.py` | ✅ Couvert |
+| Estimation Survival | `test_survival.py` | ✅ Couvert |
+| Data Management | `test_datamanagement_router.py`, `test_extractor.py` | ✅ Couvert |
+| Admin API | `test_admin_api.py` | ✅ Couvert |
+| Notifications | `test_notifications.py`, `test_notification_preferences.py` | ✅ Couvert |
+| Favorites | `test_favorites.py` | ✅ Couvert |
+| Saved Queries | `test_saved_queries.py` | ✅ Couvert |
+| Groups | `test_groups.py` | ✅ Couvert |
+| Search | `test_search.py` | ✅ Couvert |
+| Audit | `test_audit_api.py` | ✅ Couvert |
+| OHDSI | `test_ohdsi_router.py` | ✅ Couvert |
+| WebSocket | `test_ws_endpoint.py`, `test_ws_manager.py`, `test_ws_nginx.py` | ✅ Couvert |
+| Crypto | `test_crypto.py` | ✅ Couvert |
+| CSV Safety | `test_csv_safety.py` | ✅ Couvert |
+| SQL Safety | `test_sql_safety.py` | ✅ Couvert |
+| Rate Limiting | `test_rate_limit.py` | ✅ Couvert |
+| i18n | `test_i18n.py` | ✅ Couvert |
+
+**Résultat** : Couverture excellente — 50+ fichiers de tests, tous les modules couverts sauf `characterization.py` (test dédié manquant).
+
+---
+
+## Vérification DOMAIN_CONFIG (11 domaines OMOP cliniques)
+
+| Domaine | Dans DOMAIN_CONFIG | Table | `source_value` valide | Dans i18n EN | Dans i18n FR |
+|---------|-------------------|-------|----------------------|-------------|-------------|
+| Condition | ✅ | condition_occurrence | ✅ condition_source_value | ✅ | ✅ |
+| Drug | ✅ | drug_exposure | ✅ drug_source_value | ✅ | ✅ |
+| Measurement | ✅ | measurement | ✅ measurement_source_value | ✅ | ✅ |
+| Observation | ✅ | observation | ✅ observation_source_value | ✅ | ✅ |
+| Procedure | ✅ | procedure_occurrence | ✅ procedure_source_value | ✅ | ✅ |
+| Visit | ✅ | visit_occurrence | ✅ visit_source_value | ✅ | ✅ |
+| Device | ✅ | device_exposure | ✅ device_source_value | ✅ | ✅ |
+| Death | ✅ | death | ✅ death_type_source_value | ✅ | ✅ |
+| Specimen | ✅ | specimen | ✅ specimen_source_value | ❌ | ❌ |
+| Note | ✅ | note | ❌ **note_source_value** (non standard) | ❌ | ❌ |
+| Payer_Plan_Period | ✅ | payer_plan_period | ❌ **payer_source_value** (non standard) | ❌ | ❌ |
+
+**Résultat** : 11/11 domaines configurés. **2 colonnes source_value invalides**, **3 domaines absents de l'i18n**.
+
+---
+
+## Comparaison contrat API (Frontend client.ts vs Backend routes)
+
+| Route Backend | Méthode Frontend | Match |
+|---------------|-----------------|-------|
+| `GET /api/cdm/` | `cdmApi.list()` | ✅ |
+| `POST /api/cdm/` | `cdmApi.create()` | ✅ |
+| `POST /api/cdm/test` | `cdmApi.test()` | ✅ |
+| `PUT /api/cdm/{name}` | `cdmApi.update()` | ✅ |
+| `DELETE /api/cdm/{name}` | `cdmApi.delete()` | ✅ |
+| `POST /api/quality/analyze` | `qualityApi.analyze()` | ✅ |
+| `POST /api/quality/analyze/batch/stream` | `qualityApi.analyzeBatchStream()` | ✅ |
+| `POST /api/quality/conformity` | `conformityApi.run()` | ✅ |
+| `POST /api/cohorts/` | `cohortApi.create()` | ✅ |
+| `GET /api/cohorts/` | `cohortApi.list()` | ✅ |
+| `PUT /api/cohorts/{id}` | `cohortApi.update()` | ✅ |
+| `DELETE /api/cohorts/{id}` | `cohortApi.delete()` | ✅ |
+| `POST /api/mapping/suggest` | `mappingApi.suggest()` | ✅ |
+| `POST /api/mapping/decide` | `mappingApi.decide()` | ✅ |
+| `POST /api/incidence/compute` | `incidenceApi.compute()` | ✅ |
+| `POST /api/incidence/save` | `incidenceApi.save()` | ✅ |
+| `GET /api/incidence/` | `incidenceApi.list()` | ✅ |
+| **`DELETE /api/incidence/{id}`** | **MANQUANT** | ❌ |
+| `POST /api/estimation/kaplan-meier` | `estimationApi.kaplanMeier()` | ✅ |
+| `POST /api/estimation/save` | `estimationApi.save()` | ✅ |
+| `GET /api/estimation/` | `estimationApi.list()` | ✅ |
+| **`DELETE /api/estimation/{id}`** | **MANQUANT** | ❌ |
+| `GET /api/concept-sets/` | `conceptSetApi.list()` | ✅ |
+| `POST /api/concept-sets/` | `conceptSetApi.create()` | ✅ |
+| `DELETE /api/concept-sets/{id}` | `conceptSetApi.delete()` | ✅ |
+| Tous les autres endpoints | Correspondance | ✅ |
+
+**Résultat** : **2 endpoints delete manquants** dans le client frontend. Tous les autres routes sont correctement mappés.
+
+---
+
+## Comparaison i18n
+
+### Backend en.json vs fr.json
+**Parité parfaite** — Les deux fichiers ont des structures de clés identiques (337 lignes chacun). Aucune clé manquante dans aucune direction.
+
+### Frontend en.json vs fr.json
+Les deux fichiers suivent la même structure. Aucune clé manquante détectée.
+
+### Clés de domaines manquantes (backend et frontend)
+- `domains.Specimen`
+- `domains.Note`
+- `domains.Payer_Plan_Period`

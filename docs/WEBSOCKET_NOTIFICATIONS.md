@@ -43,7 +43,7 @@ OPAL uses WebSocket connections for real-time notification delivery. When an act
 5. **`ConnectionManager`** sends `{"type": "notification", "data": {...}}` to all WS connections of the target user (and/or role)
 6. **Frontend hook** (`useNotificationWs`) receives the message
 7. **Custom events** dispatched: `opal:notification` + `opal:badges-refresh`
-8. **UI updates**: NotificationCenter drawer + sidebar badge counts refresh
+8. **UI updates**: NotificationCenter drawer + TopNav badge counts refresh
 
 ## Authentication
 
@@ -168,7 +168,8 @@ Singleton that tracks all active WebSocket connections:
 
 - `_connections: dict[str, set[WebSocket]]` — username → active connections
 - `_user_roles: dict[str, set[str]]` — role → usernames with that role
-- `connect(ws, username, roles)` — accept + track
+- `MAX_CONNECTIONS_PER_USER = 5` — limite de connexions WebSocket par utilisateur (éviction FIFO des plus anciennes)
+- `connect(ws, username, roles)` — accept + track (évince la connexion la plus ancienne si limite atteinte)
 - `disconnect(ws, username)` — remove + cleanup roles
 - `send_to_user(username, data)` — push to specific user (all tabs)
 - `send_to_role(role, data)` — broadcast to all users with a role
@@ -201,7 +202,7 @@ Single function used across all 18+ router modules:
 notify(db, username, notif_type, title, message="", link="", target_role="", item_id="")
 ```
 
-- Creates a `Notification` DB row
+- Creates a `Notification` DB row via `db.flush()` (fait partie de la transaction de l'appelant, pas de `db.commit()` séparé)
 - Respects user notification preferences (skips if muted)
 - Role-targeted notifications bypass individual preferences
 - Pushes via WebSocket in real time
