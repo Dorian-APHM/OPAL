@@ -124,7 +124,8 @@ def update_concept_set(concept_set_id: int, body: ConceptSetUpdate, request: Req
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
     user_info = getattr(request.state, "user", {})
     current_user = user_info.get("preferred_username", "system")
-    if cs.created_by != current_user:
+    is_admin = "admin" in user_info.get("roles", [])
+    if cs.created_by != current_user and not is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     if body.name is not None:
         cs.name = body.name
@@ -145,7 +146,8 @@ def delete_concept_set(concept_set_id: int, request: Request, db=Depends(get_db)
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
     user_info = getattr(request.state, "user", {})
     current_user = user_info.get("preferred_username", "system")
-    if cs.created_by != current_user:
+    is_admin = "admin" in user_info.get("roles", [])
+    if cs.created_by != current_user and not is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     db.delete(cs)
     db.commit()
