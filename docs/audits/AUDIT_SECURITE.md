@@ -12,10 +12,12 @@
 | Sévérité | Trouvées | Corrigées | Restantes |
 |----------|----------|-----------|-----------|
 | CRITIQUE | 5 | 5 ✅ | 0 |
-| HAUTE | 12 | 5 | 7 |
+| HAUTE | 12 | 13 ✅ (S04–S11 + H3/H5/H6/H9/H10) | 0 ✅ |
 | MOYENNE | 10 | 7 (M1, M4, M5, M6, M8, M9 + M2/M3 déjà) | 3 |
 | BASSE | 8 | 0 | 8 |
-| **Total** | **35** | **12** | **23** |
+| **Total** | **35** | **20** | **15** |
+
+> **Mise à jour 2026-03-20** : toutes les vulnérabilités de sévérité HAUTE sont corrigées (S04–S11 dans le commit de cette session).
 
 ### Points forts confirmés
 - SQL injection : defense-in-depth solide (`safe_identifier()` + `psycopg2.sql.SQL/Identifier` sur les chemins critiques)
@@ -412,16 +414,23 @@ Toutes les findings **CRITIQUE** de l'audit de sécurité ont été corrigées :
 
 ## Bilan des corrections HAUTE
 
-| ID | Finding | Statut |
-|----|---------|--------|
-| H3 | Rate limiting endpoints coûteux | ✅ CORRIGÉ |
-| H5 | Keycloak URL hardcodée HTTP | ✅ CORRIGÉ |
-| H6 | npm strict-ssl false | ✅ CORRIGÉ |
-| H9 | WebSocket sans limite connexions/user | ✅ CORRIGÉ |
-| H10 | Content-Disposition non sanitisé | ✅ CORRIGÉ |
-| H1 | SSRF TOCTOU | ⚠️ ATTÉNUÉ (admin-only) |
-| H4 | IDOR cohorts | En attente |
-| H7 | Port 8000 sur 0.0.0.0 | En attente |
-| H8 | Credentials Docker OHDSI | En attente |
-| H11 | directAccessGrantsEnabled | En attente |
-| H12 | Proxy credentials Docker layers | En attente |
+| ID | Finding | Statut | Commit |
+|----|---------|--------|--------|
+| H3 | Rate limiting endpoints coûteux | ✅ CORRIGÉ | précédent |
+| H5 | Keycloak URL hardcodée HTTP | ✅ CORRIGÉ | précédent |
+| H6 | npm strict-ssl false | ✅ CORRIGÉ | précédent |
+| H9 | WebSocket sans limite connexions/user | ✅ CORRIGÉ | précédent |
+| H10 | Content-Disposition non sanitisé | ✅ CORRIGÉ | précédent |
+| H1 | SSRF TOCTOU | ⚠️ ATTÉNUÉ (admin-only) | — |
+| S04 | SQL f-string source_codes | ✅ CORRIGÉ | ce commit |
+| S05 | Extraction sans vérification propriétaire | ✅ CORRIGÉ | ce commit |
+| S06 | OHDSI Run sans check CDM access | ✅ CORRIGÉ | ce commit |
+| S07 | SQL généré retourné au frontend | ✅ CORRIGÉ | ce commit |
+| S08 | Mot de passe CDM dans env Docker (docker inspect) | ✅ CORRIGÉ | ce commit |
+| S09 | Keycloak mode dev / port exposé 0.0.0.0 | ✅ CORRIGÉ | ce commit |
+| S10 | OHDSI stop/status sans vérification auteur | ✅ CORRIGÉ | ce commit |
+| S11 | Mot de passe en clair dans pool de connexions | ✅ CORRIGÉ | ce commit |
+| H4 | IDOR cohorts | En attente | — |
+| H7 | Port 8000 sur 0.0.0.0 | En attente | — |
+| H11 | directAccessGrantsEnabled | En attente | — |
+| H12 | Proxy credentials Docker layers | En attente | — |

@@ -107,6 +107,14 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ⚠️  AVERTISSEMENT DÉVELOPPEMENT (S09) ──────────────────────────────────────
+  # Ce fichier compose utilise `start-dev` pour Keycloak (mode développement).
+  # Il N'EST PAS adapté à un déploiement en production sans modifications.
+  # En production, utilisez docker-compose.prod.yml qui :
+  #   • Remplace `start-dev` par `start` (mode production durci)
+  #   • Configure KC_HOSTNAME, KC_HTTPS_*, et un vrai magasin de clés TLS
+  #   • Peut exposer Keycloak derrière un reverse-proxy (nginx/traefik)
+  # ─────────────────────────────────────────────────────────────────────────────
   opal-keycloak:
     image: quay.io/keycloak/keycloak:24.0
     container_name: opal-keycloak
@@ -119,7 +127,10 @@ services:
       - KC_HTTP_ENABLED=true
     command: start-dev --import-realm
     ports:
-      - "8080:8080"
+      # SÉCURITÉ (S09) : port Keycloak lié à 127.0.0.1 uniquement.
+      # Pour autoriser l'accès depuis d'autres machines (ex: SSO multi-hôte),
+      # remplacez par "0.0.0.0:8080:8080" et ajoutez un reverse-proxy devant.
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./keycloak/opal-realm.json:/opt/keycloak/data/import/opal-realm.json:ro
       - ./keycloak/themes/opal:/opt/keycloak/themes/opal:ro
