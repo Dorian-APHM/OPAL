@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Home, LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
   Database, Settings, Globe, LogOut, Shield, ClipboardList, HardDrive,
-  Menu, X, ChevronDown, Bell, Sun, Moon,
+  Menu, X, ChevronDown, Bell, Sun, Moon, Search,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, cdmAccessApi, notificationsApi } from '../../api/client';
@@ -162,13 +162,13 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
       <div className="mx-auto flex items-center gap-2 lg:gap-3 max-w-[1920px]">
         {/* Logo */}
         <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center no-underline shrink-0">
-          <img src="/opal-logo.svg" alt="OPAL" className="h-9 w-auto object-contain" />
+          <img src="/opal-logo.svg" alt="OPAL" className="h-12 w-12 object-contain" />
         </a>
 
         <div className="w-px h-5 bg-glass-border hidden lg:block shrink-0" />
 
         {/* CDM Selector */}
-        <div className="hidden lg:block w-36 shrink-0">
+        <div className="hidden lg:block shrink-0 w-56">
           <Select
             placeholder={t('cdm.select_cdm')}
             value={selectedCdm}
@@ -213,12 +213,20 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           })}
         </div>
 
-        {/* Right side: search + lang + user */}
-        <div className="flex items-center gap-1 shrink-0 ml-auto lg:ml-0">
-          {/* Global Search */}
-          <div className="hidden 2xl:block w-44">
-            <GlobalSearch selectedCdm={selectedCdm} />
-          </div>
+        {/* Right side: search trigger + lang + user */}
+        <div className="flex items-center gap-3 shrink-0 ml-auto lg:ml-0">
+          {/* Search trigger button — opens via Ctrl+K */}
+          <Tooltip title="Search (⌘K)" placement="bottom">
+            <button
+              onClick={() => {
+                // Dispatch Ctrl+K to trigger GlobalSearch focus
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+              }}
+              className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+          </Tooltip>
 
           {/* Language toggle */}
           <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="bottom">
@@ -382,6 +390,9 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           </div>
         </div>
       )}
+
+      {/* Global Search command palette (renders only when active) */}
+      <GlobalSearch selectedCdm={selectedCdm} />
 
       {/* Notification Center Drawer */}
       <NotificationCenter open={notifCenterOpen} onClose={() => setNotifCenterOpen(false)} />
