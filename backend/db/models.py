@@ -89,7 +89,7 @@ class CohortVersion(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    cohort_id = Column(Integer, nullable=False, index=True)
+    cohort_id = Column(Integer, ForeignKey("cohorts.id", ondelete="CASCADE"), nullable=False, index=True)
     version = Column(Integer, nullable=False, default=1)
     criteria_json = Column(JSON, nullable=False)
     generated_sql = Column(Text, default="")
@@ -321,7 +321,7 @@ class CohortShare(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    cohort_id = Column(Integer, nullable=False, index=True)
+    cohort_id = Column(Integer, ForeignKey("cohorts.id", ondelete="CASCADE"), nullable=False, index=True)
     share_type = Column(String(20), nullable=False)  # "user" or "group"
     share_target = Column(String(255), nullable=False)  # username or group name
     shared_by = Column(String(255), nullable=False)

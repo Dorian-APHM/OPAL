@@ -12,11 +12,11 @@
 
 | Sévérité | Trouvées | Statut |
 |----------|----------|--------|
-| CRITIQUE | 3 | 0 corrigé, 3 présents |
-| HAUTE | 7 | 0 corrigé, 7 présents |
+| CRITIQUE | 3 | 2 corrigés (F02, F03), 1 faux positif (F01) |
+| HAUTE | 7 | 3 corrigés (F04, F05, F08, F10), 1 faux positif (F07) |
 | MOYENNE | 10 | 0 corrigé, 10 présents |
 | BASSE | 8 | 0 corrigé, 8 présents |
-| **Total** | **28** | **28 en attente** |
+| **Total** | **28** | **6 corrigés, 2 faux positifs, 20 en attente** |
 
 OPAL implémente un ensemble fonctionnel remarquablement complet pour une plateforme OMOP CDM : qualité Achilles-like (5 analyseurs de domaines + conformité), cohort builder avec SQL dynamique (1152 lignes, 10+ types de critères), mapping avec 6 stratégies, pathways ATLAS-style, incidence, estimation Kaplan-Meier, et data management avec extraction streaming. L'analyse en profondeur révèle cependant des pages orphelines non routées, des colonnes OMOP non standard dans la configuration, et des incohérences API/frontend.
 
@@ -28,14 +28,14 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F01 — 3 pages frontend (Incidence, Estimation, ConceptSet) sans routes dans App.tsx
+#### F01 — ~~3 pages frontend (Incidence, Estimation, ConceptSet) sans routes dans App.tsx~~ — FAUX POSITIF
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | CRITIQUE |
 | **Catégorie** | Complétude fonctionnelle |
 | **Fichier** | `frontend/src/App.tsx:163-175` |
-| **Statut** | Présent |
+| **Statut** | **Faux positif** — Incidence, Estimation et ConceptSet sont des onglets intégrés dans `CohortPage`, pas des routes séparées. Les pages existent bien dans l'UI via la navigation par onglets de la page Cohort. |
 
 **Description** : Les fichiers `IncidencePage.tsx`, `EstimationPage.tsx` et `ConceptSetPage.tsx` existent dans le répertoire pages mais ne sont jamais lazy-loaded ni routés dans `App.tsx`. Les routers backend correspondants (`/api/incidence/`, `/api/estimation/`, `/api/concept-sets/`) existent et sont pleinement fonctionnels. Les utilisateurs n'ont **aucun moyen** d'atteindre ces pages via la navigation.
 
@@ -45,14 +45,14 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F02 — Colonne `note_source_value` du domaine Note inexistante dans OMOP CDM v5.4
+#### F02 — Colonne `note_source_value` du domaine Note inexistante dans OMOP CDM v5.4 — CORRIGÉ
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | CRITIQUE |
 | **Catégorie** | Conformité OMOP |
 | **Fichier** | `backend/config.py:167` |
-| **Statut** | Présent |
+| **Statut** | **Corrigé** — `source_value` et `source_concept_id` mis à `None` pour le domaine Note. |
 
 **Description** : La table OMOP CDM `note` n'a pas de colonne `note_source_value`. Les colonnes standard sont `note_text`, `note_title`, etc. Le `DOMAIN_CONFIG` pour "Note" référence `"source_value": "note_source_value"` qui causera des erreurs SQL runtime sur tout CDM ayant une table `note`. De même, `note_source_concept_id` n'est pas standard.
 
@@ -60,14 +60,14 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F03 — `CohortVersion.cohort_id` n'a pas de contrainte ForeignKey en base
+#### F03 — `CohortVersion.cohort_id` n'a pas de contrainte ForeignKey en base — CORRIGÉ
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | CRITIQUE |
 | **Catégorie** | Intégrité des données |
 | **Fichier** | `backend/db/models.py:92` |
-| **Statut** | Présent |
+| **Statut** | **Corrigé** — `ForeignKey("cohorts.id", ondelete="CASCADE")` ajouté à `CohortVersion.cohort_id` et `CohortShare.cohort_id`. Migration Alembic `b1c2d3e4f5a6` créée. |
 
 **Description** : `CohortVersion.cohort_id` est déclaré comme `Column(Integer, nullable=False, index=True)` sans `ForeignKey("cohorts.id")`. La relation sur `Cohort.versions` utilise `primaryjoin="Cohort.id == foreign(CohortVersion.cohort_id)"` qui fonctionne au niveau ORM mais ne crée **pas** de contrainte foreign key en base. Des lignes `CohortVersion` orphelines peuvent exister si la suppression bypasse l'ORM. Même problème pour `CohortShare.cohort_id`.
 
@@ -79,14 +79,14 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F04 — Endpoints delete Incidence/Estimation absents du client frontend
+#### F04 — Endpoints delete Incidence/Estimation absents du client frontend — CORRIGÉ
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | Contrat API |
 | **Fichier** | `frontend/src/api/client.ts:540-570` |
-| **Statut** | Présent |
+| **Statut** | **Corrigé** — `delete: (id) => api.delete(...)` ajouté à `incidenceApi` et `estimationApi`. |
 
 **Description** : Le backend a `DELETE /api/incidence/{analysis_id}` et `DELETE /api/estimation/{analysis_id}` mais le frontend `incidenceApi` et `estimationApi` n'ont pas de méthode `delete`. Les utilisateurs ne peuvent pas supprimer les analyses sauvegardées depuis l'UI.
 
@@ -94,14 +94,14 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F05 — 3 domaines OMOP manquants dans les i18n (Specimen, Note, Payer_Plan_Period)
+#### F05 — 3 domaines OMOP manquants dans les i18n (Specimen, Note, Payer_Plan_Period) — CORRIGÉ
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | i18n |
 | **Fichier** | Backend et frontend `i18n/en.json`, `i18n/fr.json` |
-| **Statut** | Présent |
+| **Statut** | **Corrigé** — `domains.Specimen`, `domains.Note`, `domains.Payer_Plan_Period` ajoutés dans les 4 fichiers i18n (backend EN/FR, frontend EN/FR). |
 
 **Description** : `DOMAIN_CONFIG` couvre 11 domaines dont Specimen, Note et Payer_Plan_Period. Mais la section `domains` des fichiers i18n ne liste que 9 domaines. Quand ces 3 domaines apparaissent dans les UIs qualité ou mapping, leurs noms apparaîtront comme clés brutes au lieu de labels localisés.
 
@@ -124,27 +124,27 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F07 — `permissions.yaml` manque les pages incidence, estimation, concept-sets
+#### F07 — ~~`permissions.yaml` manque les pages incidence, estimation, concept-sets~~ — FAUX POSITIF
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | Complétude fonctionnelle |
 | **Fichier** | `backend/permissions.yaml:24-31` |
-| **Statut** | Présent |
+| **Statut** | **Faux positif** — Ces pages sont des onglets dans `CohortPage` (même route `/cohorts`), déjà présente dans `permissions.yaml`. Il n'y a pas de routes dédiées `/incidence`, `/estimation`, `/concept-sets` à déclarer. |
 
 **Description** : Le rôle `data-manager` liste des pages comme `/quality`, `/cohorts`, `/mapping` etc. mais ne liste pas `/incidence`, `/estimation`, ni `/concept-sets`. Si ces routes sont ajoutées au frontend (correction de F01), le composant `ProtectedRoute` vérifiera `hasPageAccess` et refusera l'accès même aux data-managers. Les rôles `chercheur` et `medecin` manquent aussi ces entrées.
 
 ---
 
-#### F08 — `UserFavorite` non nettoyé lors de la suppression d'un CDM
+#### F08 — `UserFavorite` non nettoyé lors de la suppression d'un CDM — CORRIGÉ
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | Intégrité des données |
 | **Fichier** | `backend/modules/cdm_router.py:260-315` |
-| **Statut** | Présent |
+| **Statut** | **Corrigé** — Suppression des `UserFavorite` (item_type="cdm", item_id=cdm_name) ajoutée dans le cascade delete du CDM. |
 
 **Description** : Lors de la suppression d'un CDM, le cascade delete supprime Cohorts, Snapshots, MappingDecisions, ConceptSets, etc. Mais les entrées `UserFavorite` référençant des éléments du CDM supprimé ne sont **pas** nettoyées. Cela crée des favoris orphelins pointant vers des entités inexistantes.
 
@@ -165,14 +165,14 @@ OPAL implémente un ensemble fonctionnel remarquablement complet pour une platef
 
 ---
 
-#### F10 — Concept set update/delete sans override admin
+#### F10 — Concept set update/delete sans override admin — CORRIGÉ
 
 | Attribut | Valeur |
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | Edge Case |
 | **Fichier** | `backend/modules/concept_set/router.py:120-152` |
-| **Statut** | Présent |
+| **Statut** | **Corrigé** — Bypass admin (`"admin" in roles`) ajouté aux endpoints `update` et `delete` des concept sets. |
 
 **Description** : Même pattern que F09 : update et delete vérifient `cs.created_by != current_user` et lèvent 403. Les admins ne peuvent pas gérer les concept sets créés par d'autres utilisateurs. Incohérent avec le cohort sharing où les admins peuvent gérer toute cohorte.
 
