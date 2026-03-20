@@ -23,6 +23,12 @@
 
 ### Fonctionnalites
 
+- **F02** (`config.py`) : Correction du domaine Note — `note_source_value` et `note_source_concept_id` ne sont pas des colonnes OMOP CDM v5.4 standard. Mis à `None`, gérés gracieusement par `cdm_helper.py`.
+- **F03** (`db/models.py`, `alembic/versions/`) : Ajout de `ForeignKey("cohorts.id", ondelete="CASCADE")` sur `CohortVersion.cohort_id` et `CohortShare.cohort_id`. Migration Alembic `b1c2d3e4f5a6` ajoutée.
+- **F04** (`frontend/src/api/client.ts`) : Ajout de `delete` dans `incidenceApi` et `estimationApi` pour aligner le frontend sur les endpoints `DELETE /api/incidence/{id}` et `DELETE /api/estimation/{id}` du backend.
+- **F05** (`backend/i18n/`, `frontend/src/i18n/`) : Ajout des traductions manquantes pour les domaines `Specimen`, `Note` et `Payer_Plan_Period` dans les 4 fichiers i18n (EN/FR).
+- **F08** (`modules/cdm_router.py`) : Nettoyage des `UserFavorite` référençant un CDM supprimé lors du cascade delete.
+- **F10** (`modules/concept_set/router.py`) : Bypass admin ajouté aux endpoints `update` et `delete` des concept sets — les admins peuvent gérer les concept sets de tous les utilisateurs.
 - **Colonnes optionnelles** : detection dynamique des colonnes `source_name` dans le CDM via `cdm_helper.get_domain_config()`. Les domaines dont le CDM ne contient pas certaines colonnes optionnelles fonctionnent gracieusement (`0288819`, `3180cfb`)
 - **Warnings mapping** : le moteur de suggestions retourne un tableau `warnings` indiquant les limitations rencontrees (`source_name_missing`, `no_reference_codebook`, `no_sapbert_embeddings`, `source_names_empty`) (`1d006e1`, `3712ecd`)
 - **Mapping UX** : meilleurs etats vides, error toasts, warnings affiches dans l'interface (`3712ecd`, `874a92d`)
