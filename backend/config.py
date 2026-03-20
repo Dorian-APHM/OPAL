@@ -164,8 +164,8 @@ DOMAIN_CONFIG = {
         "person_id": "person_id",
         "date_col": "note_date",
         "concept_id": "note_type_concept_id",
-        "source_value": "note_source_value",
-        "source_concept_id": "note_source_concept_id",
+        "source_value": None,
+        "source_concept_id": None,
     },
     "Payer_Plan_Period": {
         "table": "payer_plan_period",

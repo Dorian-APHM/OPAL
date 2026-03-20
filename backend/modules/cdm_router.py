@@ -263,7 +263,7 @@ def delete_cdm(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     from db.models import (
         AnalysisSnapshot, AnalysisSettings, Cohort, CohortVersion, CohortShare,
         MappingDecision, CdmAccess, CdmGroupAccess, ConceptSet,
-        IncidenceAnalysis, EstimationAnalysis, SavedQuery,
+        IncidenceAnalysis, EstimationAnalysis, SavedQuery, UserFavorite,
     )
 
     cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
@@ -305,7 +305,10 @@ def delete_cdm(cdm_name: str, request: Request, db: Session = Depends(get_db)):
         db.query(EstimationAnalysis).filter(EstimationAnalysis.cdm_name == cdm_name).delete(synchronize_session=False)
         db.query(SavedQuery).filter(SavedQuery.cdm_name == cdm_name).delete(synchronize_session=False)
 
-        # 3. Delete the CDM config itself
+        # 3. Delete user favorites referencing this CDM
+        db.query(UserFavorite).filter(UserFavorite.item_type == "cdm", UserFavorite.item_id == cdm_name).delete(synchronize_session=False)
+
+        # 4. Delete the CDM config itself
         db.delete(cdm)
         db.commit()
     except Exception:
