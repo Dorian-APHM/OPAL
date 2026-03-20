@@ -6,6 +6,7 @@ the ~50-100ms handshake overhead on every API call.  Each pool is keyed
 by (host, port, dbname, user).  Connections are returned to the pool on
 close() — callers keep using the same try/finally: conn.close() pattern.
 """
+import hashlib
 import logging
 import threading
 import time
@@ -33,14 +34,25 @@ _pools: dict[str, "PoolEntry"] = {}
 _pools_lock = threading.Lock()
 
 
+def _hash_password(password: str) -> str:
+    """Return a SHA-256 hex digest of the password for safe comparison.
+
+    The plaintext password is never stored in the pool entry; only the
+    digest is kept so we can detect credential changes without retaining
+    the secret in memory any longer than necessary (S11).
+    """
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 class PoolEntry:
     """Holds a pool together with its creation metadata."""
 
-    __slots__ = ("pool", "password", "last_used")
+    __slots__ = ("pool", "password_hash", "last_used")
 
     def __init__(self, pool: ThreadedConnectionPool, password: str):
         self.pool = pool
-        self.password = password
+        # Store only the SHA-256 hash — never the plaintext password (S11).
+        self.password_hash = _hash_password(password)
         self.last_used = time.monotonic()
 
     def touch(self):
@@ -143,8 +155,8 @@ def get_omop_connection(host: str, port: int, dbname: str, user: str, password: 
 
     with _pools_lock:
         entry = _pools.get(key)
-        # Invalidate pool if password changed
-        if entry is not None and entry.password != password:
+        # Invalidate pool if password changed (compare hashes, not plaintext — S11)
+        if entry is not None and entry.password_hash != _hash_password(password):
             logger.info("CDM password changed for %s – recreating pool", key)
             try:
                 entry.pool.closeall()

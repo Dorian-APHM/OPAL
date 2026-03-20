@@ -1,3 +1,20 @@
+# CHANGELOG — OPAL v1.2.1
+
+## [1.2.1] — 2026-03-20 — Corrections sécurité HAUTE (S04–S11)
+
+### Sécurité
+
+- **S04** (`sql_builder.py`) : Remplacement de l'échappement manuel des `source_codes` par l'adapteur psycopg2 (`psycopg2.extensions.adapt`), identique au mécanisme interne des requêtes `%s`.
+- **S05** (`datamanagement/router.py`) : Vérification de propriétaire sur `/extract/status`, `/extract/download` et `/extract/cancel` — seul le lanceur de la tâche ou un admin/data-manager peut accéder à ses propres extractions.
+- **S06** (`ohdsi/router.py`) : Ajout de `check_cdm_access()` au début de `run_service` — un utilisateur sans accès au CDM ne peut plus lancer un service OHDSI dessus.
+- **S07** (`cohort/router.py`, `datamanagement/router.py`) : Suppression du champ `sql` dans les réponses de `/cohorts/count` et dans le résultat de tâche d'extraction — le SQL généré n'est plus exposé au frontend.
+- **S08** (`ohdsi/router.py`) : Le mot de passe CDM est écrit dans un fichier temporaire (chmod 0600) monté en lecture seule dans le conteneur OHDSI (`/run/secrets/opal_creds.env`), puis supprimé du disque après le démarrage. `DB_PASSWORD` n'apparaît plus dans `docker inspect`.
+- **S09** (`docker-compose.yml`) : Port Keycloak lié à `127.0.0.1:8080` (accès local uniquement). Ajout d'un avertissement visible documentant que ce compose est réservé au développement local.
+- **S10** (`ohdsi/router.py`) : L'utilisateur ayant lancé chaque service OHDSI est enregistré (`launched_by`). L'arrêt via `/stop/{service}` est restreint au lanceur ou à un admin/data-manager.
+- **S11** (`db/omop_connector.py`) : Le `PoolEntry` ne stocke plus le mot de passe en clair — seul un hash SHA-256 est conservé pour détecter les changements de credentials. La comparaison est faite via `_hash_password()`.
+
+---
+
 # CHANGELOG — OPAL v1.1.0
 
 > **Branche** : `claude/ws-notifications-tests-bZV25`
