@@ -37,6 +37,21 @@ function getGenderColor(name: string): string {
   return COLORS.gender[upper] || COLORS.gender.OTHER;
 }
 
+/** Render percentage label inside pie slices (no external overflow) */
+function renderInsideLabel({ cx, cy, midAngle, innerRadius, outerRadius, percent }: any) {
+  if (percent < 0.03) return null; // skip tiny slices
+  const RADIAN = Math.PI / 180;
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.55;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} fill="#fff" textAnchor="middle" dominantBaseline="central"
+      fontSize={12} fontWeight={600} style={{ textShadow: '0 1px 3px rgba(0,0,0,0.6)' }}>
+      {`${(percent * 100).toFixed(0)}%`}
+    </text>
+  );
+}
+
 function formatNumber(n: number | null | undefined): string {
   if (n == null) return '-';
   return n.toLocaleString();
@@ -182,16 +197,17 @@ function ExportButton({ snapshotId, tableType }: { snapshotId?: number; tableTyp
 interface Props {
   results: any;
   snapshotId?: number;
+  compact?: boolean;
 }
 
-export default function AnalysisResults({ results, snapshotId }: Props) {
+export default function AnalysisResults({ results, snapshotId, compact }: Props) {
   if (!results) return null;
   const domain = results.domain;
 
   if (domain === 'Dashboard') return <DashboardView data={results} snapshotId={snapshotId} />;
-  if (domain === 'Person') return <PersonView data={results} />;
-  if (domain === 'ObservationPeriod') return <ObsPeriodView data={results} snapshotId={snapshotId} />;
-  return <ClinicalView data={results} snapshotId={snapshotId} />;
+  if (domain === 'Person') return <PersonView data={results} compact={compact} />;
+  if (domain === 'ObservationPeriod') return <ObsPeriodView data={results} snapshotId={snapshotId} compact={compact} />;
+  return <ClinicalView data={results} snapshotId={snapshotId} compact={compact} />;
 }
 
 // ============ SPARKLINE MINI CHART ============
@@ -274,7 +290,7 @@ function DashboardView({ data, snapshotId }: { data: DashboardResults; snapshotI
 }
 
 // ============ PERSON ============
-function PersonView({ data }: { data: PersonResults }) {
+function PersonView({ data, compact }: { data: PersonResults; compact?: boolean }) {
   const { t } = useTranslation();
   const ps = data.achilles_like.person_summary;
 
@@ -299,22 +315,28 @@ function PersonView({ data }: { data: PersonResults }) {
     value: ps.ethnicity_distribution!.count[i],
   })).filter(d => d.value > 0) || [];
 
+  const gridCls = compact ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 md:grid-cols-2 gap-4';
+  const chartH = compact ? 240 : 300;
+  const pieOuter = compact ? 75 : 100;
+  const pieInner = compact ? 40 : 60;
+
   return (
     <div>
       <Card className="mb-4 text-center">
         <Statistic title={t('quality.total_persons')} value={formatNumber(ps.total_persons)} />
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={gridCls}>
         <Card title={t('quality.gender_distribution')} className="mb-4">
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={chartH}>
             <PieChart>
               <Pie
                 data={genderData}
                 cx="50%" cy="50%"
-                innerRadius={60} outerRadius={100}
+                innerRadius={pieInner} outerRadius={pieOuter}
                 dataKey="value"
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`}
+                label={renderInsideLabel}
+                labelLine={false}
               >
                 {genderData.map((entry, i) => (
                   <Cell key={i} fill={entry.color} />
@@ -325,12 +347,12 @@ function PersonView({ data }: { data: PersonResults }) {
                 const d = payload[0];
                 return <ChartTooltip label={String(d.name || '')} items={[{ name: t('quality.axis_persons', 'Persons'), value: formatNumber(d.value as number), color: d.payload?.color || COLORS.primary }]} />;
               }} />
-              <Legend />
+              <Legend formatter={(value: string) => <span className="text-xs text-text-muted">{value}</span>} />
             </PieChart>
           </ResponsiveContainer>
         </Card>
         <Card title={t('quality.birth_year')} className="mb-4">
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={chartH}>
             <BarChart data={birthData} margin={{ left: 15, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="year" label={{ value: t('quality.axis_year', 'Year'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -347,18 +369,19 @@ function PersonView({ data }: { data: PersonResults }) {
 
       {/* Race & Ethnicity */}
       {(raceData.length > 0 || ethData.length > 0) && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className={gridCls}>
           {raceData.length > 0 && (
-            <div className={ethData.length > 0 ? '' : 'md:col-span-2'}>
+            <div className={!compact && ethData.length === 0 ? 'md:col-span-2' : ''}>
               <Card title={t('quality.race_distribution', 'Race Distribution')} className="mb-4">
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={chartH}>
                   <PieChart>
                     <Pie
                       data={raceData}
                       cx="50%" cy="50%"
-                      outerRadius={100}
+                      outerRadius={pieOuter}
                       dataKey="value"
-                      label={({ name, percent }) => percent > 0.02 ? `${name} ${(percent * 100).toFixed(1)}%` : ''}
+                      label={renderInsideLabel}
+                      labelLine={false}
                     >
                       {raceData.map((_, i) => (
                         <Cell key={i} fill={RACE_COLORS[i % RACE_COLORS.length]} />
@@ -369,23 +392,24 @@ function PersonView({ data }: { data: PersonResults }) {
                       const d = payload[0];
                       return <ChartTooltip label={String(d.name || '')} items={[{ name: t('quality.axis_persons', 'Persons'), value: formatNumber(d.value as number), color: String(d.payload?.fill || COLORS.primary) }]} />;
                     }} />
-                    <Legend />
+                    <Legend formatter={(value: string) => <span className="text-xs text-text-muted">{value}</span>} />
                   </PieChart>
                 </ResponsiveContainer>
               </Card>
             </div>
           )}
           {ethData.length > 0 && (
-            <div className={raceData.length > 0 ? '' : 'md:col-span-2'}>
+            <div className={!compact && raceData.length === 0 ? 'md:col-span-2' : ''}>
               <Card title={t('quality.ethnicity_distribution', 'Ethnicity Distribution')} className="mb-4">
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={chartH}>
                   <PieChart>
                     <Pie
                       data={ethData}
                       cx="50%" cy="50%"
-                      outerRadius={100}
+                      outerRadius={pieOuter}
                       dataKey="value"
-                      label={({ name, percent }) => percent > 0.02 ? `${name} ${(percent * 100).toFixed(1)}%` : ''}
+                      label={renderInsideLabel}
+                      labelLine={false}
                     >
                       {ethData.map((_, i) => (
                         <Cell key={i} fill={RACE_COLORS[(i + 3) % RACE_COLORS.length]} />
@@ -396,7 +420,7 @@ function PersonView({ data }: { data: PersonResults }) {
                       const d = payload[0];
                       return <ChartTooltip label={String(d.name || '')} items={[{ name: t('quality.axis_persons', 'Persons'), value: formatNumber(d.value as number), color: String(d.payload?.fill || COLORS.primary) }]} />;
                     }} />
-                    <Legend />
+                    <Legend formatter={(value: string) => <span className="text-xs text-text-muted">{value}</span>} />
                   </PieChart>
                 </ResponsiveContainer>
               </Card>
@@ -409,7 +433,7 @@ function PersonView({ data }: { data: PersonResults }) {
 }
 
 // ============ OBSERVATION PERIOD ============
-function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotId?: number }) {
+function ObsPeriodView({ data, snapshotId, compact }: { data: ObsPeriodResults; snapshotId?: number; compact?: boolean }) {
   const { t } = useTranslation();
   const al = data.achilles_like;
 
@@ -429,11 +453,14 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
     year: y, n_persons: al.continuous_observation_by_year.n_persons[i],
   }));
 
+  const gridCls = compact ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 md:grid-cols-2 gap-4';
+  const chartH = compact ? 220 : 280;
+
   return (
     <div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={gridCls}>
         <Card title={t('quality.age_first_obs_desc', 'Distribution of Age at First Observation')} className="mb-4">
-          <ResponsiveContainer width="100%" height={280}>
+          <ResponsiveContainer width="100%" height={chartH}>
             <BarChart data={ageData} margin={{ left: 15, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="age" label={{ value: t('quality.axis_age', 'Age (years)'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -455,9 +482,9 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={gridCls}>
         <Card title={t('quality.obs_length_desc', 'Distribution of Observation Length')} className="mb-4">
-          <ResponsiveContainer width="100%" height={280}>
+          <ResponsiveContainer width="100%" height={chartH}>
             <BarChart data={obsLengthData} margin={{ left: 15, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="months" label={{ value: t('quality.axis_months', 'Months'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -479,9 +506,9 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={gridCls}>
         <Card title={t('quality.cumulative_obs_desc', 'Cumulative % of Persons by Observation Duration')} className="mb-4">
-          <ResponsiveContainer width="100%" height={280}>
+          <ResponsiveContainer width="100%" height={chartH}>
             <AreaChart data={cumulData} margin={{ left: 15, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="months" label={{ value: t('quality.axis_months_threshold', 'Duration Threshold (months)'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -495,7 +522,7 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
           </ResponsiveContainer>
         </Card>
         <Card title={t('quality.continuous_obs_desc', 'Number of Persons with Continuous Observation by Year')} className="mb-4">
-          <ResponsiveContainer width="100%" height={280}>
+          <ResponsiveContainer width="100%" height={chartH}>
             <LineChart data={contData} margin={{ left: 15, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="year" label={{ value: t('quality.axis_year', 'Year'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -514,7 +541,7 @@ function ObsPeriodView({ data, snapshotId }: { data: ObsPeriodResults; snapshotI
 }
 
 // ============ CLINICAL DOMAINS ============
-function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?: number }) {
+function ClinicalView({ data, snapshotId, compact }: { data: ClinicalResults; snapshotId?: number; compact?: boolean }) {
   const { t } = useTranslation();
   const al = data.achilles_like;
   const mapping = data.mapping;
@@ -548,10 +575,12 @@ function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?
       sorter: (a: any, b: any) => a.count - b.count },
   ];
 
+  const chartH = compact ? 220 : 280;
+
   return (
     <div>
       {/* Global stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+      <div className={compact ? 'grid grid-cols-1 gap-4 mb-4' : 'grid grid-cols-1 md:grid-cols-3 gap-4 mb-4'}>
         <Card><Statistic title={t('quality.total_records')} value={formatNumber(al.global.total_rows)} /></Card>
         <Card><Statistic title={t('quality.distinct_persons')} value={formatNumber(al.global.distinct_persons)} /></Card>
         <Card><Statistic title={t('quality.avg_per_person')} value={avgPerPerson} /></Card>
@@ -559,7 +588,7 @@ function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?
 
       {/* Monthly evolution */}
       <Card title={t('quality.monthly_evolution_desc', { domain: t(`domains.${data.domain}`, data.domain) })} className="mb-4">
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={chartH}>
           <AreaChart data={monthlyData} margin={{ left: 15, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="month" tickFormatter={(v) => v.substring(0, 7)} label={{ value: t('quality.axis_month', 'Month'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -575,7 +604,7 @@ function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?
 
       {/* Records per person */}
       <Card title={t('quality.records_per_person_desc', { domain: t(`domains.${data.domain}`, data.domain) })} className="mb-4">
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={chartH}>
           <BarChart data={rppData} margin={{ left: 15, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="records" label={{ value: t('quality.axis_records_count', 'Number of Records'), position: 'insideBottom', offset: -5, style: { fill: '#9ca3af', fontSize: 12 } }} />
@@ -601,7 +630,7 @@ function ClinicalView({ data, snapshotId }: { data: ClinicalResults; snapshotId?
 
       {/* Mapping quality */}
       <Card title={t('quality.mapping_quality')} className="mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className={compact ? 'grid grid-cols-1 gap-8' : 'grid grid-cols-1 md:grid-cols-2 gap-8'}>
           <div>
             <h5 className="text-sm font-semibold text-text-bright mb-3">{t('quality.terms')}</h5>
             <div className="grid grid-cols-2 gap-4">
