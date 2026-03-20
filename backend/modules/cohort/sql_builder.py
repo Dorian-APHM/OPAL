@@ -7,6 +7,8 @@ using CTEs, temporal joins, and concept_ancestor expansion.
 import logging
 import re
 
+from psycopg2.extensions import adapt as _pg_adapt
+
 from config import DOMAIN_CONFIG
 from utils.sql_safety import safe_identifier as _validate_identifier
 
@@ -336,10 +338,10 @@ def build_detailed_sample_sql(
 
         source_filter = None
         if source_codes and source_value_col:
-            escaped = ", ".join(
-                f"'{code.replace(chr(39), chr(39)+chr(39))}'" for code in source_codes
+            quoted = ", ".join(
+                _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
             )
-            source_filter = f"t.{source_value_col} IN ({escaped})"
+            source_filter = f"t.{source_value_col} IN ({quoted})"
 
         if concept_filter and source_filter:
             wheres.append(f"({concept_filter} OR {source_filter})")
@@ -711,12 +713,13 @@ def _build_criterion_cte(
             concept_filter = f"t.{concept_col} IN ({concept_list})"
 
     # Source code filtering (direct match on source_value column)
+    # Uses psycopg2's own adapter for safe quoting (same mechanism as %s params).
     source_filter = None
     if source_codes and source_value_col:
-        escaped = ", ".join(
-            f"'{code.replace(chr(39), chr(39)+chr(39))}'" for code in source_codes
+        quoted = ", ".join(
+            _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
         )
-        source_filter = f"t.{source_value_col} IN ({escaped})"
+        source_filter = f"t.{source_value_col} IN ({quoted})"
 
     # Combine concept + source filters with OR
     if concept_filter and source_filter:
