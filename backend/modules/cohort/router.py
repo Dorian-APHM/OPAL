@@ -595,7 +595,7 @@ def cohort_count(req: CohortCountRequest, request: Request, db: Session = Depend
     finally:
         conn.close()
 
-    return {"patient_count": count, "sql": sql}
+    return {"patient_count": count}
 
 
 @router.post("/count/approximate")
