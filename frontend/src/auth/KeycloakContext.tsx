@@ -64,14 +64,19 @@ function extractRoles(tokenParsed: any): OpalRole[] {
   );
 }
 
+// Dev mode: skip Keycloak entirely when VITE_AUTH_DISABLED is set
+const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === 'true';
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [authenticated, setAuthenticated] = useState(false);
-  const [initialized, setInitialized] = useState(false);
-  const [username, setUsername] = useState('');
-  const [roles, setRoles] = useState<OpalRole[]>([]);
-  const [token, setToken] = useState<string | undefined>();
-  const [permissions, setPermissions] = useState<Permissions | null>(null);
-  const permsFetched = useRef(false);
+  const [authenticated, setAuthenticated] = useState(AUTH_DISABLED);
+  const [initialized, setInitialized] = useState(AUTH_DISABLED);
+  const [username, setUsername] = useState(AUTH_DISABLED ? 'dev-user' : '');
+  const [roles, setRoles] = useState<OpalRole[]>(AUTH_DISABLED ? ['admin'] : []);
+  const [token, setToken] = useState<string | undefined>(AUTH_DISABLED ? 'dev-token' : undefined);
+  const [permissions, setPermissions] = useState<Permissions | null>(
+    AUTH_DISABLED ? { roles: ['admin'], pages: 'all', cdm_visibility: 'all', can_manage_access: true, can_clear_all_grants: true } : null
+  );
+  const permsFetched = useRef(AUTH_DISABLED);
 
   // Fetch permissions from backend (driven by permissions.yaml)
   const fetchPermissions = useCallback(async (tkn: string) => {
@@ -102,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchPermissions]);
 
   useEffect(() => {
+    if (AUTH_DISABLED) return; // Skip Keycloak init in dev mode
     let cancelled = false;
 
     if (keycloak.authenticated) {

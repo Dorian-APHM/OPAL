@@ -125,7 +125,7 @@ backend/
 ├── i18n/
 │   ├── en.json                # Traductions EN (cache au demarrage)
 │   └── fr.json                # Traductions FR (cache au demarrage)
-└── tests/                     # 38 fichiers de tests (601 tests)
+└── tests/                     # 51 fichiers de tests (601 tests)
 ```
 
 ### Configuration (`config.py`)
@@ -135,10 +135,13 @@ Toute la configuration provient de variables d'environnement avec des valeurs pa
 ```python
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://opal:opal@opal-db:5432/opal")
 SECRET_KEY = os.getenv("SECRET_KEY", "")          # REQUIRED — generate with: openssl rand -hex 32
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # "development" ou "production"
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "...")    # Internal Docker URL (backend → Keycloak)
 KEYCLOAK_ISSUER_URL = os.getenv("KEYCLOAK_ISSUER_URL", KEYCLOAK_URL)  # Public URL (browser → Keycloak)
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "opal-frontend")
+OMOP_STATEMENT_TIMEOUT_MS = int(os.getenv("OMOP_STATEMENT_TIMEOUT_MS", "300000"))  # 5 min
+MAX_WORKER_THREADS = int(os.getenv("MAX_WORKER_THREADS", "16"))
 ```
 
 > **Note** : `KEYCLOAK_ISSUER_URL` doit correspondre a l'URL par laquelle les navigateurs accedent a Keycloak (ex: `http://myserver:8080`). Elle sert a verifier le champ `iss` des tokens JWT. `KEYCLOAK_URL` est l'URL interne Docker utilisee par le backend.
@@ -149,12 +152,13 @@ Le dictionnaire `DOMAIN_CONFIG` mappe chaque domaine OMOP a sa table et ses colo
 DOMAIN_CONFIG = {
     "Condition": {
         "table": "condition_occurrence",
-        "concept_id_col": "condition_concept_id",
-        "source_value_col": "condition_source_value",
-        "source_name_col": None,
+        "concept_id": "condition_concept_id",
+        "source_value": "condition_source_value",
         "date_col": "condition_start_date",
     },
-    # ... 7 autres domaines
+    # ... 11 domaines cliniques :
+    # Condition, Drug, Measurement, Observation, Procedure,
+    # Visit, Device, Death, Specimen, Note, Payer_Plan_Period
 }
 ```
 
@@ -196,6 +200,15 @@ Configuration via variables d'environnement :
 | `OMOP_POOL_MIN_CONN` | `2` | Connexions idle maintenues par CDM |
 | `OMOP_POOL_MAX_CONN` | `20` | Maximum de connexions simultanees par CDM |
 | `OMOP_POOL_IDLE_TIMEOUT` | `1800` | Secondes avant eviction d'un pool inactif |
+| `OMOP_STATEMENT_TIMEOUT_MS` | `300000` | Timeout par requete SQL en millisecondes (5 min) |
+
+#### Helper CDM centralise (`utils/cdm_helper.py`)
+
+Module utilitaire qui evite de dupliquer la logique connexion CDM dans 5+ routers :
+
+- **`get_cdm_connection(db, cdm_name)`** : lookup du CDM en base, dechiffrement du mot de passe, checkout d'une connexion poolee, resolution du schema (via `AnalysisSettings` ou fallback `DEFAULT_OMOP_SCHEMA`). Retourne `(connection, validated_schema)`. Leve `HTTPException 404` si CDM introuvable.
+- **`get_domain_config(conn, schema, domain)`** : retourne la configuration `DOMAIN_CONFIG` pour un domaine en verifiant a l'execution que les colonnes optionnelles (ex: `source_name` = `drug_source_name`, `measurement_source_name`) existent reellement dans le CDM. Si une colonne optionnelle est absente, elle est retiree du dictionnaire retourne. Utilise un cache `(dsn, schema, table, column)` pour eviter les requetes `information_schema` repetees.
+- **`check_cdm_access(request, cdm_name)`** : verifie que l'utilisateur courant a acces au CDM. Utile pour les endpoints POST qui recoivent `cdm_name` dans le body JSON (invisible au middleware Keycloak). Ne fait rien si `AUTH_ENABLED=false`. Leve `HTTPException 403` si acces refuse.
 
 ---
 
@@ -208,6 +221,7 @@ Configuration via variables d'environnement :
 | React 18 | UI framework (hooks, context) |
 | TypeScript 5 | Typage statique |
 | Vite 5 | Build / dev server (HMR) |
+| Tailwind CSS 4 | Utilitaires CSS (via `@tailwindcss/vite`) |
 | Composants Neumorphic custom | Design system (Card, Select, Tabs, Checkbox) |
 | Framer Motion | Micro-animations (listes, transitions, compteurs) |
 | Lucide React | Icones |
@@ -240,9 +254,9 @@ src/
 ├── theme/
 │   └── tokens.ts              # Design tokens (couleurs, ombres, dark/light)
 ├── i18n/                      # Traductions
-├── pages/                     # 15 pages
+├── pages/                     # 12 pages routees (+ 3 fichiers non routes)
 └── components/                # Composants reutilisables
-    ├── layout/                # Sidebar, TopNav
+    ├── layout/                # TopNav, Sidebar
     ├── NotificationCenter.tsx # Drawer notifications temps reel
     ├── ui/                    # Composants Neumorphic + animations + skeletons
     ├── quality/               # Composants analyse qualite
@@ -329,7 +343,9 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
 │ cdm_name   idx       │     │ max_records_per_person   │
 │ name       varchar   │     │ max_observation_months   │
 │ description text     │     │ comparison_alert_thresh  │
-│ created_at timestamp │     └─────────────────────────┘
+│ created_by varchar   │     └─────────────────────────┘
+│ shared_with_all int  │
+│ created_at timestamp │
 │ updated_at timestamp │
 └────────┬─────────────┘     ┌─────────────────────────┐
          │                    │ mapping_decisions       │
@@ -367,29 +383,32 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
                               │ uploaded_at timestamp    │
                               └─────────────────────────┘
 
-┌──────────────────────┐     ┌─────────────────────────┐
-│   concept_sets       │     │ incidence_analyses       │
-├──────────────────────┤     ├─────────────────────────┤
-│ id         PK serial │     │ id         PK serial     │
-│ cdm_name   idx       │     │ cdm_name   idx           │
-│ name       varchar   │     │ name       varchar       │
-│ description text     │     │ config_json JSON         │
-│ concept_ids JSON     │     │ results_json JSON        │
-│ created_by varchar   │     │ created_by varchar       │
-│ created_at timestamp │     │ created_at timestamp     │
-└──────────────────────┘     └─────────────────────────┘
+┌──────────────────────┐     ┌───────────────────────────┐
+│   concept_sets       │     │ incidence_analyses         │
+├──────────────────────┤     ├───────────────────────────┤
+│ id         PK serial │     │ id              PK serial  │
+│ cdm_name   idx       │     │ cdm_name        idx        │
+│ name       varchar   │     │ name            varchar    │
+│ domain     varchar   │     │ target_cohort_id int       │
+│ description text     │     │ outcome_cohort_id int      │
+│ concepts_json text   │     │ parameters_json text       │
+│ created_by varchar   │     │ results_json    text       │
+│ created_at timestamp │     │ created_at      timestamp  │
+└──────────────────────┘     └───────────────────────────┘
 
-┌──────────────────────┐     ┌─────────────────────────┐
-│ estimation_analyses  │     │ cdm_access               │
-├──────────────────────┤     ├─────────────────────────┤
-│ id         PK serial │     │ id         PK serial     │
-│ cdm_name   idx       │     │ cdm_name   idx           │
-│ name       varchar   │     │ username   idx           │
-│ config_json JSON     │     │ can_read   boolean       │
-│ results_json JSON    │     │ can_write  boolean       │
-│ created_by varchar   │     │ granted_by varchar       │
-│ created_at timestamp │     │ created_at timestamp     │
-└──────────────────────┘     └─────────────────────────┘
+┌───────────────────────────┐     ┌─────────────────────────┐
+│ estimation_analyses       │     │ cdm_access               │
+├───────────────────────────┤     ├─────────────────────────┤
+│ id              PK serial │     │ id         PK serial     │
+│ cdm_name        idx       │     │ cdm_name   idx           │
+│ name            varchar   │     │ username   idx           │
+│ analysis_type   varchar   │     │ granted_by varchar       │
+│ target_cohort_id int      │     │ created_at timestamp     │
+│ outcome_cohort_id int     │     └─────────────────────────┘
+│ parameters_json text      │
+│ results_json    text      │
+│ created_at      timestamp │
+└───────────────────────────┘
 
 ┌──────────────────────┐     ┌─────────────────────────┐
 │ cdm_group_access     │     │ user_favorites           │
@@ -397,41 +416,46 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
 │ id         PK serial │     │ id         PK serial     │
 │ cdm_name   idx       │     │ username   idx           │
 │ group_name idx       │     │ item_type  varchar       │
-│ can_read   boolean   │     │ item_id    varchar       │
-│ can_write  boolean   │     │ created_at timestamp     │
-│ granted_by varchar   │     └─────────────────────────┘
-│ created_at timestamp │
-└──────────────────────┘     ┌─────────────────────────┐
+│ granted_by varchar   │     │ item_id    varchar       │
+│ created_at timestamp │     │ item_label varchar       │
+└──────────────────────┘     │ item_meta  JSON          │
+                              │ created_at timestamp     │
+                              └─────────────────────────┘
+
+                              ┌─────────────────────────┐
                               │ saved_queries            │
 ┌──────────────────────┐     ├─────────────────────────┤
 │ notifications        │     │ id         PK serial     │
 ├──────────────────────┤     │ cdm_name   idx           │
 │ id         PK serial │     │ name       varchar       │
-│ username   idx       │     │ sql_text   text          │
-│ type       varchar   │     │ created_by varchar       │
-│ title      varchar   │     │ created_at timestamp     │
-│ message    text      │     └─────────────────────────┘
-│ link       varchar   │
-│ read       boolean   │     ┌─────────────────────────┐
+│ username   idx       │     │ sql        text          │
+│ type       varchar   │     │ description text         │
+│ title      varchar   │     │ created_by varchar       │
+│ message    text      │     │ created_at timestamp     │
+│ link       varchar   │     │ updated_at timestamp     │
+│ item_id    varchar   │     └─────────────────────────┘
+│ read       boolean   │
+│ target_role varchar  │     ┌─────────────────────────┐
 │ created_at timestamp │     │ cohort_templates         │
 └──────────────────────┘     ├─────────────────────────┤
                               │ id         PK serial     │
 ┌──────────────────────┐     │ name       varchar       │
-│ cohort_shares        │     │ description text         │
-├──────────────────────┤     │ criteria_json JSON       │
-│ id         PK serial │     │ created_by varchar       │
-│ cohort_id  FK        │     │ created_at timestamp     │
-│ shared_by  varchar   │     └─────────────────────────┘
-│ shared_with varchar  │
-│ permission varchar   │     ┌─────────────────────────┐
-│ created_at timestamp │     │ user_groups              │
-└──────────────────────┘     ├─────────────────────────┤
+│ cohort_shares        │     │ category   varchar       │
+├──────────────────────┤     │ description text         │
+│ id         PK serial │     │ criteria_json JSON       │
+│ cohort_id  FK        │     │ author     varchar       │
+│ share_type varchar   │     │ created_at timestamp     │
+│ share_target varchar │     └─────────────────────────┘
+│ shared_by  varchar   │
+│ created_at timestamp │     ┌─────────────────────────┐
+└──────────────────────┘     │ user_groups              │
+                              ├─────────────────────────┤
                               │ id         PK serial     │
 ┌──────────────────────┐     │ name       unique        │
 │ user_group_members   │     │ description text         │
 ├──────────────────────┤     │ created_by varchar       │
 │ id         PK serial │     │ created_at timestamp     │
-│ group_id   FK        │     └─────────────────────────┘
+│ group_name varchar   │     └─────────────────────────┘
 │ username   varchar   │
 │ added_by   varchar   │     ┌─────────────────────────┐
 │ created_at timestamp │     │ access_requests          │
@@ -468,9 +492,9 @@ const ROLE_PAGE_ACCESS: Record<OpalRole, string[] | null> = {
 ├──────────────────────────┤
 │ id         PK serial     │
 │ username   idx           │
-│ notification_type varchar│
+│ notif_type varchar       │
 │ enabled    boolean       │
-│ created_at timestamp     │
+│ updated_at timestamp     │
 └──────────────────────────┘
 ```
 
@@ -630,7 +654,7 @@ En plus du middleware qui filtre les routes via `permissions.yaml`, chaque endpo
 
 - Toutes les requetes SQL vers les CDM utilisent `psycopg2.sql.SQL` + `sql.Identifier` pour les identifiants (schema, table, colonne) — plus aucune f-string SQL
 - Les parametres de valeur utilisent des placeholders `%s` avec binding psycopg2
-- `safe_identifier()` (`utils/sql_safety.py`) valide les identifiants contre `^[A-Za-z_][A-Za-z0-9_]*$` en defense supplementaire
+- `safe_identifier()` (`utils/sql_safety.py`) valide les identifiants contre `^[A-Za-z_][A-Za-z0-9_]*$` avec une limite de 63 caracteres (limite PostgreSQL) en defense supplementaire
 - L'editeur SQL du constructeur de cohortes n'accepte que `SELECT`, `WITH` et `EXPLAIN`
 - Les noms de schema et tables sont valides contre `DOMAIN_CONFIG`
 - Protection ILIKE : les wildcards (`%`, `_`) dans les recherches sont echappes
@@ -647,11 +671,24 @@ En plus du middleware qui filtre les routes via `permissions.yaml`, chaque endpo
 
 ### Rate limiting
 
-- `slowapi` avec limites par endpoint :
-  - `/api/access-requests` : 5/min
-  - `/api/auth/sse-ticket` : 10/min
-  - Endpoints de compute (analyse, conformite, pathways) : 3/min
-- Desactive en mode test (`TESTING=1`)
+`slowapi` avec limites par endpoint (desactive en mode test `TESTING=1`) :
+
+| Endpoint | Limite | Module |
+|----------|--------|--------|
+| `POST /api/quality/analyze` | 3/min | quality/router |
+| `POST /api/quality/analyze-batch-stream` | 2/min | quality/router |
+| `POST /api/quality/conformity` | 3/min | quality/router |
+| `POST /api/cdm/test-connection` | 5/min | cdm_router |
+| `POST /api/cdm/{name}/test` | 5/min | cdm_router |
+| `POST /api/cohorts/execute-sql` | 10/min | cohort/router |
+| `POST /api/cohorts/characterize` | 3/min | cohort/router |
+| `POST /api/cohorts/pathways` | 3/min | cohort/router |
+| `POST /api/mapping/suggest-batch` | 3/min | mapping/router |
+| `POST /api/incidence/compute` | 3/min | incidence/router |
+| `POST /api/estimation/kaplan-meier` | 3/min | estimation/router |
+| `POST /api/datamanagement/extract` | 3/min | datamanagement/router |
+| `POST /api/access-requests` | 5/min | admin_router |
+| `POST /api/auth/sse-ticket` | 10/min | main |
 
 ---
 
@@ -852,7 +889,7 @@ La requete finale est un `SELECT DISTINCT person_id FROM ...` combinant tous les
 
 ### Architecture (`suggest.py`)
 
-Le moteur execute 6 strategies en cascade et retourne les meilleures suggestions classees par confiance.
+Le moteur execute les strategies SapBERT (pre-calcule) puis 5 strategies SQL en cascade et retourne les meilleures suggestions classees par confiance.
 
 ### Strategies
 
@@ -892,20 +929,18 @@ WHERE c1.concept_code = %s
 
 - Confiance : 85%
 
-#### 4. Keyword (recherche progressive)
+#### 4. Ingredient / DCI Match (pont francais→anglais)
 
-```sql
--- Essaie d'abord tous les mots, puis retire un mot a chaque iteration
-SELECT * FROM {schema}.concept
-WHERE concept_name ILIKE ALL(ARRAY['%mot1%', '%mot2%', '%mot3%'])
-  AND standard_concept = 'S'
-  AND domain_id = %s
-```
+Extrait le principe actif (DCI/INN) du `source_name` francais (ex: `"HYDROXYZINE 25 MG CPR (ATARAX)"` → ingredient `HYDROXYZINE`, dosage `25 MG`, forme `CPR`) puis recherche dans `concept_name` et `concept_synonym` :
 
-- Confiance : decroissante (80% → 60%)
+- Correction DCI francais→anglais via dictionnaire (`IBUPROFENE` → `IBUPROFEN`, `AMOXICILLINE` → `AMOXICILLIN`, etc.) + regle generique (`-INE` → `-IN`)
+- Extraction du dosage et de la forme galenique (CPR→Oral Tablet, INJ→Injectable, etc.) pour prioriser la bonne formulation
+- Recherche en cascade : ingredient + dosage, puis ingredient seul, puis synonymes
+- Confiance : 70-80%
 
-#### 5. Fuzzy (trigrammes)
+#### 5. Fuzzy (trigrammes) + Keyword (recherche progressive)
 
+**Fuzzy** :
 ```sql
 -- Utilise pg_trgm si disponible
 SELECT *, similarity(concept_name, %s) AS sim
@@ -918,6 +953,17 @@ LIMIT 5
 
 - Confiance : `similarity * 75`
 - Fallback sur `ILIKE '%term%'` si `pg_trgm` n'est pas installe
+
+**Keyword** :
+```sql
+-- Essaie d'abord tous les mots, puis retire un mot a chaque iteration
+SELECT * FROM {schema}.concept
+WHERE concept_name ILIKE ALL(ARRAY['%mot1%', '%mot2%', '%mot3%'])
+  AND standard_concept = 'S'
+  AND domain_id = %s
+```
+
+- Confiance : decroissante (80% → 60%)
 
 #### 6. Contextual
 
@@ -1267,7 +1313,7 @@ app.dependency_overrides[get_db] = override_get_db
 - **`omop_mock.py`** : Mock reutilisable de connexion psycopg2 avec sequences de reponses pre-configurees (dict→fetchone, list→fetchall, Exception→erreur)
 - **`README.md`** : Documentation complete de l'architecture de test
 
-### Couverture de tests (38 fichiers, 601 tests backend + 84 frontend)
+### Couverture de tests (51 fichiers, 601 tests backend + 84 frontend)
 
 #### Tests existants (v1.0)
 
@@ -1324,6 +1370,11 @@ app.dependency_overrides[get_db] = override_get_db
 | `test_ws_nginx.py` | Config nginx WebSocket |
 | `test_notification_preferences.py` | Preferences par type |
 | `test_pagination_gaps.py` | Pagination limit/offset |
+| `test_thread_pool.py` | Pool de connexions OMOP, eviction, invalidation |
+| `test_csv_safety.py` | Protection injection formules CSV |
+| `test_ohdsi_router.py` | Endpoints OHDSI, orchestration Docker |
+| `test_rate_limit.py` | Rate limiting par endpoint |
+| `test_sql_safety.py` | Validation safe_identifier, longueur max |
 
 #### Tests frontend (6 fichiers, 84 tests)
 

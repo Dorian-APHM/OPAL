@@ -87,7 +87,8 @@ curl -s "http://<host>:8000/api/quality/snapshots/CHU_OMOP/Dashboard/latest"
 9. [Administration](#9-administration)
 10. [Modeles de donnees](#10-modeles-de-donnees)
 11. [Authentification et RBAC](#11-authentification-et-rbac)
-12. [Codes d'erreur HTTP](#12-codes-derreur-http)
+12. [Rate Limiting](#24-rate-limiting)
+13. [Codes d'erreur HTTP](#25-codes-derreur-http)
 
 ---
 
@@ -126,6 +127,31 @@ Retourne l'utilisateur courant (depuis le token Keycloak). **Authentifie** (tout
 ```
 
 **Erreur :** `401` si non authentifie.
+
+### `POST /api/auth/sse-ticket`
+
+Cree un ticket SSE a usage unique (TTL 30s) pour l'authentification WebSocket. **Rate limit : 10/min.**
+
+**Response :**
+```json
+{ "ticket": "random-one-time-token" }
+```
+
+### `GET /api/auth/permissions`
+
+Retourne les permissions frontend resolues selon les roles de l'utilisateur.
+
+**Response :**
+```json
+{
+  "permissions": {
+    "can_manage_cdm": true,
+    "can_run_quality": true,
+    "can_manage_users": false,
+    "..."
+  }
+}
+```
 
 ---
 
@@ -246,7 +272,7 @@ Liste les domaines d'analyse disponibles.
 
 ### `POST /api/quality/analyze`
 
-Lance l'analyse d'un domaine unique. Sauvegarde automatiquement un snapshot versionne.
+Lance l'analyse d'un domaine unique. Sauvegarde automatiquement un snapshot versionne. **Rate limit : 3/min.**
 
 **Body :**
 ```json
@@ -312,6 +338,11 @@ data: {"type": "done", "completed": 4, "total": 4}
 ### `GET /api/quality/snapshots/{cdm_name}/{domain}`
 
 Liste tous les snapshots pour un couple CDM/domaine.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `page` | query, int | 1 | Page |
+| `page_size` | query, int | 20 | Taille de page |
 
 **Response :**
 ```json
@@ -410,9 +441,9 @@ Genere un rapport HTML qualite complet (tous les domaines).
 
 **Response :** Fichier HTML.
 
-### `GET /api/quality/report/{cdm_name}/pdf`
+### ~~`GET /api/quality/report/{cdm_name}/pdf`~~ *(SUPPRIME)*
 
-Genere un rapport PDF qualite complet.
+> **Cet endpoint n'existe plus.** Utiliser `GET /api/quality/report/{cdm_name}` (HTML) a la place.
 
 ### `GET /api/quality/report/comparison`
 
@@ -425,9 +456,41 @@ Genere un rapport HTML de comparaison entre deux CDMs.
 | `domain` | query, string, optional | Domaine specifique |
 | `lang` | query, string | Langue (`en`, `fr`) |
 
-### `GET /api/quality/report/comparison/pdf`
+### ~~`GET /api/quality/report/comparison/pdf`~~ *(SUPPRIME)*
 
-Genere un rapport PDF de comparaison.
+> **Cet endpoint n'existe plus.** Utiliser `GET /api/quality/report/comparison` (HTML) a la place.
+
+### `POST /api/quality/analyze/cancel/{analysis_id}`
+
+Annule une analyse streaming en cours.
+
+**Response :** `{ "status": "cancelled" }`
+
+### `GET /api/quality/analyze/active`
+
+Liste les analyses en cours d'execution.
+
+**Response :**
+```json
+{ "active": [{ "analysis_id": "...", "cdm_name": "CHU_OMOP", "domain": "Condition", "started_at": "..." }] }
+```
+
+### `POST /api/quality/conformity`
+
+Lance la validation de conformite CDM. **Rate limit : 3/min.**
+
+**Body :**
+```json
+{ "cdm_name": "CHU_OMOP" }
+```
+
+### `POST /api/quality/conformity/cancel/{analysis_id}`
+
+Annule une verification de conformite en cours.
+
+### `GET /api/quality/conformity/{cdm_name}`
+
+Recupere le dernier resultat de conformite pour un CDM.
 
 ---
 
@@ -681,7 +744,9 @@ Execute une requete SQL et exporte les resultats en CSV.
 
 #### `POST /api/cohorts/characterize`
 
-Genere un Table 1 (caracterisation) pour une cohorte.
+Genere un Table 1 (caracterisation) pour une cohorte. **Asynchrone. Rate limit : 3/min.**
+
+Retourne immediatement un `task_id`. Interroger le statut via `GET /api/cohorts/characterize/status/{task_id}`.
 
 **Body :**
 ```json
@@ -690,12 +755,21 @@ Genere un Table 1 (caracterisation) pour une cohorte.
 
 **Response :**
 ```json
+{ "task_id": "xyz-456", "status": "running" }
+```
+
+Une fois termine, `GET /api/cohorts/characterize/status/{task_id}` retourne :
+```json
 {
-  "demographics": { "age": { "mean": 65.2, "std": 12.1, "..." }, "gender": [...], "..." },
-  "domain_prevalence": { "Condition": { "pct_with_data": 92.5, "top_concepts": [...] }, "..." },
-  "measurements": [...],
-  "visit_types": [...],
-  "observation_periods": { "..." }
+  "task_id": "xyz-456",
+  "status": "done",
+  "result": {
+    "demographics": { "age": { "mean": 65.2, "std": 12.1, "..." }, "gender": [...], "..." },
+    "domain_prevalence": { "Condition": { "pct_with_data": 92.5, "top_concepts": [...] }, "..." },
+    "measurements": [...],
+    "visit_types": [...],
+    "observation_periods": { "..." }
+  }
 }
 ```
 
@@ -742,6 +816,60 @@ Timeline des evenements cliniques d'un patient.
   ]
 }
 ```
+
+### SQL Schema
+
+#### `GET /api/cohorts/sql/schema`
+
+Retourne noms table/colonne du schema CDM pour autocompletion SQL.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `cdm_name` | query, string | Nom du CDM |
+
+### Caracterisation (async)
+
+#### `GET /api/cohorts/characterize/status/{task_id}`
+
+Interroge le statut d'une tache de caracterisation.
+
+**Response :** `{ "task_id": "...", "status": "running|done|error", "result": {...} }`
+
+#### `POST /api/cohorts/characterize/cancel/{task_id}`
+
+Annule une tache de caracterisation.
+
+### Pathways de traitement
+
+#### `POST /api/cohorts/pathways`
+
+Lance l'analyse de pathways de traitement (style OHDSI ATLAS). **Rate limit : 3/min.**
+
+**Body :**
+```json
+{ "cdm_name": "CHU_OMOP", "cohort_id": 1, "domain": "Drug", "max_depth": 5 }
+```
+
+**Response :** `{ "task_id": "...", "status": "running" }`
+
+#### `GET /api/cohorts/pathways/status/{task_id}`
+
+Interroge le statut d'une analyse de pathways.
+
+#### `POST /api/cohorts/pathways/cancel/{task_id}`
+
+Annule une analyse de pathways.
+
+### Diff de versions
+
+#### `GET /api/cohorts/{cohort_id}/diff`
+
+Diff entre versions de cohorte.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `version_a` | query, int | Version A |
+| `version_b` | query, int | Version B |
 
 ---
 
@@ -817,6 +945,7 @@ Liste paginee des termes source non mappes.
 | `page` | query, int | 1 | Page |
 | `page_size` | query, int | 50 | Taille de page (max 500) |
 | `search` | query, string | - | Filtrer par code ou label |
+| `include_mapped` | query, bool | false | Si `true`, inclut aussi les termes deja mappes |
 
 **Response :**
 ```json
@@ -884,7 +1013,9 @@ Suggestions de mapping pour un terme source unique.
 
 #### `POST /api/mapping/suggest/batch`
 
-Suggestions pour les top N termes non mappes d'un domaine.
+Suggestions pour les top N termes non mappes d'un domaine. **Asynchrone. Rate limit : 3/min.**
+
+Retourne immediatement un `task_id`. Interroger le statut via `GET /api/mapping/suggest/status/{task_id}`.
 
 **Body :**
 ```json
@@ -897,6 +1028,16 @@ Suggestions pour les top N termes non mappes d'un domaine.
   "enable_contextual": true,
   "enable_sapbert": true
 }
+```
+
+**Response :**
+```json
+{ "task_id": "abc-123", "status": "running" }
+```
+
+Une fois termine, `GET /api/mapping/suggest/status/{task_id}` retourne les resultats avec un tableau `warnings` :
+```json
+{ "task_id": "abc-123", "status": "done", "results": [...], "warnings": ["..."] }
 ```
 
 Les termes deja approuves/rejetes sont automatiquement exclus.
@@ -951,6 +1092,8 @@ Decision en masse au-dessus d'un seuil de confiance.
 
 Genere les entrees `source_to_concept_map` a partir des decisions approuvees.
 
+> **Note :** L'option `write_to_cdm: true` est **desactivee** et retourne `403 Forbidden`. La reponse contient toujours `"written_to_cdm": false`. Utiliser l'export CSV pour appliquer manuellement.
+
 **Body :**
 ```json
 { "cdm_name": "CHU_OMOP", "domain": "Procedure", "write_to_cdm": false }
@@ -958,7 +1101,7 @@ Genere les entrees `source_to_concept_map` a partir des decisions approuvees.
 
 | Champ | Type | Description |
 |-------|------|-------------|
-| `write_to_cdm` | bool | Si `true`, ecrit dans la table `source_to_concept_map` du CDM (UPSERT) |
+| `write_to_cdm` | bool | **Doit etre `false`**. `true` retourne `403`. |
 
 **Response :**
 ```json
@@ -1050,6 +1193,47 @@ Liste les sets SapBERT charges.
 #### `DELETE /api/mapping/sapbert/{domain}`
 
 Supprime les mappings SapBERT d'un domaine.
+
+### 5.9 Concept Lookup
+
+#### `GET /api/mapping/concept-lookup/{cdm_name}/{concept_id}`
+
+Lookup concept par ID pour le workflow mapping.
+
+**Response :**
+```json
+{
+  "concept_id": 4097430,
+  "concept_name": "Appendectomy",
+  "concept_code": "80146002",
+  "vocabulary_id": "SNOMED",
+  "domain_id": "Procedure",
+  "standard_concept": "S"
+}
+```
+
+### 5.10 Gestion des taches de suggestion
+
+#### `GET /api/mapping/suggest/status/{task_id}`
+
+Statut d'une tache de suggestion batch. Retourne les resultats quand la tache est terminee.
+
+**Response (en cours) :** `{ "task_id": "...", "status": "running" }`
+
+**Response (termine) :** `{ "task_id": "...", "status": "done", "results": [...], "warnings": [...] }`
+
+#### `POST /api/mapping/suggest/cancel/{task_id}`
+
+Annule une tache de suggestion batch.
+
+#### `GET /api/mapping/suggest/active`
+
+Liste les taches de suggestion en cours.
+
+**Response :**
+```json
+{ "active": [{ "task_id": "...", "cdm_name": "CHU_OMOP", "domain": "Procedure", "started_at": "..." }] }
+```
 
 ---
 
@@ -1497,6 +1681,24 @@ Approuve une demande. Cree automatiquement le compte Keycloak.
 
 Rejette une demande.
 
+#### `POST /api/admin/users/add`
+
+Ajout direct d'un utilisateur par l'admin (matricule + role). Cree le compte Keycloak sans passer par le flux de demande d'acces.
+
+**Body :**
+```json
+{ "username": "nouveau_user", "email": "user@example.com", "role": "chercheur" }
+```
+
+#### `GET /api/users/list`
+
+Liste les noms d'utilisateur (pour dropdowns de partage). Accessible a tout utilisateur authentifie.
+
+**Response :**
+```json
+{ "users": ["admin", "chercheur1", "medecin1"] }
+```
+
 ---
 
 ## 10. Modeles de donnees
@@ -1590,6 +1792,7 @@ Analyse de taux d'incidence sur cohortes.
 | `POST` | `/save` | Sauvegarder une analyse d'incidence | Tous |
 | `GET` | `/` | Lister les analyses d'incidence (filtre par CDM) | Tous |
 | `GET` | `/{id}` | Recuperer une analyse | Tous |
+| `DELETE` | `/{id}` | Supprimer une analyse d'incidence | Tous |
 
 ---
 
@@ -1603,6 +1806,7 @@ Estimation d'effets populationnels (Kaplan-Meier).
 | `POST` | `/save` | Sauvegarder une analyse d'estimation | Tous |
 | `GET` | `/` | Lister les analyses d'estimation (filtre par CDM) | Tous |
 | `GET` | `/{id}` | Recuperer une analyse | Tous |
+| `DELETE` | `/{id}` | Supprimer une analyse d'estimation | Tous |
 
 ---
 
@@ -1654,6 +1858,11 @@ Notifications in-app pour les utilisateurs.
 | `POST` | `/read-item` | Marquer les notifications d'un element comme lues | Tous |
 | `POST` | `/read-all` | Marquer toutes les notifications comme lues | Tous |
 | `POST` | `/create` | Creer une notification (usage interne/admin) | admin |
+| `DELETE` | `/{id}` | Supprimer une notification | Tous |
+| `DELETE` | `/` | Supprimer toutes les notifications lues | Tous |
+| `GET` | `/types` | Retourner tous les types de notification | Tous |
+| `GET` | `/preferences` | Recuperer les preferences de notification | Tous |
+| `POST` | `/preferences` | Mettre a jour une preference de notification | Tous |
 
 ---
 
@@ -1737,14 +1946,38 @@ Gestion de groupes pour le controle d'acces et le partage.
 
 ---
 
-## 24. Codes d'erreur HTTP
+## 24. Rate Limiting
+
+Plusieurs endpoints sont proteges par un rate limiter (`slowapi`). En cas de depassement, le serveur retourne `429 Too Many Requests` avec un header `Retry-After` indiquant le delai d'attente en secondes.
+
+| Endpoint | Limite |
+|----------|--------|
+| `POST /api/quality/analyze` | 3/min |
+| `POST /api/quality/analyze/batch/stream` | 2/min |
+| `POST /api/quality/conformity` | 3/min |
+| `POST /api/cdm/test`, `POST /api/cdm/{name}/test` | 5/min |
+| `POST /api/cohorts/count`, `POST /api/cohorts/{id}/execute` | 10/min |
+| `POST /api/cohorts/characterize` | 3/min |
+| `POST /api/cohorts/pathways` | 3/min |
+| `POST /api/mapping/suggest/batch` | 3/min |
+| `POST /api/incidence/compute` | 3/min |
+| `POST /api/estimation/kaplan-meier` | 3/min |
+| `POST /api/access-requests` | 5/min |
+| `POST /api/auth/sse-ticket` | 10/min |
+
+---
+
+## 25. Codes d'erreur HTTP
 
 | Code | Signification |
 |------|---------------|
 | `400` | Requete invalide (domaine inconnu, criteres malformes...) |
 | `401` | Non authentifie |
-| `403` | Acces refuse (role insuffisant) |
+| `403` | Acces refuse (role insuffisant, ou action desactivee comme `write_to_cdm`) |
 | `404` | Ressource non trouvee (CDM, snapshot, cohorte...) |
 | `409` | Conflit (CDM existe deja, service deja en cours...) |
+| `429` | Too Many Requests — rate limit depasse (voir section Rate Limiting). Header `Retry-After` present. |
 | `500` | Erreur interne (query SQL echouee, analyse echouee...) |
 | `502` | Connexion au CDM externe echouee |
+| `503` | Service Unavailable — pool de connexions CDM epuise. Reessayer apres quelques secondes. |
+| `504` | Gateway Timeout — timeout de la requete SQL sur le CDM externe. |
