@@ -14,9 +14,13 @@ RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.pytho
 # Copy application code
 COPY . .
 
-# Clear proxy from runtime env
-ENV http_proxy=""
-ENV https_proxy=""
+# Clear proxy from runtime env (both cases — Docker sets both)
+ENV http_proxy="" \
+    https_proxy="" \
+    HTTP_PROXY="" \
+    HTTPS_PROXY="" \
+    NO_PROXY="" \
+    no_proxy=""
 
 # Create non-root user and required directories
 RUN addgroup --system opal && adduser --system --ingroup opal opal \
