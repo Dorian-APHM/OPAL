@@ -43,15 +43,8 @@
       "implicitFlowEnabled": false,
       "rootUrl": "",
       "baseUrl": "/",
-      "redirectUris": [
-        "http://localhost:3000/*",
-        "http://localhost:5173/*",
-        "http://localhost:8080/*"
-      ],
-      "webOrigins": [
-        "http://localhost:3000",
-        "http://localhost:5173"
-      ],
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
       "protocol": "openid-connect",
       "fullScopeAllowed": true,
       "protocolMappers": [
