@@ -297,23 +297,31 @@ class KeycloakMiddleware:
 
 
 async def _validate_token(token: str) -> dict:
-    """Validate a JWT token locally using Keycloak JWKS keys."""
+    """Validate a JWT token locally using Keycloak JWKS keys.
+
+    Issuer check accepts any hostname ending with /realms/<realm> so that
+    access via localhost, IP, or hostname all work. Security is ensured
+    by JWKS signature verification (only our Keycloak can sign tokens).
+    """
     try:
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
-        expected_issuer = f"{KEYCLOAK_ISSUER_URL}/realms/{KEYCLOAK_REALM}"
         payload = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             audience=KEYCLOAK_CLIENT_ID,
-            issuer=expected_issuer,
             leeway=30,  # M4: 30s clock skew tolerance
             options={
-                "verify_iss": True,
+                "verify_iss": False,
                 "verify_exp": True,
                 "verify_aud": True,
             },
         )
+        # Verify issuer ends with expected realm path
+        token_issuer = payload.get("iss", "")
+        expected_suffix = f"/realms/{KEYCLOAK_REALM}"
+        if not token_issuer.endswith(expected_suffix):
+            raise ValueError(f"Invalid issuer: {token_issuer}")
         return payload
     except jwt.ExpiredSignatureError:
         raise ValueError("Token has expired")
