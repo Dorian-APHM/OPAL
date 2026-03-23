@@ -94,7 +94,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "admin",
+          "value": "changeme",
           "temporary": true
         }
       ],
