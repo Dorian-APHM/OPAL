@@ -19,13 +19,13 @@ services:
       - "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD est requis — définissez-le dans .env (openssl rand -base64 32)}"
       - KEYCLOAK_LDAP_ENABLED=${KEYCLOAK_LDAP_ENABLED:-false}
       - "SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set}"
-      - CORS_ORIGINS=http://${EXTERNAL_HOSTNAME:-localhost}:3000,http://${EXTERNAL_HOSTNAME:-localhost}:5173,http://localhost:3000,http://localhost:5173,http://10.64.48.194:3000,http://10.64.48.194:5173
+      - CORS_ORIGINS=http://${EXTERNAL_HOSTNAME:-localhost}:3000,http://${EXTERNAL_HOSTNAME:-localhost}:5173,http://localhost:3000,http://localhost:5173
       - OHDSI_IMAGE_PREFIX=ohdsi-docker
       - OHDSI_HOST_OUTPUT_DIR=${OHDSI_HOST_OUTPUT_DIR:-./ohdsi_output}
       - OHDSI_HOST_SCRIPTS_DIR=${OHDSI_HOST_SCRIPTS_DIR:-}
       - OHDSI_HOST_JDBC_DIR=${OHDSI_HOST_JDBC_DIR:-}
     group_add:
-      - "136"  # docker socket GID on host, for OHDSI container management
+      - "${DOCKER_GID:-136}"  # docker socket GID on host (run: stat -c '%g' /var/run/docker.sock)
     depends_on:
       opal-db:
         condition: service_healthy
