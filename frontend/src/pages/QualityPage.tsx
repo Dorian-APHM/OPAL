@@ -325,6 +325,8 @@ export default function QualityPage({ selectedCdm }: Props) {
   const [analyzedDomains, setAnalyzedDomains] = useSessionState('quality:analyzedDomains', new Set<string>());
   const streamAbortRef = useRef<AbortController | null>(null);
   const analysisIdRef = useRef<string | null>(null);
+  const singleAnalysisIdRef = useRef<string | null>(null);
+  const singlePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { hasNotif, markRead, hasAnyNotifExcept, markAllReadExcept } = useNotifDots('quality_done');
@@ -338,6 +340,7 @@ export default function QualityPage({ selectedCdm }: Props) {
       if (streamAbortRef.current) streamAbortRef.current.abort();
       streamAbortRef.current = null;
       if (batchPollRef.current) clearInterval(batchPollRef.current);
+      if (singlePollRef.current) clearInterval(singlePollRef.current);
     };
   }, []);
 
@@ -352,25 +355,32 @@ export default function QualityPage({ selectedCdm }: Props) {
     }).catch(() => setAnalyzedDomains(new Set()));
   }, [selectedCdm]);
 
-  // Check for running batch analyses on mount / CDM change
+  // Check for running batch/single analyses on mount / CDM change
   useEffect(() => {
     if (!selectedCdm) return;
     qualityApi.activeAnalyses()
       .then(res => {
         if (!mountedRef.current) return;
-        const active = res.data.active.find(
+        // Resume batch if running
+        const batch = res.data.active.find(
           a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled
         );
-        if (active) {
-          // Resume batch monitoring with current progress
-          analysisIdRef.current = active.analysis_id;
+        if (batch) {
+          analysisIdRef.current = batch.analysis_id;
           setBatchLoading(true);
-          const pct = active.total > 0 ? Math.round((active.completed / active.total) * 100) : 0;
+          const pct = batch.total > 0 ? Math.round((batch.completed / batch.total) * 100) : 0;
           setBatchProgress(pct);
-          if (active.domain_status?.length) {
-            setBatchStatus(active.domain_status);
-          }
-          startBatchPolling(active.analysis_id, active.domains);
+          if (batch.domain_status?.length) setBatchStatus(batch.domain_status);
+          startBatchPolling(batch.analysis_id, batch.domains);
+        }
+        // Resume single-domain if running
+        const single = res.data.active.find(
+          a => a.type === 'single' && a.cdm_name === selectedCdm && !a.cancelled
+        );
+        if (single) {
+          singleAnalysisIdRef.current = single.analysis_id;
+          setLoading(true);
+          startSinglePolling(single.analysis_id, single.domains[0]);
         }
       })
       .catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
@@ -469,27 +479,60 @@ export default function QualityPage({ selectedCdm }: Props) {
     toast.info(t('common.cancelled', 'Cancelled'));
   };
 
+  // Poll for single-domain analysis completion
+  const startSinglePolling = useCallback((aid: string, domain: string) => {
+    if (singlePollRef.current) clearInterval(singlePollRef.current);
+    singlePollRef.current = setInterval(() => {
+      qualityApi.activeAnalyses()
+        .then(res => {
+          if (!mountedRef.current) return;
+          const entry = res.data.active.find(a => a.analysis_id === aid);
+          if (entry && !entry.cancelled) return; // still running
+          // Finished or cancelled — stop polling
+          if (singlePollRef.current) clearInterval(singlePollRef.current);
+          singlePollRef.current = null;
+          singleAnalysisIdRef.current = null;
+          setLoading(false);
+          // Check if it succeeded
+          const succeeded = !entry; // entry removed = finished
+          if (succeeded) {
+            setAnalyzedDomains(prev => new Set([...prev, domain]));
+            toast.success(t('common.success'));
+            if (selectedDomain === domain) {
+              loadLatestSnapshot();
+              loadSnapshots();
+            }
+          } else {
+            toast.info(t('common.cancelled', 'Cancelled'));
+          }
+        })
+        .catch(() => {}); // polling — silent
+    }, 2000);
+  }, [selectedDomain, t, toast]);
+
   const cancelSingleAnalysis = () => {
-    if (streamAbortRef.current) { streamAbortRef.current.abort(); streamAbortRef.current = null; }
+    if (singleAnalysisIdRef.current) {
+      qualityApi.cancelAnalysis(singleAnalysisIdRef.current).catch(() => {});
+      singleAnalysisIdRef.current = null;
+    }
+    if (singlePollRef.current) { clearInterval(singlePollRef.current); singlePollRef.current = null; }
     setLoading(false);
     toast.info(t('common.cancelled', 'Cancelled'));
   };
 
   const runAnalysis = async () => {
     if (!selectedCdm || !selectedDomain) return;
-    const ctrl = new AbortController(); streamAbortRef.current = ctrl;
     setLoading(true);
     try {
       const res = await qualityApi.analyze(selectedCdm, selectedDomain);
-      if (ctrl.signal.aborted || !mountedRef.current) return;
-      setResults(res.data.results); setSnapshotId(res.data.snapshot_id);
-      setAnalyzedDomains(prev => new Set([...prev, selectedDomain]));
-      await loadSnapshots();
-      toast.success(t('common.success'));
+      const aid = res.data.analysis_id;
+      singleAnalysisIdRef.current = aid;
+      startSinglePolling(aid, selectedDomain);
     } catch (err: any) {
-      if (ctrl.signal.aborted || !mountedRef.current) return;
+      if (!mountedRef.current) return;
       toast.error(err?.response?.data?.detail || t('common.error'));
-    } finally { if (mountedRef.current) setLoading(false); streamAbortRef.current = null; }
+      setLoading(false);
+    }
   };
 
   const runBatchAnalysis = useCallback(async () => {
