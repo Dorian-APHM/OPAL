@@ -11,6 +11,7 @@ OPAL (OMOP Platform for Analytics & Lineage) is a full-stack web application for
 ### Full Stack (Docker Compose)
 ```bash
 export SECRET_KEY=$(openssl rand -hex 32)
+export POSTGRES_PASSWORD=yourpassword
 docker compose up -d          # Start all services
 docker compose down            # Stop all services
 ```
@@ -32,12 +33,17 @@ npm run build     # Production build via Vite
 
 ### Testing
 ```bash
+# Backend (51 test files)
 cd backend
 pytest tests/ -v              # Run all backend tests
 pytest tests/test_api.py -v   # Run a single test file
 pytest tests/test_api.py::test_function_name -v  # Run a single test
+
+# Frontend (84 tests)
+cd frontend
+npx vitest run
 ```
-Tests use SQLite in-memory via `conftest.py` which overrides `DATABASE_URL` and the FastAPI `get_db` dependency. No external database needed for tests.
+Tests use SQLite in-memory via `conftest.py` which overrides `DATABASE_URL` and the FastAPI `get_db` dependency. OMOP connections are mocked via `tests/omop_mock.py`. No external database needed for tests.
 
 ## Architecture
 
@@ -56,26 +62,27 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Entry point**: `main.py` — Creates FastAPI app, registers CORS middleware, optional Keycloak auth, and all routers.
 
-**Configuration**: `config.py` — All settings via environment variables. Key vars: `DATABASE_URL`, `SECRET_KEY`, `AUTH_ENABLED`, `CORS_ORIGINS`. Contains `DOMAIN_CONFIG` dict mapping OMOP domains to their table/column names.
+**Configuration**: `config.py` — All settings via environment variables. Key vars: `DATABASE_URL`, `SECRET_KEY`, `AUTH_ENABLED` (default: true), `ENVIRONMENT`, `KEYCLOAK_URL`, `KEYCLOAK_ISSUER_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD`, `CORS_ORIGINS`, `OMOP_STATEMENT_TIMEOUT_MS`, `MAX_WORKER_THREADS`. Contains `DOMAIN_CONFIG` dict mapping 11 OMOP clinical domains to their table/column names. See `.env.example` for full reference.
 
 **Database layer** (`db/`):
-- `app_db.py` — SQLAlchemy engine/session for the internal app database
-- `models.py` — 21 models: `CdmConfig`, `AnalysisSnapshot`, `AnalysisSettings`, `Cohort`, `CohortVersion`, `MappingDecision`, `ReferenceCodebook`, `SapbertMapping`, `ConceptSet`, `IncidenceAnalysis`, `EstimationAnalysis`, `CdmAccess`, `CdmGroupAccess`, `UserFavorite`, `SavedQuery`, `Notification`, `CohortTemplate`, `CohortShare`, `UserGroup`, `UserGroupMember`, `AccessRequest`
-- `omop_connector.py` — Dynamic `psycopg2` connections to external CDMs (not SQLAlchemy)
+- `app_db.py` — SQLAlchemy engine/session for the internal app database (pool_size, max_overflow, pool_recycle configurable via env vars)
+- `models.py` — 22 models with composite indexes on frequently-filtered columns: `AnalysisSnapshot(cdm_name, domain, version)`, `CohortVersion(cohort_id, version)`, `MappingDecision(cdm_name, domain, source_value)`, `Notification(username, read)`, `NotificationPreference(username, type)`
+- `omop_connector.py` — Per-CDM `ThreadedConnectionPool` for external OMOP CDM connections. `PooledConnection` wrapper makes `close()` return to pool transparently. Pools auto-evicted after 30min idle, invalidated on CDM update/delete.
 
-**Modules** (`modules/`) — 18 routers:
+**Modules** (`modules/`) — 19 routers:
+- `admin_router.py` — User management, access requests (`/api/admin/`)
 - `cdm_router.py` — CDM registration CRUD, connection testing, settings management (`/api/cdm/`)
 - `quality/router.py` + `quality/engine.py` — Quality analysis with Achilles-like metrics, snapshot versioning, comparison, CSV export (`/api/quality/`)
-- `cohort/router.py` + `cohort/sql_builder.py` — Visual cohort builder, JSON criteria → SQL generation, attrition analysis, patient sampling (`/api/cohorts/`)
+- `cohort/router.py` + `cohort/sql_builder.py` + `cohort/pathways.py` — Visual cohort builder, JSON criteria → SQL generation, attrition analysis, pathways analysis (`/api/cohorts/`)
 - `mapping/router.py` + `mapping/suggest.py` — Mapping workflow with 6 suggestion strategies (SapBERT, exact, relationship, keyword, fuzzy, contextual), audit trail (`/api/mapping/`)
-- `concept/router.py` — Concept search, hierarchy navigation, source value lookup (`/api/concepts/`)
+- `concept/router.py` — Concept search, hierarchy navigation, source value lookup, TTL cache (`/api/concepts/`)
 - `ohdsi/router.py` — OHDSI Docker container orchestration (`/api/ohdsi/`)
 - `concept_set/router.py` — Concept set CRUD (`/api/concept-sets/`)
 - `incidence/router.py` — Incidence rate analysis (`/api/incidence/`)
 - `estimation/router.py` — Population-level estimation (`/api/estimation/`)
 - `datamanagement/router.py` — Data management and ETL monitoring (`/api/datamanagement/`)
 - `cdm_access_router.py` — Per-CDM user/group access control (`/api/cdm-access/`)
-- `notifications_router.py` — User notifications (`/api/notifications/`)
+- `notifications_router.py` — User notifications + WebSocket real-time (`/api/notifications/`, `/api/ws/notifications`)
 - `favorites_router.py` — User favorites (`/api/favorites/`)
 - `saved_queries_router.py` — Saved SQL queries (`/api/saved-queries/`)
 - `cohort_templates_router.py` — Cohort templates (`/api/cohort-templates/`)
@@ -83,27 +90,43 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - `cohort_sharing_router.py` — Cohort sharing between users (`/api/cohorts/`)
 - `groups_router.py` — User groups management (`/api/groups/`)
 
-**Security**: `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`.
+**Security**:
+- `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`
+- `utils/sql_safety.py` — SQL identifier validation (`safe_identifier()`)
+- `utils/csv_safety.py` — CSV formula injection protection
+- `utils/rate_limit.py` — Rate limiting decorator (slowapi)
+- `utils/ws_manager.py` — WebSocket connection manager for real-time notifications
+- `utils/cdm_helper.py` — Centralized CDM connection helper: `get_cdm_connection()`, `get_domain_config()` (runtime optional column detection), `check_cdm_access()` for POST body CDM checks
+- `utils/thread_pool.py` — Bounded ThreadPoolExecutor (`MAX_WORKER_THREADS`) for background tasks
 
-**i18n**: `i18n/en.json` and `i18n/fr.json` — English and French translations served via `/api/i18n/{lang}`.
+**i18n**: `i18n/en.json` and `i18n/fr.json` — Translations cached at module load time (not read per-request). Served via `/api/i18n/{lang}`.
 
 ### Frontend (`frontend/`)
 
-**Stack**: React 18 + TypeScript + Vite + Custom Neumorphic UI components + Recharts + Lucide icons
+**Stack**: React 18 + TypeScript + Vite + Custom Neumorphic UI components + Framer Motion + Recharts + Lucide icons
 
-**Entry**: `src/main.tsx` → `src/App.tsx` — React Router with sidebar layout. Selected CDM stored in `localStorage` and passed as prop to all pages.
+**Entry**: `src/main.tsx` → `src/App.tsx` — React Router with TopNav layout. Selected CDM stored in `localStorage` and passed as prop to all pages. 12 pages routed (3 more exist as files but not yet routed: Incidence, Estimation, ConceptSet).
 
 **API client**: `src/api/client.ts` — Axios-based client organized by module (`cdmApi`, `qualityApi`, `cohortApi`, `mappingApi`, `conceptApi`). All requests go to `/api` prefix.
 
-**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`, `LandingPage`
+**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`
+
+**UI Components** (`src/components/ui/`): Neumorphic design system + `AnimatedList` (Framer Motion animations), `SkeletonPatterns` (contextual loaders), `ErrorState` (5 error variants), `Empty` (11 empty state variants), `Toast` (animated notifications)
+
+**Hooks**: `useTheme` (dark/light toggle), `useNotificationWs` (WebSocket real-time), `useNotifDots` (notification badges)
 
 **Types**: `src/types/index.ts` — Shared TypeScript interfaces for all API responses.
 
 ### Key Design Decisions
 
 - External CDMs are accessed **read-only** via raw `psycopg2` (not SQLAlchemy). The only write to CDM is optional `source_to_concept_map` updates during mapping apply.
-- CDM connections are opened on-demand per request (stateless, no connection pooling to external DBs).
+- CDM connections use a **per-CDM `ThreadedConnectionPool`** (min=2, max=20). `PooledConnection` wrapper intercepts `close()` to return to pool. Pools auto-evicted after 30min idle, invalidated on CDM credential update/delete.
 - All app state (configs, snapshots, cohorts, mapping decisions) lives in the internal PostgreSQL.
 - Quality analysis snapshots are versioned for temporal comparison.
 - Cohort criteria use a JSON structure that gets converted to SQL by `sql_builder.py`.
-- Mapping suggestions use 6 ranked strategies: SapBERT (pre-computed), exact match, relationship-based, keyword, fuzzy text, contextual.
+- Mapping suggestions use 5 internal strategies + SapBERT (pre-computed external): exact match, relationship-based, ingredient/DCI, fuzzy+keyword, contextual. Returns `warnings` array when CDM columns are missing.
+- Notifications are delivered in **real-time via WebSocket** (zero polling). WebSocket connections are authenticated via one-time SSE tickets.
+- The app supports **dark mode** (Emerald Night, default) and **light mode** (Crème Sauge palette). Theme persisted in `localStorage`.
+- **Pathways Analysis** implements OHDSI ATLAS-style treatment pathway visualization with interactive sunburst chart.
+- All SQL identifiers validated via `safe_identifier()` (63-char limit). Most modules use `psycopg2.sql.SQL` + `sql.Identifier`; cohort `sql_builder.py` and `pathways.py` use f-strings with defense-in-depth (`safe_identifier()` + `int()` casts + date regex).
+- Schema migrations managed by **Alembic** (initial migration covers 22 tables).

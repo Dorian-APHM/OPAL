@@ -2,24 +2,31 @@
 Keycloak OIDC authentication middleware with role-based access control.
 Validates JWT tokens locally using JWKS keys (no issuer hostname dependency).
 Permissions are driven by permissions.yaml via auth.permissions module.
+
+Uses a pure ASGI middleware (not BaseHTTPMiddleware) so that StreamingResponse
+(SSE log endpoints) is never buffered — events are forwarded in real-time.
 """
 import logging
 import re
+import threading
+import time
+import uuid
 
 import jwt
 from jwt import PyJWKClient
 from fastapi import Request, HTTPException, Depends
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-from config import AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
+from config import AUTH_ENABLED, ENVIRONMENT, KEYCLOAK_URL, KEYCLOAK_REALM, KEYCLOAK_CLIENT_ID, KEYCLOAK_ISSUER_URL
 from auth.permissions import check_route_access, has_any_full_visibility, get_role_names
 
 logger = logging.getLogger(__name__)
 
 # JWKS client for local JWT validation (caches keys automatically)
 _jwks_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/certs"
-_jwks_client = PyJWKClient(_jwks_url, cache_keys=True, lifespan=3600)
+_jwks_client = PyJWKClient(_jwks_url, cache_keys=True, lifespan=300)
 
 # Public endpoints that don't require authentication
 PUBLIC_PATHS = {"/api/health", "/api/i18n", "/api/access-requests", "/docs", "/openapi.json", "/redoc", "/"}
@@ -40,6 +47,43 @@ _CDM_PATH_PATTERNS = [
 
 # Paths to skip CDM access check (admin-only endpoints, access-control itself)
 _CDM_CHECK_SKIP_PREFIXES = {"/api/cdm-access"}
+
+# ── SSE ticket store (one-time-use tokens for EventSource connections) ──
+_SSE_TICKET_TTL = 30  # seconds
+_MAX_SSE_TICKETS = 1000
+_sse_tickets: dict[str, tuple[dict, float]] = {}  # ticket_id → (user_info, expires_at)
+_sse_tickets_lock = threading.Lock()
+
+
+def create_sse_ticket(user_info: dict) -> str:
+    """Create a one-time-use ticket for SSE connections. Valid for 30 seconds."""
+    with _sse_tickets_lock:
+        # Cleanup expired tickets
+        now = time.time()
+        expired = [k for k, (_, exp) in _sse_tickets.items() if exp < now]
+        for k in expired:
+            del _sse_tickets[k]
+
+        # Enforce maximum capacity
+        if len(_sse_tickets) >= _MAX_SSE_TICKETS:
+            # Expired tickets already cleaned above; reject if still at capacity
+            raise HTTPException(status_code=429, detail="Too many active tickets")
+
+        ticket_id = uuid.uuid4().hex
+        _sse_tickets[ticket_id] = (user_info, now + _SSE_TICKET_TTL)
+        return ticket_id
+
+
+def _redeem_sse_ticket(ticket_id: str) -> dict | None:
+    """Redeem and consume a one-time-use SSE ticket. Returns user_info or None."""
+    with _sse_tickets_lock:
+        entry = _sse_tickets.pop(ticket_id, None)
+    if entry is None:
+        return None
+    user_info, expires_at = entry
+    if time.time() > expires_at:
+        return None
+    return user_info
 
 
 def _extract_cdm_name(request: Request) -> str | None:
@@ -120,79 +164,164 @@ def _extract_roles(token_payload: dict) -> list[str]:
     return realm_access.get("roles", [])
 
 
-class KeycloakMiddleware(BaseHTTPMiddleware):
-    """OIDC authentication middleware with role-based route access."""
+class KeycloakMiddleware:
+    """Pure ASGI middleware for OIDC authentication with role-based route access.
 
-    async def dispatch(self, request: Request, call_next):
+    Unlike BaseHTTPMiddleware, this does NOT buffer response bodies, so
+    StreamingResponse (SSE) works correctly with real-time event delivery.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = StarletteRequest(scope, receive, send)
         path = request.url.path
 
         # Let public endpoints through
         if path == "/" or any(path.startswith(p) for p in PUBLIC_PATHS if p != "/"):
-            request.state.user = {"sub": "anonymous", "preferred_username": "anonymous", "roles": []}
-            return await call_next(request)
+            scope.setdefault("state", {})["user"] = {
+                "sub": "anonymous", "preferred_username": "anonymous", "roles": [],
+            }
+            await self.app(scope, receive, send)
+            return
 
         if not AUTH_ENABLED:
-            request.state.user = {"sub": "default", "preferred_username": "user", "roles": ["admin"]}
-            return await call_next(request)
+            # SÉCURITÉ (S02) : AUTH_ENABLED=false est réservé au développement local.
+            # Quand l'authentification est désactivée, toutes les requêtes reçoivent
+            # automatiquement le rôle admin. Ce mode NE DOIT PAS être exposé sur une
+            # interface réseau non-localhost (risque d'escalade de privilèges immédiate).
+            #
+            # On vérifie l'IP source de la requête : si elle ne provient pas de
+            # 127.0.0.1 / ::1 (loopback), la requête est rejetée avec une erreur 403
+            # explicite, même si le serveur est techniquement joignable depuis ce réseau.
+            client_host = (request.client.host if request.client else None) or ""
+            _localhost_ips = {"127.0.0.1", "::1", "localhost"}
+            if client_host not in _localhost_ips:
+                logger.critical(
+                    "SECURITY: AUTH_ENABLED=false mais requête reçue depuis %s (non-localhost). "
+                    "Accès refusé. Passez AUTH_ENABLED=true ou restreignez le binding du serveur "
+                    "à 127.0.0.1 pour utiliser le mode sans authentification. "
+                    "(ENVIRONMENT=%s)",
+                    client_host,
+                    ENVIRONMENT,
+                )
+                resp = JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            "AUTH_ENABLED=false : accès refusé depuis une adresse non-localhost. "
+                            "Ce mode est réservé au développement local (127.0.0.1 uniquement)."
+                        )
+                    },
+                )
+                await resp(scope, receive, send)
+                return
 
-        # Check Authorization header, fallback to ?token= query param (for SSE/EventSource)
+            logger.warning(
+                "SECURITY: AUTH_ENABLED=false — accès dev accordé depuis %s (ENVIRONMENT=%s). "
+                "Ne jamais exposer ce mode sur un réseau non-localhost.",
+                client_host,
+                ENVIRONMENT,
+            )
+            scope.setdefault("state", {})["user"] = {
+                "sub": "dev-user", "preferred_username": "dev-user", "roles": ["admin"],
+            }
+            await self.app(scope, receive, send)
+            return
+
+        # Check Authorization header, fallback to ?ticket= one-time ticket (for SSE/EventSource)
         auth_header = request.headers.get("Authorization", "")
-        token_param = request.query_params.get("token", "")
+        ticket_param = request.query_params.get("ticket", "")
+
+        user_info = None
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-        elif token_param:
-            token = token_param
+            try:
+                user_info = await _validate_token(token)
+                roles = _extract_roles(user_info)
+                user_info["roles"] = roles
+            except Exception as e:
+                logger.warning("Token validation failed: %s", e)
+                resp = JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+                await resp(scope, receive, send)
+                return
+        elif ticket_param:
+            user_info = _redeem_sse_ticket(ticket_param)
+            if user_info is None:
+                resp = JSONResponse(status_code=401, content={"detail": "Invalid or expired ticket"})
+                await resp(scope, receive, send)
+                return
         else:
-            return JSONResponse(status_code=401, content={"detail": "Missing or invalid Authorization header"})
-        try:
-            user_info = await _validate_token(token)
-            roles = _extract_roles(user_info)
-            user_info["roles"] = roles
-            request.state.user = user_info
-        except Exception as e:
-            logger.warning("Token validation failed: %s", e)
-            return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+            resp = JSONResponse(status_code=401, content={"detail": "Missing or invalid Authorization header"})
+            await resp(scope, receive, send)
+            return
+
+        roles = user_info.get("roles", [])
+        scope.setdefault("state", {})["user"] = user_info
 
         # Skip role check for auth-only endpoints (any authenticated user)
         if any(path.startswith(p) for p in AUTH_NO_ROLE_CHECK_PATHS):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Allow read-only access to certain endpoints for all authenticated users
         if request.method == "GET" and any(path.startswith(p) for p in AUTH_READ_PATHS):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Check role-based route access (driven by permissions.yaml)
         if not check_route_access(roles, path):
-            return JSONResponse(
+            resp = JSONResponse(
                 status_code=403,
                 content={"detail": "Forbidden: insufficient permissions for this resource"},
             )
+            await resp(scope, receive, send)
+            return
 
         # Check per-CDM access control
         cdm_name = _extract_cdm_name(request)
         if cdm_name and not _check_cdm_access(cdm_name, user_info):
-            return JSONResponse(
+            resp = JSONResponse(
                 status_code=403,
                 content={"detail": f"Access denied to CDM '{cdm_name}'"},
             )
+            await resp(scope, receive, send)
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
 
 async def _validate_token(token: str) -> dict:
-    """Validate a JWT token locally using Keycloak JWKS keys."""
+    """Validate a JWT token locally using Keycloak JWKS keys.
+
+    Issuer check accepts any hostname ending with /realms/<realm> so that
+    access via localhost, IP, or hostname all work. Security is ensured
+    by JWKS signature verification (only our Keycloak can sign tokens).
+    """
     try:
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
+            audience=KEYCLOAK_CLIENT_ID,
+            leeway=30,  # M4: 30s clock skew tolerance
             options={
                 "verify_iss": False,
                 "verify_exp": True,
-                "verify_aud": False,
+                "verify_aud": True,
             },
         )
+        # Verify issuer ends with expected realm path
+        token_issuer = payload.get("iss", "")
+        expected_suffix = f"/realms/{KEYCLOAK_REALM}"
+        if not token_issuer.endswith(expected_suffix):
+            raise ValueError(f"Invalid issuer: {token_issuer}")
         return payload
     except jwt.ExpiredSignatureError:
         raise ValueError("Token has expired")

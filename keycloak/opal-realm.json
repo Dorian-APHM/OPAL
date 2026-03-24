@@ -3,9 +3,15 @@
   "enabled": true,
   "displayName": "OPAL",
   "loginTheme": "opal",
-  "sslRequired": "none",
+  "sslRequired": "external",
   "registrationAllowed": false,
   "resetPasswordAllowed": true,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "passwordPolicy": "length(8) and digits(1) and upperCase(1) and specialChars(1)",
   "roles": {
     "realm": [
       {
@@ -32,7 +38,7 @@
       "name": "OPAL Frontend",
       "enabled": true,
       "publicClient": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "rootUrl": "",
@@ -55,6 +61,17 @@
             "claim.name": "roles",
             "jsonType.label": "String"
           }
+        },
+        {
+          "name": "opal-audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "opal-frontend",
+            "id.token.claim": "true",
+            "access.token.claim": "true"
+          }
         }
       ]
     }
@@ -70,8 +87,8 @@
       "credentials": [
         {
           "type": "password",
-          "value": "admin",
-          "temporary": false
+          "value": "Admin@2026!",
+          "temporary": true
         }
       ],
       "realmRoles": ["admin"]

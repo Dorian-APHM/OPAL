@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
-  Star, Share2, Globe, Users, UserPlus, X,
+  Star, Share2, Globe, Users, UserPlus, X, GitBranch,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -17,6 +17,7 @@ import QueryCanvas from '../components/cohort/QueryCanvas';
 import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
+import PathwaysPanel from '../components/cohort/PathwaysPanel';
 import PatientJourney from '../components/cohort/PatientJourney';
 import ConceptSetPage from './ConceptSetPage';
 import IncidencePage from './IncidencePage';
@@ -52,6 +53,7 @@ export default function CohortPage({ selectedCdm }: Props) {
   // Cohort state (persisted across navigation)
   const [cohortName, setCohortName] = useSessionState('cohort:name', '');
   const [cohortDesc, setCohortDesc] = useSessionState('cohort:desc', '');
+  const [nameError, setNameError] = useState('');
   const [criteria, setCriteria] = useSessionState<CohortCriteria>('cohort:criteria', emptyCriteria());
   const [savedCohortId, setSavedCohortId] = useSessionState<number | undefined>('cohort:savedId', undefined as number | undefined);
 
@@ -148,6 +150,7 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   const handleSave = async () => {
     if (!selectedCdm || !cohortName.trim()) {
+      setNameError(t('cohort.name_required', 'Cohort name is required'));
       toast.warning(t('cohort.enter_name', 'Please enter a cohort name'));
       return;
     }
@@ -358,22 +361,25 @@ export default function CohortPage({ selectedCdm }: Props) {
   }
 
   return (
-    <div className="h-[calc(100vh-60px)] flex flex-col">
+    <div className="min-h-[calc(100vh-60px)] lg:h-[calc(100vh-60px)] flex flex-col">
       {/* Header */}
       <Card size="small" className="mb-2" hoverable={false}>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
-            placeholder={t('cohort.cohort_name', 'Cohort name...')}
+            placeholder={t('cohort.cohort_name_placeholder', 'Cohort name (required)...')}
             value={cohortName}
-            onChange={e => setCohortName(e.target.value)}
-            className="!w-[250px]"
+            onChange={e => { setCohortName(e.target.value); setNameError(''); }}
+            className="w-full sm:!w-[250px]"
+            required
+            error={nameError}
           />
           <Input
             placeholder={t('cohort.description', 'Description (optional)')}
             value={cohortDesc}
             onChange={e => setCohortDesc(e.target.value)}
-            className="flex-1"
+            className="flex-1 min-w-[150px]"
           />
+          <div className="flex items-center gap-2">
           <Button icon={<Plus className="h-3.5 w-3.5" />} size="small" onClick={handleNew}>
             {t('cohort.new', 'New')}
           </Button>
@@ -394,13 +400,14 @@ export default function CohortPage({ selectedCdm }: Props) {
               )}
             </span>
           </Button>
+          </div>
         </div>
       </Card>
 
       {/* Three-panel layout */}
-      <div className="grid grid-cols-12 gap-2 flex-1 overflow-hidden">
+      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-2 flex-1">
         {/* Left: Criteria Panel */}
-        <div className="col-span-2 h-full overflow-auto flex flex-col gap-1">
+        <div className="lg:col-span-2 h-full overflow-auto flex flex-col gap-1">
           {/* Inclusion / Exclusion toggle */}
           <div className="flex rounded-lg overflow-hidden border border-glass-border shrink-0">
             <button
@@ -431,7 +438,7 @@ export default function CohortPage({ selectedCdm }: Props) {
         </div>
 
         {/* Center: Tabs — Builder / Characterization */}
-        <div className="col-span-8 h-full overflow-auto">
+        <div className="lg:col-span-8 h-full overflow-auto">
           <Tabs
             activeKey={activeTab}
             onChange={setActiveTab}
@@ -477,7 +484,10 @@ export default function CohortPage({ selectedCdm }: Props) {
                       }
                     >
                       {sampleLoading ? (
-                        <div className="text-center py-5"><Spinner /></div>
+                        <div className="text-center py-5">
+                          <Spinner />
+                          <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sample', 'Loading sample patients...')}</p>
+                        </div>
                       ) : samplePatients.length > 0 ? (
                         <Table
                           size="small"
@@ -550,6 +560,21 @@ export default function CohortPage({ selectedCdm }: Props) {
                 ),
               },
               {
+                key: 'pathways',
+                label: (
+                  <div className="flex items-center gap-1">
+                    <GitBranch className="h-3.5 w-3.5" />
+                    <span>{t('cohort.pathways', 'Pathways')}</span>
+                  </div>
+                ),
+                children: (
+                  <PathwaysPanel
+                    cdmName={selectedCdm || ''}
+                    criteria={toBackendCriteria(criteria)}
+                  />
+                ),
+              },
+              {
                 key: 'sql',
                 label: (
                   <div className="flex items-center gap-1">
@@ -596,7 +621,7 @@ export default function CohortPage({ selectedCdm }: Props) {
         </div>
 
         {/* Right: Results Panel */}
-        <div className="col-span-2 h-full overflow-auto">
+        <div className="lg:col-span-2 h-full overflow-auto">
           <ResultsPanel
             cdmName={selectedCdm}
             criteria={toBackendCriteria(criteria)}
@@ -710,7 +735,10 @@ export default function CohortPage({ selectedCdm }: Props) {
         width="max-w-md"
       >
         {shareLoading ? (
-          <div className="flex justify-center py-8"><Spinner /></div>
+          <div className="text-center py-8">
+            <Spinner />
+            <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sharing', 'Loading sharing settings...')}</p>
+          </div>
         ) : shareInfo ? (
           <div className="space-y-4">
             {/* Public toggle */}
@@ -771,15 +799,15 @@ export default function CohortPage({ selectedCdm }: Props) {
                 <ul className="divide-y divide-border-subtle">
                   {shareInfo.shares.map((s, i) => (
                     <li key={i} className="py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
                         {s.type === 'user' ? (
-                          <User className="h-3.5 w-3.5 text-text-muted" />
+                          <User className="h-3.5 w-3.5 text-text-muted flex-shrink-0" />
                         ) : (
-                          <Users className="h-3.5 w-3.5 text-text-muted" />
+                          <Users className="h-3.5 w-3.5 text-text-muted flex-shrink-0" />
                         )}
-                        <span className="text-sm text-text-bright">{s.target}</span>
+                        <span className="text-sm text-text-bright truncate">{s.target}</span>
                         <Tag>{s.type}</Tag>
-                        <span className="text-xs text-text-dim">
+                        <span className="text-xs text-text-dim truncate">
                           {t('cohort.shared_by', 'by')} {s.shared_by}
                         </span>
                       </div>
@@ -835,7 +863,7 @@ function SqlEditorPanel({ cdmName }: { cdmName: string }) {
     cohortApi.sqlSchema(cdmName).then(res => {
       setSchema(res.data.tables);
       setSchemaName(res.data.schema);
-    }).catch(() => {});
+    }).catch(() => toast.error(t('cohort.schema_failed', 'Failed to load SQL schema')));
   }, [cdmName]);
 
   const handleExecute = async () => {

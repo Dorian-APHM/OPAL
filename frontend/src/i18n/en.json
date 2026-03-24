@@ -158,7 +158,10 @@
     "Procedure": "Procedure",
     "Visit": "Visit",
     "Device": "Device",
-    "Death": "Death"
+    "Death": "Death",
+    "Specimen": "Specimen",
+    "Note": "Note",
+    "Payer_Plan_Period": "Payer Plan Period"
   },
   "settings": {
     "title": "Settings",
@@ -286,7 +289,22 @@
     "ref_loaded": "Loaded references",
     "ref_entries_loaded": "entries loaded",
     "ref_codes": "codes",
-    "ref_enriched": "suggestions enriched"
+    "ref_enriched": "suggestions enriched",
+    "write_confirm_title": "Confirmation required",
+    "write_confirm_cancel": "Cancel",
+    "write_confirm_submit": "Confirm write",
+    "write_confirm_message_pre": "You will write",
+    "write_confirm_message_mappings": "mappings",
+    "write_confirm_message_mid": "to the",
+    "write_confirm_message_post": "table of CDM",
+    "write_confirm_impact_pre": "This will impact",
+    "write_confirm_impact_rows": "rows",
+    "write_confirm_impact_mid": "and",
+    "write_confirm_impact_patients": "patients",
+    "write_confirm_type_cdm": "To confirm, type the exact CDM name below:",
+    "write_confirm_mismatch": "CDM name does not match",
+    "write_warning": "This action will directly modify the source_to_concept_map table of the CDM. This operation is difficult to reverse.",
+    "export_stcm_instead": "Export as CSV (recommended)"
   },
   "common": {
     "save": "Save",

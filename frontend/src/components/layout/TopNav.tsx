@@ -3,16 +3,20 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Home, LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
   Database, Settings, Globe, LogOut, Shield, ClipboardList, HardDrive,
-  Menu, X, ChevronDown,
+  Menu, X, ChevronDown, Bell, Sun, Moon, Search,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, cdmAccessApi, notificationsApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
+import { useNotificationWs } from '../../hooks/useNotificationWs';
 import { Select } from '../ui/Select';
 import { Tag } from '../ui/Tag';
 import { Tooltip } from '../ui/Tooltip';
 import GlobalSearch from '../GlobalSearch';
+import NotificationCenter from '../NotificationCenter';
+import { useTheme } from '../../hooks/useTheme';
+import { useToast } from '../ui/Toast';
 
 interface TopNavProps {
   selectedCdm: string | null;
@@ -24,7 +28,7 @@ const mainNav = [
   { key: '/', icon: Home, labelKey: 'app.home', labelDefault: 'Home', short: 'Home' },
   { key: '/quality', icon: LayoutDashboard, labelKey: 'app.quality', short: 'Quality' },
   { key: '/cohorts', icon: Users, labelKey: 'app.cohorts', short: 'Cohorts' },
-  { key: '/data-management', icon: HardDrive, labelKey: 'app.data_management', labelDefault: 'Data', short: 'Data' },
+  { key: '/data-management', icon: HardDrive, labelKey: 'app.data_management', labelDefault: 'Data Export', short: 'Data Export' },
   { key: '/mapping', icon: GitCompareArrows, labelKey: 'app.mapping', short: 'Mapping' },
   { key: '/concepts', icon: BookOpen, labelKey: 'app.concepts', short: 'Concepts' },
   { key: '/ohdsi', icon: FlaskConical, labelKey: 'app.ohdsi', labelDefault: 'OHDSI', short: 'OHDSI' },
@@ -71,7 +75,26 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
   const [cdms, setCdms] = useState<CdmConfig[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [notifCenterOpen, setNotifCenterOpen] = useState(false);
   const { username, roles, logout, hasPageAccess, authenticated, token } = useAuth();
+  const { theme, toggle: toggleTheme } = useTheme();
+
+  // --- WebSocket for real-time notifications ---
+  useNotificationWs(!!authenticated && !!token);
+  const toast = useToast();
+
+  // --- Global toast for background analysis notifications ---
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (!notif?.title) return;
+      if (notif.type === 'quality_done' || notif.type === 'conformity_done') {
+        toast.success(notif.title);
+      }
+    };
+    window.addEventListener('opal:notification', handler);
+    return () => window.removeEventListener('opal:notification', handler);
+  }, [toast]);
 
   // --- Notification badges ---
   const [badges, setBadges] = useState<Record<string, number>>({});
@@ -90,12 +113,11 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
     refreshBadges();
     const onRefresh = () => refreshBadges();
     window.addEventListener('opal:badges-refresh', onRefresh);
+    // Refresh only when user returns to the tab (no polling — WS is real-time)
     window.addEventListener('focus', onRefresh);
-    const interval = setInterval(refreshBadges, 15000);
     return () => {
       window.removeEventListener('opal:badges-refresh', onRefresh);
       window.removeEventListener('focus', onRefresh);
-      clearInterval(interval);
     };
   }, [refreshBadges]);
 
@@ -152,17 +174,16 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
 
   return (
     <nav className="glass-nav fixed top-0 left-0 right-0 z-50 px-3 lg:px-4 py-2">
-      <div className="mx-auto flex items-center gap-3 max-w-[1920px]">
+      <div className="mx-auto flex items-center gap-2 lg:gap-3 max-w-[1920px]">
         {/* Logo */}
-        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center gap-2 no-underline shrink-0">
-          <img src="/opal-logo.png" alt="OPAL" className="h-9 w-9 object-contain" />
-          <span className="text-lg font-bold text-text-bright tracking-tight hidden sm:inline">OPAL</span>
+        <a href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }} className="flex items-center no-underline shrink-0">
+          <img src="/opal-logo.svg" alt="OPAL" className="h-12 w-12 object-contain" />
         </a>
 
-        <div className="w-px h-5 bg-glass-border hidden md:block shrink-0" />
+        <div className="w-px h-5 bg-glass-border hidden lg:block shrink-0" />
 
         {/* CDM Selector */}
-        <div className="hidden md:block w-56 shrink-0">
+        <div className="hidden lg:block shrink-0 w-56">
           <Select
             placeholder={t('cdm.select_cdm')}
             value={selectedCdm}
@@ -174,49 +195,76 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
         </div>
 
         {/* Desktop Navigation — icon + short label for main items */}
-        <div className="hidden lg:flex items-center gap-1 flex-1 justify-center">
+        <div className="hidden lg:flex items-center gap-0 flex-1 justify-center min-w-0">
           {mainItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.key);
             const badge = routeBadges[item.key] || 0;
 
             return (
-              <button
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                className={`
-                  relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[13px] font-medium
-                  transition-all duration-200 cursor-pointer bg-transparent border-none whitespace-nowrap
-                  ${active
-                    ? 'text-emerald-accent bg-emerald-accent/10'
-                    : 'text-text-dim hover:text-emerald-accent hover:bg-surface-light'
-                  }
-                `}
-              >
-                <span className="relative">
-                  <Icon className={`h-4 w-4 shrink-0 ${active ? 'drop-shadow-[0_0_6px_rgba(16,185,129,0.5)]' : ''}`} />
-                  <NotifDot count={badge} />
-                </span>
-                <span>{item.short}</span>
-                {active && (
-                  <span className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-emerald-accent shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
-                )}
-              </button>
+              <Tooltip key={item.key} title={item.short} placement="bottom">
+                <button
+                  onClick={() => navigate(item.key)}
+                  className={`
+                    relative flex items-center gap-1 px-1.5 py-1.5 rounded-lg text-[13px] font-medium
+                    transition-all duration-200 cursor-pointer bg-transparent border-none whitespace-nowrap shrink-0
+                    ${active
+                      ? 'text-emerald-accent bg-emerald-accent/10'
+                      : 'text-text-dim hover:text-emerald-accent hover:bg-surface-light'
+                    }
+                  `}
+                >
+                  <span className="relative">
+                    <Icon className={`h-4 w-4 shrink-0 ${active ? 'drop-shadow-[0_0_6px_rgba(16,185,129,0.5)]' : ''}`} />
+                    <NotifDot count={badge} />
+                  </span>
+                  <span className="hidden 2xl:inline">{item.short}</span>
+                  {active && (
+                    <span className="absolute bottom-0 left-1 right-1 h-0.5 rounded-full bg-emerald-accent shadow-[0_0_6px_rgba(16,185,129,0.4)]" />
+                  )}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
 
-        {/* Right side: search + lang + user */}
-        <div className="flex items-center gap-2 shrink-0 ml-auto lg:ml-0">
-          {/* Global Search */}
-          <div className="hidden lg:block w-44">
-            <GlobalSearch selectedCdm={selectedCdm} />
-          </div>
+        {/* Right side: search trigger + lang + user */}
+        <div className="flex items-center gap-3 shrink-0 ml-auto lg:ml-0">
+          {/* Search trigger button — opens via Ctrl+K */}
+          <Tooltip title="Search (⌘K)" placement="bottom">
+            <button
+              onClick={() => {
+                // Dispatch Ctrl+K to trigger GlobalSearch focus
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+              }}
+              className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+          </Tooltip>
 
           {/* Language toggle */}
-          <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'}>
-            <button onClick={toggleLang} className="text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
+          <Tooltip title={i18n.language === 'fr' ? 'Français' : 'English'} placement="bottom">
+            <button onClick={toggleLang} className="hidden sm:block text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
               <Globe className="h-4 w-4" />
+            </button>
+          </Tooltip>
+
+          {/* Theme toggle */}
+          <Tooltip title={theme === 'dark' ? 'Light mode' : 'Dark mode'} placement="bottom">
+            <button onClick={toggleTheme} className="hidden sm:block text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5">
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          </Tooltip>
+
+          {/* Notification bell with ring animation on new notifs */}
+          <Tooltip title="Notifications" placement="bottom">
+            <button
+              onClick={() => setNotifCenterOpen(true)}
+              className="relative text-text-dim hover:text-emerald-accent transition-colors cursor-pointer bg-transparent border-none p-1.5"
+            >
+              <Bell className={`h-4 w-4 ${Object.values(badges).reduce((a, b) => a + b, 0) > 0 ? 'opal-bell-ring' : ''}`} />
+              <NotifDot count={Object.values(badges).reduce((a, b) => a + b, 0)} />
             </button>
           </Tooltip>
 
@@ -224,6 +272,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           <div className="relative">
             <button
               onClick={() => setUserMenuOpen(!userMenuOpen)}
+              aria-label="User menu"
+              aria-expanded={userMenuOpen}
               className="flex items-center gap-1.5 cursor-pointer bg-transparent border-none text-text-muted hover:text-text-bright transition-colors"
             >
               <span className="relative">
@@ -294,6 +344,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
           {/* Mobile hamburger */}
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={mobileOpen}
             className="lg:hidden text-text-muted cursor-pointer bg-transparent border-none p-1"
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -304,7 +356,7 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
       {/* Mobile Navigation Drawer — all items */}
       {mobileOpen && (
         <div className="lg:hidden mt-3 pt-3 border-t border-glass-border">
-          <div className="mb-3 md:hidden">
+          <div className="mb-3">
             <Select
               placeholder={t('cdm.select_cdm')}
               value={selectedCdm}
@@ -341,8 +393,24 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
               );
             })}
           </div>
+          {/* Lang & theme toggles for small screens */}
+          <div className="flex items-center gap-3 mt-3 pt-3 border-t border-glass-border sm:hidden">
+            <button onClick={toggleLang} className="flex items-center gap-2 text-sm text-text-muted hover:text-emerald-accent cursor-pointer bg-transparent border-none">
+              <Globe className="h-4 w-4" /> {i18n.language === 'fr' ? 'Français' : 'English'}
+            </button>
+            <button onClick={toggleTheme} className="flex items-center gap-2 text-sm text-text-muted hover:text-emerald-accent cursor-pointer bg-transparent border-none">
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {theme === 'dark' ? 'Light' : 'Dark'}
+            </button>
+          </div>
         </div>
       )}
+
+      {/* Global Search command palette (renders only when active) */}
+      <GlobalSearch selectedCdm={selectedCdm} />
+
+      {/* Notification Center Drawer */}
+      <NotificationCenter open={notifCenterOpen} onClose={() => setNotifCenterOpen(false)} />
     </nav>
   );
 }

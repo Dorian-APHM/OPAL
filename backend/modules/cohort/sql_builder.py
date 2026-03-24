@@ -7,19 +7,13 @@ using CTEs, temporal joins, and concept_ancestor expansion.
 import logging
 import re
 
-from config import DOMAIN_CONFIG
+from psycopg2.extensions import adapt as _pg_adapt
 
-# Strict pattern for OMOP schema names: only alphanumeric and underscores
-_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+from config import DOMAIN_CONFIG
+from utils.sql_safety import safe_identifier as _validate_identifier
+
 # Strict ISO date pattern
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _validate_identifier(name: str) -> str:
-    """Validate and return a safe SQL identifier (schema/table/column name)."""
-    if not _SAFE_IDENTIFIER_RE.match(name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
-    return name
 
 
 def _validate_date_string(date_str: str) -> str:
@@ -344,10 +338,14 @@ def build_detailed_sample_sql(
 
         source_filter = None
         if source_codes and source_value_col:
-            escaped = ", ".join(
-                f"'{code.replace(chr(39), chr(39)+chr(39))}'" for code in source_codes
+            quoted = ", ".join(
+                _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
             )
-            source_filter = f"t.{source_value_col} IN ({escaped})"
+            # Match on source_value (code) OR source_name (description) when available
+            source_parts = [f"t.{source_value_col} IN ({quoted})"]
+            if source_name_col:
+                source_parts.append(f"t.{source_name_col} IN ({quoted})")
+            source_filter = f"({' OR '.join(source_parts)})"
 
         if concept_filter and source_filter:
             wheres.append(f"({concept_filter} OR {source_filter})")
@@ -695,6 +693,7 @@ def _build_criterion_cte(
     concept_col = dmeta["concept_id"]
     date_col = dmeta["date_col"]
     source_value_col = dmeta.get("source_value")
+    source_name_col = dmeta.get("source_name")
 
     # Build WHERE clauses
     wheres: list[str] = []
@@ -718,13 +717,17 @@ def _build_criterion_cte(
             )
             concept_filter = f"t.{concept_col} IN ({concept_list})"
 
-    # Source code filtering (direct match on source_value column)
+    # Source code filtering (match on source_value or source_name)
+    # Uses psycopg2's own adapter for safe quoting (same mechanism as %s params).
     source_filter = None
     if source_codes and source_value_col:
-        escaped = ", ".join(
-            f"'{code.replace(chr(39), chr(39)+chr(39))}'" for code in source_codes
+        quoted = ", ".join(
+            _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
         )
-        source_filter = f"t.{source_value_col} IN ({escaped})"
+        source_parts = [f"t.{source_value_col} IN ({quoted})"]
+        if source_name_col:
+            source_parts.append(f"t.{source_name_col} IN ({quoted})")
+        source_filter = f"({' OR '.join(source_parts)})"
 
     # Combine concept + source filters with OR
     if concept_filter and source_filter:
@@ -808,15 +811,26 @@ def _build_criterion_cte(
             ctes.append(inner_sql)
             cte_names.append(inner_name)
 
+            # P57 fix: use window function instead of correlated subquery O(N²)
+            windowed_name = next_cte_name("occ_win")
+            windowed_sql = (
+                f"{windowed_name} AS (\n"
+                f"  SELECT person_id, event_date,\n"
+                f"    COUNT(*) OVER (\n"
+                f"      PARTITION BY person_id ORDER BY event_date\n"
+                f"      RANGE BETWEEN CURRENT ROW AND INTERVAL '{int(occ_window_days)} days' FOLLOWING\n"
+                f"    ) AS cnt\n"
+                f"  FROM {inner_name}\n"
+                f")"
+            )
+            ctes.append(windowed_sql)
+            cte_names.append(windowed_name)
+
             cte_sql = (
                 f"{cte_name} AS (\n"
-                f"  SELECT DISTINCT a.person_id, a.event_date\n"
-                f"  FROM {inner_name} a\n"
-                f"  WHERE (\n"
-                f"    SELECT COUNT(*) FROM {inner_name} b\n"
-                f"    WHERE b.person_id = a.person_id\n"
-                f"      AND b.event_date BETWEEN a.event_date AND a.event_date + INTERVAL '{int(occ_window_days)} days'\n"
-                f"  ) {occ_op} {int(occ_count)}\n"
+                f"  SELECT DISTINCT person_id, event_date\n"
+                f"  FROM {windowed_name}\n"
+                f"  WHERE cnt {occ_op} {int(occ_count)}\n"
                 f")"
             )
         else:

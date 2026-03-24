@@ -6,6 +6,7 @@ import {
   Area, AreaChart, Legend, ReferenceLine,
 } from 'recharts';
 import { cohortApi, estimationApi } from '../api/client';
+import { useChartTheme } from '../hooks/useChartTheme';
 import type { CohortSummary, KaplanMeierResult, KMPoint } from '../types';
 import {
   Card, Button, Select, Statistic, Empty, Spinner, Tag, Checkbox, useToast,
@@ -17,6 +18,7 @@ const STRATA_COLORS = ['#10B981', '#14b8a6', '#3B82F6', '#8B5CF6', '#F59E0B', '#
 export default function EstimationPage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const ct = useChartTheme();
   const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
   const [targetId, setTargetId] = useState<number | null>(null);
   const [outcomeId, setOutcomeId] = useState<number | null>(null);
@@ -27,7 +29,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
 
   useEffect(() => {
     if (!selectedCdm) return;
-    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => {});
+    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => toast.error(t('common.error', 'Failed to load cohorts')));
   }, [selectedCdm]);
 
   const compute = async () => {
@@ -76,7 +78,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
 
       <Card size="small" className="mb-4">
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <span className="text-sm font-semibold text-text-bright block mb-1">
                 {t('estimation.target_cohort', 'Target Cohort')}
@@ -101,7 +103,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <span className="text-sm font-semibold text-text-bright block mb-1">
                 {t('estimation.time_unit', 'Time Unit')}
@@ -164,7 +166,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
       {result && !computing && (
         <>
           {/* Summary stats */}
-          <div className="grid grid-cols-4 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <Card size="small">
               <Statistic title="N" value={result.summary.n} />
             </Card>
@@ -204,13 +206,13 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
             <ResponsiveContainer width="100%" height={400}>
               {hasStrata ? (
                 <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time" label={{ value: timeUnit, position: 'bottom' }} />
-                  <YAxis domain={[0, 1]} label={{ value: 'Survival', angle: -90, position: 'insideLeft' }} />
-                  <Tooltip formatter={(value: number) => value.toFixed(4)} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                  <XAxis dataKey="time" stroke={ct.axis} label={{ value: timeUnit, position: 'bottom' }} />
+                  <YAxis domain={[0, 1]} stroke={ct.axis} label={{ value: 'Survival', angle: -90, position: 'insideLeft' }} />
+                  <Tooltip formatter={(value: number) => value.toFixed(4)} contentStyle={ct.tooltipStyle} />
                   <Legend />
                   {result.median_survival != null && (
-                    <ReferenceLine y={0.5} stroke="#64748B" strokeDasharray="5 5" label="Median" />
+                    <ReferenceLine y={0.5} stroke={ct.reference} strokeDasharray="5 5" label="Median" />
                   )}
                   {strataNames.map((name, i) => (
                     <Line
@@ -226,28 +228,28 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
                 </LineChart>
               ) : (
                 <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time" label={{ value: timeUnit, position: 'bottom' }} />
-                  <YAxis domain={[0, 1]} label={{ value: 'Survival', angle: -90, position: 'insideLeft' }} />
-                  <Tooltip formatter={(value: number) => value.toFixed(4)} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                  <XAxis dataKey="time" stroke={ct.axis} label={{ value: timeUnit, position: 'bottom' }} />
+                  <YAxis domain={[0, 1]} stroke={ct.axis} label={{ value: 'Survival', angle: -90, position: 'insideLeft' }} />
+                  <Tooltip formatter={(value: number) => value.toFixed(4)} contentStyle={ct.tooltipStyle} />
                   {result.median_survival != null && (
-                    <ReferenceLine y={0.5} stroke="#64748B" strokeDasharray="5 5" label="Median" />
+                    <ReferenceLine y={0.5} stroke={ct.reference} strokeDasharray="5 5" label="Median" />
                   )}
                   <Area
                     type="stepAfter"
                     dataKey="ci_upper"
                     stroke="none"
-                    fill="#3B82F6"
+                    fill={ct.blue}
                     fillOpacity={0.1}
                   />
                   <Area
                     type="stepAfter"
                     dataKey="ci_lower"
                     stroke="none"
-                    fill="#ffffff"
+                    fill={ct.label}
                     fillOpacity={1}
                   />
-                  <Line type="stepAfter" dataKey="survival" stroke="#3B82F6" dot={false} strokeWidth={2} />
+                  <Line type="stepAfter" dataKey="survival" stroke={ct.blue} dot={false} strokeWidth={2} />
                 </AreaChart>
               )}
             </ResponsiveContainer>

@@ -12,7 +12,8 @@ def _make_mock_conn(table_names, fetchone_sequence):
     Build a mock psycopg2 connection.
 
     - table_names: list of table name strings returned by information_schema query
-    - fetchone_sequence: list of tuples returned by successive fetchone() calls
+    - fetchone_sequence: list of tuples returned by successive fetchone() calls.
+      Each element should be a tuple matching the row returned by the query.
     """
     conn = MagicMock()
     cursor = MagicMock()
@@ -22,8 +23,8 @@ def _make_mock_conn(table_names, fetchone_sequence):
     # First call is always fetchall() for information_schema.tables
     cursor.fetchall = MagicMock(return_value=[(t,) for t in table_names])
 
-    # All subsequent calls are fetchone() — return in order
-    cursor.fetchone = MagicMock(side_effect=[(v,) for v in fetchone_sequence])
+    # All subsequent calls are fetchone() — return tuples in order
+    cursor.fetchone = MagicMock(side_effect=fetchone_sequence)
 
     return conn
 
@@ -54,33 +55,23 @@ def test_all_tables_present():
         "condition_occurrence", "drug_exposure", "measurement",
         "procedure_occurrence", "observation", "concept", "vocabulary",
     ]
-    # Execution order after table existence:
-    # Person: orphan_count, total_persons, future_births, unmapped_gender
-    # ObsPeriod: multi_obs, future_obs_end
-    # Clinical unmapped (cond, drug, meas, proc, obs): total, unmapped each
-    # Future dates (cond, drug, meas, proc, visit): future each
-    # Visit orphans (cond, drug, meas): orphans each
+    # P14 merged queries: each fetchone returns a multi-value tuple
     fetchone_seq = [
-        0,      # orphan persons (LEFT JOIN)
-        100,    # total persons
-        0,      # future births
-        0,      # unmapped gender
-        0,      # multi obs periods
-        0,      # future obs end dates
-        # condition_occurrence: total, unmapped
-        1000, 0,
-        # drug_exposure: total, unmapped
-        1000, 0,
-        # measurement: total, unmapped
-        1000, 0,
-        # procedure_occurrence: total, unmapped
-        1000, 0,
-        # observation: total, unmapped
-        1000, 0,
-        # future dates: cond, drug, meas, proc, visit
-        0, 0, 0, 0, 0,
-        # visit orphans: cond, drug, meas
-        0, 0, 0,
+        (100, 0, 0),    # person merged: total=100, unmapped_gender=0, future_births=0
+        (0,),            # orphan persons (LEFT JOIN with obs_period)
+        (0, 0),          # obs_period merged: multi_obs=0, future_obs=0
+        # condition_occurrence: total, unmapped, future_dates, orphans (has date + visit FK)
+        (1000, 0, 0, 0),
+        # drug_exposure: total, unmapped, future_dates, orphans
+        (1000, 0, 0, 0),
+        # measurement: total, unmapped, future_dates, orphans
+        (1000, 0, 0, 0),
+        # procedure_occurrence: total, unmapped, future_dates (no visit FK)
+        (1000, 0, 0),
+        # observation: total, unmapped (no date, no visit FK)
+        (1000, 0),
+        # visit_occurrence: future dates
+        (0,),
     ]
     conn = _make_mock_conn(all_tables, fetchone_seq)
     result = run_conformity_checks(conn, "omop_cdm")
@@ -92,14 +83,12 @@ def test_all_tables_present():
 
 def test_missing_tables():
     """Missing required tables should produce 'fail' structure checks."""
-    # Only person and concept exist
+    # Only person and concept exist (no observation_period)
     conn = _make_mock_conn(
         ["person", "concept"],
         [
-            0,    # orphan persons
-            50,   # total persons
-            0,    # future births
-            0,    # unmapped gender
+            (50, 0, 0),  # person merged: total=50, unmapped_gender=0, future_births=0
+            # No orphan query (observation_period missing → orphan_persons = total_persons)
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -120,12 +109,9 @@ def test_persons_without_obs_period_pass():
     conn = _make_mock_conn(
         ["person", "observation_period"],
         [
-            0,      # orphan persons
-            200,    # total persons
-            0,      # future births
-            0,      # unmapped gender
-            0,      # multi obs
-            0,      # future obs end
+            (200, 0, 0),  # person merged: total=200, unmapped_gender=0, future_births=0
+            (0,),          # orphan persons
+            (0, 0),        # obs_period merged: multi_obs=0, future_obs=0
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -138,12 +124,9 @@ def test_persons_without_obs_period_warning():
     conn = _make_mock_conn(
         ["person", "observation_period"],
         [
-            5,      # orphan persons
-            100,    # total persons
-            0,      # future births
-            0,      # unmapped gender
-            0,      # multi obs
-            0,      # future obs end
+            (100, 0, 0),  # person merged
+            (5,),          # orphan persons = 5
+            (0, 0),        # obs_period merged
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -157,12 +140,9 @@ def test_persons_without_obs_period_fail():
     conn = _make_mock_conn(
         ["person", "observation_period"],
         [
-            15,     # orphan persons
-            100,    # total persons
-            0,      # future births
-            0,      # unmapped gender
-            0,      # multi obs
-            0,      # future obs end
+            (100, 0, 0),  # person merged
+            (15,),         # orphan persons = 15
+            (0, 0),        # obs_period merged
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -176,10 +156,8 @@ def test_future_birth_years():
     conn = _make_mock_conn(
         ["person"],
         [
-            0,      # orphan persons (no obs_period table but LEFT JOIN still runs)
-            100,    # total persons
-            3,      # future births
-            0,      # unmapped gender
+            (100, 0, 3),  # person merged: total=100, unmapped_gender=0, future_births=3
+            # No obs_period → orphan = total (no separate query)
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -192,7 +170,7 @@ def test_future_birth_years_pass():
     """No future birth years → pass."""
     conn = _make_mock_conn(
         ["person"],
-        [0, 100, 0, 0],  # orphan, total, births, gender
+        [(100, 0, 0)],  # person merged: all clean
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "future_birth_years")
@@ -203,7 +181,7 @@ def test_unmapped_gender_warning():
     """3% unmapped gender → warning (1-5% range)."""
     conn = _make_mock_conn(
         ["person"],
-        [0, 100, 0, 3],  # orphan, total, births, gender=3
+        [(100, 3, 0)],  # person merged: total=100, unmapped_gender=3, future_births=0
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "unmapped_gender")
@@ -215,7 +193,7 @@ def test_unmapped_gender_fail():
     """10% unmapped gender → fail (>=5%)."""
     conn = _make_mock_conn(
         ["person"],
-        [0, 100, 0, 10],  # orphan, total, births, gender=10
+        [(100, 10, 0)],  # person merged: total=100, unmapped_gender=10
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "unmapped_gender")
@@ -228,7 +206,7 @@ def test_multiple_obs_periods_warning():
     """Persons with multiple observation periods → warning."""
     conn = _make_mock_conn(
         ["observation_period"],
-        [5, 0],  # multi_obs=5, future_obs_end=0
+        [(5, 0)],  # obs_period merged: multi_obs=5, future_obs=0
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "multiple_obs_periods")
@@ -240,7 +218,7 @@ def test_future_obs_end_dates():
     """Observation periods ending in the future → warning."""
     conn = _make_mock_conn(
         ["observation_period"],
-        [0, 10],  # multi_obs=0, future_obs_end=10
+        [(0, 10)],  # obs_period merged: multi_obs=0, future_obs=10
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "future_obs_end_dates")
@@ -252,9 +230,10 @@ def test_future_obs_end_dates():
 
 def test_unmapped_concepts_pass():
     """<5% unmapped concepts → pass."""
+    # condition_occurrence has date_col but no visit table → (total, unmapped, future_dates)
     conn = _make_mock_conn(
         ["condition_occurrence"],
-        [1000, 10],  # total=1000, unmapped=10 (1%)
+        [(1000, 10, 0)],  # total=1000, unmapped=10 (1%), future_dates=0
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "unmapped_concepts_condition_occurrence")
@@ -264,9 +243,10 @@ def test_unmapped_concepts_pass():
 
 def test_unmapped_concepts_warning():
     """10% unmapped concepts → warning (5-20% range)."""
+    # drug_exposure has date_col but no visit table → (total, unmapped, future_dates)
     conn = _make_mock_conn(
         ["drug_exposure"],
-        [1000, 100],  # total=1000, unmapped=100 (10%)
+        [(1000, 100, 0)],  # total=1000, unmapped=100 (10%), future_dates=0
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "unmapped_concepts_drug_exposure")
@@ -275,9 +255,10 @@ def test_unmapped_concepts_warning():
 
 def test_unmapped_concepts_fail():
     """25% unmapped concepts → fail (>=20%)."""
+    # measurement has date_col but no visit table → (total, unmapped, future_dates)
     conn = _make_mock_conn(
         ["measurement"],
-        [1000, 250],  # total=1000, unmapped=250 (25%)
+        [(1000, 250, 0)],  # total=1000, unmapped=250 (25%), future_dates=0
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "unmapped_concepts_measurement")
@@ -287,9 +268,10 @@ def test_unmapped_concepts_fail():
 
 def test_empty_clinical_table_warning():
     """Empty clinical table → warning."""
+    # procedure_occurrence has date_col but no visit table → (total, unmapped, future_dates)
     conn = _make_mock_conn(
         ["procedure_occurrence"],
-        [0],  # total=0 → empty table
+        [(0, 0, 0)],  # total=0 → empty table
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "unmapped_concepts_procedure_occurrence")
@@ -303,7 +285,7 @@ def test_future_dates_pass():
     """No future dates → pass."""
     conn = _make_mock_conn(
         ["visit_occurrence"],
-        [0],  # future visit dates = 0
+        [(0,)],  # future visit dates = 0
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "future_dates_visit_occurrence")
@@ -314,7 +296,7 @@ def test_future_dates_fail():
     """Many future dates → fail (>=100)."""
     conn = _make_mock_conn(
         ["visit_occurrence"],
-        [200],  # future visit dates = 200
+        [(200,)],  # future visit dates = 200
     )
     result = run_conformity_checks(conn, "omop_cdm")
     check = next(c for c in result["checks"] if c["id"] == "future_dates_visit_occurrence")
@@ -329,12 +311,14 @@ def test_visit_orphans_pass():
     conn = _make_mock_conn(
         ["visit_occurrence", "condition_occurrence", "drug_exposure", "measurement"],
         [
-            # Clinical unmapped: cond(total, unmapped), drug(total, unmapped), meas(total, unmapped)
-            100, 0, 100, 0, 100, 0,
-            # Future dates: cond, drug, meas, visit
-            0, 0, 0, 0,
-            # Visit orphans: cond, drug, meas
-            0, 0, 0,
+            # condition_occurrence: total, unmapped, future_dates, orphans (has date + visit FK)
+            (100, 0, 0, 0),
+            # drug_exposure: total, unmapped, future_dates, orphans
+            (100, 0, 0, 0),
+            # measurement: total, unmapped, future_dates, orphans
+            (100, 0, 0, 0),
+            # visit_occurrence: future dates
+            (0,),
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -348,12 +332,10 @@ def test_visit_orphans_fail():
     conn = _make_mock_conn(
         ["visit_occurrence", "condition_occurrence"],
         [
-            # condition_occurrence: total, unmapped
-            100, 0,
-            # future dates: cond, visit
-            0, 0,
-            # visit orphans: cond
-            500,
+            # condition_occurrence: total, unmapped, future_dates, orphans
+            (100, 0, 0, 500),
+            # visit_occurrence: future dates
+            (0,),
         ],
     )
     result = run_conformity_checks(conn, "omop_cdm")
@@ -372,20 +354,15 @@ def test_score_all_pass():
         "procedure_occurrence", "observation", "concept", "vocabulary",
     ]
     fetchone_seq = [
-        # Person: orphan, total, future_births, unmapped_gender
-        0, 1000, 0, 0,
-        # ObsPeriod: multi_obs, future_obs_end
-        0, 0,
-        # Clinical unmapped (5 tables × 2): total, unmapped
-        1000, 0,  # condition
-        1000, 0,  # drug
-        1000, 0,  # measurement
-        1000, 0,  # procedure
-        1000, 0,  # observation
-        # Future dates (5 tables): cond, drug, meas, proc, visit
-        0, 0, 0, 0, 0,
-        # Visit orphans (3 tables): cond, drug, meas
-        0, 0, 0,
+        (100, 0, 0),    # person merged
+        (0,),            # orphan persons
+        (0, 0),          # obs_period merged
+        (1000, 0, 0, 0), # condition_occurrence (date + visit FK)
+        (1000, 0, 0, 0), # drug_exposure (date + visit FK)
+        (1000, 0, 0, 0), # measurement (date + visit FK)
+        (1000, 0, 0),    # procedure_occurrence (date, no visit FK)
+        (1000, 0),       # observation (no date, no visit FK)
+        (0,),            # visit_occurrence future dates
     ]
     conn = _make_mock_conn(all_tables, fetchone_seq)
     result = run_conformity_checks(conn, "omop_cdm")
@@ -400,7 +377,7 @@ def test_score_with_failures():
     """Score should reflect the ratio of passed checks."""
     conn = _make_mock_conn(
         ["person", "concept"],
-        [0, 100, 0, 0],  # orphan, total, births, gender
+        [(100, 0, 0)],  # person merged: all clean
     )
     result = run_conformity_checks(conn, "omop_cdm")
 

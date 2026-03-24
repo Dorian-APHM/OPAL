@@ -14,7 +14,7 @@ import sys
 import time
 
 ATHENA_API = "https://athena.ohdsi.org/api/v1/concepts"
-PROXY = "http://a159230:Doudou05@10.61.131.6:3128"
+PROXY = "http://localhost:3128"
 PAGE_SIZE = 500  # max per page
 
 

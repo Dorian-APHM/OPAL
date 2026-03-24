@@ -13,6 +13,7 @@ import {
   Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts';
 import { useTranslation } from 'react-i18next';
+import { useChartTheme } from '../../hooks/useChartTheme';
 import { cohortApi } from '../../api/client';
 import type { CohortCriteria, CharacterizationResult } from '../../types';
 
@@ -46,6 +47,7 @@ interface Props {
 
 export default function CharacterizationPanel({ cdmName, criteria, cohortId }: Props) {
   const { t } = useTranslation();
+  const ct = useChartTheme();
   const toast = useToast();
   const [result, setResult] = useSessionState<CharacterizationResult | null>('cohort:char:result', null);
   const [loading, setLoading] = useSessionState('cohort:char:loading', false);
@@ -352,7 +354,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
             <Statistic
               title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" />{t('cohort.cohort_size', 'Cohort Size')}</div>}
               value={result.cohort_size?.toLocaleString()}
-              valueStyle={{ color: '#1890ff', fontSize: 28 }}
+              valueStyle={{ color: ct.blue, fontSize: 28 }}
               suffix="patients"
             />
           </Card>
@@ -393,11 +395,11 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                     </span>
                     <ResponsiveContainer width="100%" height={180}>
                       <BarChart data={result.demographics.age_groups} margin={{ left: -10 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="age_group" tick={{ fontSize: 10 }} />
-                        <YAxis tick={{ fontSize: 10 }} />
-                        <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
-                        <Bar dataKey="count" fill="#1890ff" />
+                        <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                        <XAxis dataKey="age_group" tick={{ fontSize: 10, fill: ct.axis }} stroke={ct.axis} />
+                        <YAxis tick={{ fontSize: 10, fill: ct.axis }} stroke={ct.axis} />
+                        <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} contentStyle={ct.tooltipStyle} />
+                        <Bar dataKey="count" fill={ct.blue} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -425,7 +427,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId }: P
                               <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
                             ))}
                           </Pie>
-                          <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
+                          <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} contentStyle={ct.tooltipStyle} />
                         </PieChart>
                       </ResponsiveContainer>
                       <div className="flex-1">

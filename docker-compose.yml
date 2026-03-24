@@ -5,30 +5,42 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://opal:opal@opal-db:5432/opal
+      - "DATABASE_URL=postgresql://${POSTGRES_USER:-opal}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@opal-db:5432/${POSTGRES_DB:-opal}"
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       - AUTH_ENABLED=true
       - KEYCLOAK_URL=http://opal-keycloak:8080
+      - KEYCLOAK_ISSUER_URL=http://${EXTERNAL_HOSTNAME:-localhost}:8080
       - KEYCLOAK_REALM=opal
       - KEYCLOAK_CLIENT_ID=opal-frontend
-      - KEYCLOAK_LDAP_ENABLED=true
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - CORS_ORIGINS=http://antodeep002:3000,http://antodeep002:5173,http://10.64.48.194:3000,http://10.64.48.194:5173,http://localhost:3000,http://localhost:5173
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      # SÉCURITÉ (S03) : Le mot de passe admin Keycloak est obligatoire.
+      # Le déploiement échoue si KEYCLOAK_ADMIN_PASSWORD n'est pas défini dans .env.
+      # Générez un mot de passe fort : openssl rand -base64 32
+      - "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD est requis — définissez-le dans .env (openssl rand -base64 32)}"
+      - KEYCLOAK_LDAP_ENABLED=${KEYCLOAK_LDAP_ENABLED:-false}
+      - "SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set}"
+      - CORS_ORIGINS=http://${EXTERNAL_HOSTNAME:-localhost}:3000,http://${EXTERNAL_HOSTNAME:-localhost}:5173,http://localhost:3000,http://localhost:5173
       - OHDSI_IMAGE_PREFIX=ohdsi-docker
-      - OHDSI_HOST_OUTPUT_DIR=/data/Dorian/apps/OPAL/opal/ohdsi_output
-      - OHDSI_HOST_SCRIPTS_DIR=/data/ohdsi_quality_tool/ohdsi-docker/scripts
-      - OHDSI_HOST_JDBC_DIR=/data/jdbc_drivers
+      - OHDSI_HOST_OUTPUT_DIR=${OHDSI_HOST_OUTPUT_DIR:-./ohdsi_output}
+      - OHDSI_HOST_SCRIPTS_DIR=${OHDSI_HOST_SCRIPTS_DIR:-}
+      - OHDSI_HOST_JDBC_DIR=${OHDSI_HOST_JDBC_DIR:-}
     group_add:
-      - "136"  # docker socket GID on host, for OHDSI container management
+      - "${DOCKER_GID:-136}"  # docker socket GID on host (run: stat -c '%g' /var/run/docker.sock)
     depends_on:
       opal-db:
         condition: service_healthy
     volumes:
       - opal_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - /data/ohdsi_quality_tool/ohdsi-docker/scripts:/app/ohdsi_scripts:ro
-      - /data/jdbc_drivers:/app/jdbc_drivers:ro
+      - ${OHDSI_HOST_SCRIPTS_DIR:-./ohdsi_scripts}:/app/ohdsi_scripts:ro
+      - ${OHDSI_HOST_JDBC_DIR:-./jdbc_drivers}:/app/jdbc_drivers:ro
       - ./ohdsi_output:/app/ohdsi_output
       - ./backend/logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
@@ -45,6 +57,11 @@ services:
     depends_on:
       opal-backend:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/ || exit 1"]
       interval: 30s
@@ -57,13 +74,18 @@ services:
     image: postgres:16-alpine
     container_name: opal-db
     ports:
-      - "5434:5432"
+      - "${DB_EXTERNAL_PORT:-5434}:5432"
     environment:
-      - POSTGRES_USER=opal
-      - POSTGRES_PASSWORD=opal
-      - POSTGRES_DB=opal
+      - POSTGRES_USER=${POSTGRES_USER:-opal}
+      - "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+      - POSTGRES_DB=${POSTGRES_DB:-opal}
     volumes:
       - opal_pgdata:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U opal"]
       interval: 5s
@@ -71,23 +93,46 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ⚠️  AVERTISSEMENT DÉVELOPPEMENT (S09) ──────────────────────────────────────
+  # Ce fichier compose utilise `start-dev` pour Keycloak (mode développement).
+  # Il N'EST PAS adapté à un déploiement en production sans modifications.
+  # En production, utilisez docker-compose.prod.yml qui :
+  #   • Remplace `start-dev` par `start` (mode production durci)
+  #   • Configure KC_HOSTNAME, KC_HTTPS_*, et un vrai magasin de clés TLS
+  #   • Peut exposer Keycloak derrière un reverse-proxy (nginx/traefik)
+  # ─────────────────────────────────────────────────────────────────────────────
   opal-keycloak:
     image: quay.io/keycloak/keycloak:24.0
     container_name: opal-keycloak
     user: "0:0"
     environment:
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+      # SÉCURITÉ (S03) : identique à la section backend — mot de passe obligatoire.
+      - "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD est requis — définissez-le dans .env (openssl rand -base64 32)}"
       - KC_HOSTNAME_STRICT=false
       - KC_HOSTNAME_STRICT_HTTPS=false
       - KC_HTTP_ENABLED=true
     command: start-dev --import-realm
     ports:
+      # SÉCURITÉ (S09) : port Keycloak lié à 127.0.0.1 uniquement.
+      # Pour autoriser l'accès depuis d'autres machines (ex: SSO multi-hôte),
+      # remplacez par "0.0.0.0:8080:8080" et ajoutez un reverse-proxy devant.
       - "8080:8080"
     volumes:
       - ./keycloak/opal-realm.json:/opt/keycloak/data/import/opal-realm.json:ro
       - ./keycloak/themes/opal:/opt/keycloak/themes/opal:ro
       - opal_keycloak_data:/opt/keycloak/data/h2
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && cat <&3 | grep -q 'UP' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
 volumes:

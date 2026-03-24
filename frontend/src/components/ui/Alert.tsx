@@ -23,14 +23,14 @@ interface AlertProps {
 export function Alert({ type = 'info', message, description, showIcon = true, closable, onClose, className = '' }: AlertProps) {
   const s = styles[type];
   return (
-    <div className={`flex items-start gap-3 p-4 rounded-xl border ${s.bg} ${s.border} ${className}`}>
-      {showIcon && s.icon}
+    <div role="alert" className={`flex items-start gap-3 p-4 rounded-xl border ${s.bg} ${s.border} ${className}`}>
+      {showIcon && <span aria-hidden="true">{s.icon}</span>}
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-text-bright">{message}</div>
         {description && <div className="text-xs text-text-muted mt-1">{description}</div>}
       </div>
       {closable && (
-        <button onClick={onClose} className="text-text-dim hover:text-text-muted cursor-pointer bg-transparent border-none shrink-0">
+        <button onClick={onClose} className="text-text-dim hover:text-text-muted cursor-pointer bg-transparent border-none shrink-0" aria-label="Close alert">
           <X className="h-4 w-4" />
         </button>
       )}
