@@ -192,6 +192,27 @@ def _start_inmemory_cleanup():
     logger.info("In-memory task cleanup started (evicts stale tasks every 5 min)")
 
 
+# ---------------------------------------------------------------------------
+# OHDSI output dirs — ensure per-CDM folders exist for all registered CDMs
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+def _ensure_ohdsi_dirs():
+    """Create OHDSI output sub-folders for every registered CDM at startup."""
+    from db.app_db import SessionLocal
+    from db.models import CdmConfig as _CdmConfig
+    from modules.ohdsi.router import ensure_cdm_output_dirs
+    try:
+        db = SessionLocal()
+        cdm_names = [c.name for c in db.query(_CdmConfig.name).all()]
+        db.close()
+        for name in cdm_names:
+            ensure_cdm_output_dirs(name)
+        if cdm_names:
+            logger.info("OHDSI output dirs ensured for %d CDMs", len(cdm_names))
+    except Exception:
+        logger.warning("Could not create OHDSI output dirs at startup", exc_info=True)
+
+
 @app.on_event("shutdown")
 def _shutdown_pools():
     _evictor_stop.set()

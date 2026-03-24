@@ -19,6 +19,7 @@ type ServiceStatus = 'idle' | 'running' | 'done' | 'error';
 interface ServiceState {
   status: ServiceStatus;
   logs: string[];
+  cdm_name?: string;
 }
 
 interface FileEntry {
@@ -99,7 +100,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
           const next = { ...prev };
           for (const [svc, info] of Object.entries(res.data)) {
             if (!next[svc]) next[svc] = { status: 'idle', logs: [] };
-            next[svc] = { ...next[svc], status: info.status as ServiceStatus };
+            next[svc] = { ...next[svc], status: info.status as ServiceStatus, cdm_name: (info as any).cdm_name || '' };
           }
           return next;
         });
@@ -117,9 +118,14 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     }).catch(() => setFiles([])).finally(() => setLoadingFiles(false));
   }, []);
 
+  // Auto-navigate file browser to CDM-specific folder
   useEffect(() => {
-    loadFiles('');
-  }, [loadFiles]);
+    if (selectedCdm) {
+      loadFiles(selectedCdm);
+    } else {
+      loadFiles('');
+    }
+  }, [loadFiles, selectedCdm]);
 
   // SSE log streaming with auto-reconnect and offset tracking
   const startSSE = useCallback(async (service: string) => {
@@ -340,12 +346,18 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           {SERVICES.map(({ key, label }) => {
             const status = getStatus(key);
+            const svcCdm = services[key]?.cdm_name;
             const isRunning = status === 'running';
             return (
               <Card key={key} size="small" className="text-center">
                 <div className="flex flex-col items-center gap-2">
                   <Badge status={STATUS_BADGE[status]} />
                   <div className="font-semibold text-text-bright text-[13px]">{label}</div>
+                  {svcCdm && status !== 'idle' && (
+                    <div className="text-xs text-text-dim truncate max-w-full" title={svcCdm}>
+                      CDM: {svcCdm}
+                    </div>
+                  )}
                   <Tag color={STATUS_TAG_COLOR[status]}>
                     {t(`ohdsi.status_${status}`)}
                   </Tag>
