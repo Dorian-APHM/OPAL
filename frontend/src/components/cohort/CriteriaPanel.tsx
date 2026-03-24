@@ -75,14 +75,15 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
       setSourceSearchResults([]);
       return;
     }
+    const abort = new AbortController();
     const timer = setTimeout(() => {
       setSourceSearchLoading(true);
       conceptApi.searchSourceValue(cdmName, { q: sourceSearchQuery, domain: sourceCodeDomain, limit: 20 })
-        .then(r => setSourceSearchResults(r.data.results))
-        .catch(() => setSourceSearchResults([]))
-        .finally(() => setSourceSearchLoading(false));
+        .then(r => { if (!abort.signal.aborted) setSourceSearchResults(r.data.results); })
+        .catch(() => { if (!abort.signal.aborted) setSourceSearchResults([]); })
+        .finally(() => { if (!abort.signal.aborted) setSourceSearchLoading(false); });
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); abort.abort(); };
   }, [sourceSearchQuery, sourceCodeDomain, cdmName]);
 
   const toggleSourceCode = (code: string) => {
@@ -154,9 +155,6 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
     Condition: 'CIM-10',
     Procedure: 'CCAM',
     Drug: 'ATC / UCD',
-    Measurement: 'NABM / LOINC',
-    Observation: 'Source',
-    Device: 'LPP',
   };
   const domainOptions = domains.map(d => ({
     value: d.name,
@@ -234,7 +232,14 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
 
           {/* Source search results */}
           {sourceSearchLoading ? (
-            <div className="text-center p-2"><Spinner size="small" /></div>
+            <div className="p-2 space-y-1.5">
+              <div className="text-xs text-text-dim text-center">{t('cohort.searching_source_codes', 'Searching source codes...')}</div>
+              <div className="h-1.5 w-full bg-surface-dark rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-accent rounded-full animate-[progress_2s_ease-in-out_infinite]"
+                  style={{ width: '60%', animation: 'progress 2s ease-in-out infinite' }} />
+              </div>
+              <style>{`@keyframes progress { 0% { width: 5%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 5%; margin-left: 95%; } }`}</style>
+            </div>
           ) : sourceSearchResults.length > 0 ? (
             <div className="max-h-[200px] overflow-auto">
               {sourceSearchResults.map(r => {

@@ -76,7 +76,10 @@ export function Select({
             leaveFrom="opacity-100"
             leaveTo="opacity-0"
           >
-            <ListboxOptions className="absolute z-50 mt-1 max-h-60 min-w-full w-max max-w-[320px] overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)] py-1 text-sm focus:outline-none">
+            <ListboxOptions
+              anchor="bottom start"
+              className="z-[9999] mt-1 max-h-60 min-w-[var(--button-width)] w-max max-w-[320px] overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)] py-1 text-sm focus:outline-none"
+            >
               {options.map((option) => (
                 <ListboxOption
                   key={option.value}
