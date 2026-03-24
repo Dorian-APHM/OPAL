@@ -65,23 +65,28 @@ export function useNotifDots(notifType: string) {
   const markRead = useCallback(
     (itemId: string) => {
       if (!unreadItems.has(itemId)) return;
-      notificationsApi.markItemRead(notifType, itemId).catch(() => {});
       setUnreadItems(prev => {
         const next = new Set(prev);
         next.delete(itemId);
         return next;
       });
-      // Tell the sidebar to refresh badge counts
-      window.dispatchEvent(new Event('opal:badges-refresh'));
+      // Dispatch badge refresh only after the API call completes, to avoid a
+      // race where the immediate refresh re-fetches stale unread data.
+      notificationsApi.markItemRead(notifType, itemId)
+        .then(() => window.dispatchEvent(new Event('opal:badges-refresh')))
+        .catch(() => {});
     },
     [notifType, unreadItems]
   );
 
   // Stable reference — safe to use in useEffect deps without re-triggering loops
   const markAllReadForType = useCallback(() => {
-    notificationsApi.markAllRead(notifType).catch(() => {});
     setUnreadItems(new Set());
-    window.dispatchEvent(new Event('opal:badges-refresh'));
+    // Dispatch badge refresh only after the API call completes, to avoid a
+    // race where the immediate refresh re-fetches stale unread data.
+    notificationsApi.markAllRead(notifType)
+      .then(() => window.dispatchEvent(new Event('opal:badges-refresh')))
+      .catch(() => {});
   }, [notifType]);
 
   // Check if any unread item exists except the given ones

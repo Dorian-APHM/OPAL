@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSessionState } from '../hooks/useSessionState';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, TextArea, NumberInput,
@@ -524,6 +525,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         reason: reasonText,
       });
       toast.success(`${action}: ${sv}`);
+      window.dispatchEvent(new Event('opal:badges-refresh'));
       setResults(prev => prev.filter(r => r.source_value !== sv));
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Decision failed');
@@ -552,6 +554,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
       } catch { /* continue */ }
     }
     toast.success(`Approved ${count} mappings`);
+    if (count > 0) window.dispatchEvent(new Event('opal:badges-refresh'));
     setResults(prev => prev.filter(r =>
       !(r.suggestions.length > 0 && r.suggestions[0].confidence >= minConfidence)
     ));
@@ -816,6 +819,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
         reason: reason || '',
       });
       toast.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${conceptInfo.concept_name}`);
+      window.dispatchEvent(new Event('opal:badges-refresh'));
       // Reset form
       setSelectedSource(null);
       setConceptInfo(null);
@@ -1023,6 +1027,65 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   );
 }
 
+// ============ REASON CELL WITH CARD HOVER ============
+
+function ReasonCell({ value }: { value: string }) {
+  const [hovered, setHovered] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number; height: number; width: number } | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const handleMouseEnter = () => {
+    if (ref.current) {
+      const cellRect = ref.current.getBoundingClientRect();
+      const tr = ref.current.closest('tr');
+      const trRect = tr?.getBoundingClientRect();
+      setPos({
+        top: trRect ? trRect.bottom : cellRect.bottom,
+        left: cellRect.left,
+        height: trRect?.height ?? cellRect.height,
+        width: trRect ? trRect.right - cellRect.left : 300,
+      });
+    }
+    setHovered(true);
+  };
+
+  return (
+    <div ref={ref} onMouseEnter={handleMouseEnter} onMouseLeave={() => setHovered(false)}>
+      <span className="truncate block max-w-[140px] cursor-default">{value}</span>
+      {pos && createPortal(
+        <div style={{
+          position: 'fixed',
+          top: pos.top,
+          left: pos.left,
+          width: 'fit-content',
+          maxWidth: pos.width,
+          zIndex: 9999,
+          pointerEvents: 'none',
+          filter: 'drop-shadow(-2px 2px 8px rgba(50,50,0,0.3))',
+          clipPath: hovered ? 'inset(0 0 0 0)' : 'inset(0 100% 0 0)',
+          transition: '0.5s ease',
+        }}>
+          <div style={{
+            padding: '14px 16px', backgroundColor: 'var(--color-surface)',
+            border: '1px solid var(--color-glass-border)',
+            transition: '0.5s ease', fontSize: '0.85rem', color: 'var(--color-text-bright)',
+            wordBreak: 'break-word', lineHeight: 1.5,
+          }}>
+            <span style={{
+              display: 'block',
+              opacity: hovered ? 1 : 0,
+              transition: '0.5s ease',
+            }}>
+              {value}
+            </span>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
 // ============ TAB 5: MAPPING HISTORY ============
 
 function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKey?: number }) {
@@ -1104,7 +1167,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
 
   const columns: Column<MappingDecisionEntry>[] = [
     { title: t('mapping.domain', 'Domain'), dataIndex: 'domain', key: 'd', width: 100 },
-    { title: t('mapping.source_value', 'Source'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
+    { title: t('mapping.source_value', 'Source'), dataIndex: 'source_value', key: 'sv', width: 160, ellipsis: true },
     { title: t('mapping.action', 'Action'), dataIndex: 'action', key: 'a', width: 100,
       render: (a: string) => <Tag color={actionColor(a)}>{a}</Tag> },
     { title: t('mapping.target', 'Target'), key: 'target', width: 200,
@@ -1114,7 +1177,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
     { title: t('mapping.confidence', 'Confidence'), dataIndex: 'confidence_score', key: 'c', width: 80,
       render: (v: number | null) => v != null ? <Tag>{v}%</Tag> : '—' },
     { title: t('mapping.reason', 'Reason'), dataIndex: 'reason', key: 'reason', width: 150, ellipsis: true,
-      render: (v: string) => v || <span className="text-text-dim">—</span> },
+      render: (v: string) => v
+        ? <ReasonCell value={v} />
+        : <span className="text-text-dim">—</span> },
     { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 120,
       render: (v: string) => v?.substring(0, 16).replace('T', ' ') },
     { title: '', key: 'actions', width: 50,

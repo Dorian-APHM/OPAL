@@ -16,6 +16,7 @@ import { Tooltip } from '../ui/Tooltip';
 import GlobalSearch from '../GlobalSearch';
 import NotificationCenter from '../NotificationCenter';
 import { useTheme } from '../../hooks/useTheme';
+import { useToast } from '../ui/Toast';
 
 interface TopNavProps {
   selectedCdm: string | null;
@@ -80,6 +81,20 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
 
   // --- WebSocket for real-time notifications ---
   useNotificationWs(!!authenticated && !!token);
+  const toast = useToast();
+
+  // --- Global toast for background analysis notifications ---
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (!notif?.title) return;
+      if (notif.type === 'quality_done' || notif.type === 'conformity_done') {
+        toast.success(notif.title);
+      }
+    };
+    window.addEventListener('opal:notification', handler);
+    return () => window.removeEventListener('opal:notification', handler);
+  }, [toast]);
 
   // --- Notification badges ---
   const [badges, setBadges] = useState<Record<string, number>>({});
