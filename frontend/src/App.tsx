@@ -159,7 +159,7 @@ export default function App() {
   return (
     <div className="h-screen overflow-hidden bg-deep-base">
       <TopNav selectedCdm={selectedCdm} onCdmChange={handleCdmChange} />
-      <main className="pt-[56px] h-full overflow-y-auto px-3 lg:px-4 pb-4 max-w-[1920px] mx-auto">
+      <main className="pt-[68px] h-full overflow-y-auto px-3 lg:px-4 pb-4 max-w-[1920px] mx-auto">
         <Routes>
           <Route path="/" element={<ProtectedRoute path="/"><PageSuspense><HomePage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/quality" element={<ProtectedRoute path="/quality"><PageSuspense><QualityPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />

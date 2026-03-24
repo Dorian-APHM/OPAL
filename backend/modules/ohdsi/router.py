@@ -6,6 +6,7 @@ and streams their logs in real-time via SSE.
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -59,9 +60,30 @@ SERVICES = {
     },
 }
 
+# Directories that must exist for every CDM (even empty, for manual uploads)
+_CDM_OUTPUT_DIRS = sorted({s["output_dir"] for s in SERVICES.values()})  # achilles, cdmonboarding, dqd
+
 # In-memory state tracking
 _tasks: dict[str, dict] = {}
 _lock = threading.Lock()
+
+
+def ensure_cdm_output_dirs(cdm_name: str) -> None:
+    """Create the OHDSI output sub-folders for a CDM if they don't exist.
+
+    Directories are created with mode 0o777 so the host user can also
+    write into them (e.g. to drop files manually).
+    """
+    base = Path(OHDSI_OUTPUT_DIR) / cdm_name
+    for d in _CDM_OUTPUT_DIRS:
+        target = base / d
+        target.mkdir(parents=True, exist_ok=True)
+        # Ensure permissive mode even if umask restricted it
+        try:
+            target.chmod(0o777)
+            target.parent.chmod(0o777)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +106,10 @@ def _get_image_name(service_name: str) -> str:
     return f"{OHDSI_IMAGE_PREFIX}-{service_name}"
 
 
-def _run_container(service_name: str, env_vars: dict, creds_file: str | None = None) -> None:
+def _run_container(service_name: str, env_vars: dict, creds_file: str | None = None, cdm_name: str = "") -> None:
     """Run an OHDSI container in a background thread and collect logs.
 
+    cdm_name: used to organise output into per-CDM sub-folders.
     creds_file: path to a temporary credentials file that will be deleted
     after the container starts (S08: avoid plaintext password in env vars /
     docker inspect). The file is mounted at /run/secrets/opal_creds.env inside
@@ -124,14 +147,16 @@ def _run_container(service_name: str, env_vars: dict, creds_file: str | None = N
     host_output = OHDSI_HOST_OUTPUT_DIR
     host_scripts = OHDSI_HOST_SCRIPTS_DIR
 
+    # Organise output per CDM: ohdsi_output/{cdm_name}/{service_output_dir}
+    cdm_folder = cdm_name or "default"
     volumes = {
         host_scripts: {"bind": "/app/scripts", "mode": "ro"},
-        f"{host_output}/{service_cfg['output_dir']}": {"bind": "/output", "mode": "rw"},
+        f"{host_output}/{cdm_folder}/{service_cfg['output_dir']}": {"bind": "/output", "mode": "rw"},
         OHDSI_HOST_JDBC_DIR: {"bind": "/drivers", "mode": "ro"},
     }
-    # CDM Onboarding needs DQD output
+    # CDM Onboarding needs DQD output from the *same* CDM
     if service_name == "cdmonboarding":
-        volumes[f"{host_output}/dqd"] = {"bind": "/input/dqd", "mode": "ro"}
+        volumes[f"{host_output}/{cdm_folder}/dqd"] = {"bind": "/input/dqd", "mode": "ro"}
 
     # Mount the credentials file read-only so the container entrypoint can source it.
     # The file is deleted from the host right after container creation.
@@ -265,16 +290,24 @@ def run_service(service_name: str, req: RunRequest, request: Request, db: Sessio
     user = getattr(request.state, "user", {}) or {}
     launched_by = user.get("preferred_username", "anonymous")
 
+    # Validate cdm_name is safe for use as a folder name (no path separators or special chars)
+    if not req.cdm_name or not re.match(r'^[A-Za-z0-9_\-. ]+$', req.cdm_name):
+        raise HTTPException(status_code=400, detail="CDM name contains invalid characters for folder name")
+
+    # Ensure all OHDSI output directories exist for this CDM
+    ensure_cdm_output_dirs(req.cdm_name)
+
     with _lock:
         _tasks[service_name] = {
             "container_id": None,
             "status": "running",
             "launched_by": launched_by,
+            "cdm_name": req.cdm_name,
             "logs": [f"Launching {SERVICES[service_name]['label']} for {req.cdm_name}..."],
         }
 
     from utils.thread_pool import submit_task
-    submit_task(_run_container, service_name, env_vars, creds_path)
+    submit_task(_run_container, service_name, env_vars, creds_path, req.cdm_name)
 
     return {"ok": True}
 
@@ -323,9 +356,13 @@ def get_status(request: Request):
         for svc in SERVICES:
             task = _tasks.get(svc)
             if task:
-                result[svc] = {"status": task["status"], "log_count": len(task["logs"])}
+                result[svc] = {
+                    "status": task["status"],
+                    "log_count": len(task["logs"]),
+                    "cdm_name": task.get("cdm_name", ""),
+                }
             else:
-                result[svc] = {"status": "idle", "log_count": 0}
+                result[svc] = {"status": "idle", "log_count": 0, "cdm_name": ""}
     return result
 
 
