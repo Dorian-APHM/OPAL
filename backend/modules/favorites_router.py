@@ -4,7 +4,7 @@ User Favorites endpoints.
 Allows users to bookmark cohorts, concepts, queries, CDMs.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,8 @@ class AddFavoriteRequest(BaseModel):
 def list_favorites(
     request: Request,
     item_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     """List favorites for the current user."""
@@ -35,7 +37,8 @@ def list_favorites(
     q = db.query(UserFavorite).filter(UserFavorite.username == username)
     if item_type:
         q = q.filter(UserFavorite.item_type == item_type)
-    favs = q.order_by(UserFavorite.created_at.desc()).all()
+    total = q.count()
+    favs = q.order_by(UserFavorite.created_at.desc()).offset(offset).limit(limit).all()
 
     return {
         "favorites": [
@@ -48,7 +51,10 @@ def list_favorites(
                 "created_at": f.created_at.isoformat() if f.created_at else None,
             }
             for f in favs
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 

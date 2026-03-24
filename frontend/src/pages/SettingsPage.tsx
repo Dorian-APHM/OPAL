@@ -71,27 +71,27 @@ export default function SettingsPage({ selectedCdm }: Props) {
       <Card className="max-w-lg">
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.omop_schema')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.omop_schema')} <span className="text-red-400">*</span></label>
             <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_unmapped_terms')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_unmapped_terms')} <span className="text-red-400">*</span></label>
             <NumberInput value={topUnmappedTerms ?? undefined} onChange={(v) => setTopUnmappedTerms(v)} min={1} max={500} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_concepts')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_concepts')} <span className="text-red-400">*</span></label>
             <NumberInput value={topConcepts ?? undefined} onChange={(v) => setTopConcepts(v)} min={1} max={500} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.max_records_per_person')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.max_records_per_person')} <span className="text-red-400">*</span></label>
             <NumberInput value={maxRecordsPerPerson ?? undefined} onChange={(v) => setMaxRecordsPerPerson(v)} min={10} max={1000} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.max_observation_months')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.max_observation_months')} <span className="text-red-400">*</span></label>
             <NumberInput value={maxObservationMonths ?? undefined} onChange={(v) => setMaxObservationMonths(v)} min={12} max={600} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.comparison_threshold')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.comparison_threshold')} <span className="text-red-400">*</span></label>
             <NumberInput value={comparisonAlertThreshold ?? undefined} onChange={(v) => setComparisonAlertThreshold(v)} min={0.1} max={50} step={0.5} />
           </div>
           <Button variant="primary" onClick={handleSave} loading={loading}>

@@ -43,17 +43,26 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-deep-base relative">
-      {/* Background glow */}
-      <div className="fixed top-[30%] left-1/2 w-[600px] h-[400px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(16,185,129,0.12)_0%,transparent_70%)] pointer-events-none" />
+    <div className="flex items-center justify-center min-h-screen bg-deep-base relative overflow-hidden">
+      {/* Background pattern — dot grid */}
+      <div className="fixed inset-0 pointer-events-none opacity-[0.04]" style={{
+        backgroundImage: 'radial-gradient(circle, currentColor 1px, transparent 1px)',
+        backgroundSize: '24px 24px',
+      }} />
+      {/* Background glow — primary emerald */}
+      <div className="fixed top-[25%] left-1/2 w-[90vw] max-w-[700px] h-[500px] -translate-x-1/2 -translate-y-1/2 bg-[radial-gradient(ellipse,rgba(16,185,129,0.15)_0%,transparent_65%)] pointer-events-none" />
+      {/* Background glow — secondary blue */}
+      <div className="fixed bottom-[5%] right-[5%] w-[400px] h-[400px] bg-[radial-gradient(ellipse,rgba(59,130,246,0.08)_0%,transparent_65%)] pointer-events-none" />
+      {/* Background glow — tertiary teal top-left */}
+      <div className="fixed top-[10%] left-[5%] w-[300px] h-[300px] bg-[radial-gradient(ellipse,rgba(20,184,166,0.06)_0%,transparent_65%)] pointer-events-none" />
 
-      <Card className="w-[460px]" hoverable={false}>
+      <Card className="w-full max-w-[460px] mx-4 opal-card-accent" hoverable={false}>
         <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center mb-3">
-            <img src="/opal-logo.png" alt="OPAL" className="h-16 w-16 object-contain" />
+          <div className="relative inline-block mb-3">
+            <img src="/opal-logo.svg" alt="OPAL" className="h-24 mx-auto drop-shadow-[0_0_20px_rgba(16,185,129,0.3)]" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 bg-emerald-accent/15 rounded-full blur-2xl" />
           </div>
-          <h2 className="text-2xl font-bold text-text-bright mb-1">OPAL</h2>
-          <p className="text-sm text-text-muted">OMOP Platform for Analytics & Lineage</p>
+          <p className="text-text-muted text-sm tracking-wide">OMOP Platform for Analytics & Lineage</p>
         </div>
 
         <Tabs
@@ -92,10 +101,11 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     error={errors.username}
+                    required
                   />
                   <div>
                     <Select
-                      label="Rôle demandé"
+                      label="Rôle demandé *"
                       placeholder="Choisir un rôle"
                       value={role}
                       onChange={setRole}

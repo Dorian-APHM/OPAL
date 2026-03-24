@@ -9,30 +9,19 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from utils.rate_limit import limiter
 
 from db.app_db import get_db
 from db.models import (
-    CdmConfig, Cohort, CohortVersion, AnalysisSettings, IncidenceAnalysis,
+    Cohort, CohortVersion, IncidenceAnalysis,
 )
-from db.omop_connector import get_omop_connection
-from utils.crypto import decrypt_password
-from config import DEFAULT_OMOP_SCHEMA
+from utils.cdm_helper import get_cdm_connection as _get_cdm_conn, check_cdm_access
 from modules.cohort.sql_builder import build_cohort_sql
 from modules.incidence.engine import build_incidence_sql, compute_incidence
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/incidence", tags=["incidence"])
 
-
-def _get_cdm_conn(db: Session, cdm_name: str):
-    cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
-    if not cdm:
-        raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
-    password = decrypt_password(cdm.db_password_encrypted)
-    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
-    settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
-    schema = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
-    return conn, schema
 
 
 def _get_cohort_sql(db: Session, cohort_id: int, omop_schema: str) -> tuple[str, str]:
@@ -126,7 +115,10 @@ class IncidenceSaveRequest(BaseModel):
 
 
 @router.post("/compute")
-def compute_incidence_rate(body: IncidenceComputeRequest, db=Depends(get_db)):
+@limiter.limit("3/minute")
+def compute_incidence_rate(body: IncidenceComputeRequest, request: Request, db=Depends(get_db)):
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, body.cdm_name)
     conn, omop_schema = _get_cdm_conn(db, body.cdm_name)
     try:
         target_sql, target_name = _get_cohort_sql(db, body.target_cohort_id, omop_schema)
@@ -164,7 +156,9 @@ def compute_incidence_rate(body: IncidenceComputeRequest, db=Depends(get_db)):
 
 
 @router.post("/save")
-def save_incidence_analysis(body: IncidenceSaveRequest, db=Depends(get_db)):
+def save_incidence_analysis(body: IncidenceSaveRequest, request: Request, db=Depends(get_db)):
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, body.cdm_name)
     analysis = IncidenceAnalysis(
         cdm_name=body.cdm_name,
         name=body.name,
@@ -180,7 +174,9 @@ def save_incidence_analysis(body: IncidenceSaveRequest, db=Depends(get_db)):
 
 
 @router.get("/")
-def list_incidence_analyses(cdm_name: str | None = None, db=Depends(get_db)):
+def list_incidence_analyses(request: Request, cdm_name: str | None = None, db=Depends(get_db)):
+    if cdm_name:
+        check_cdm_access(request, cdm_name)
     q = db.query(IncidenceAnalysis)
     if cdm_name:
         q = q.filter(IncidenceAnalysis.cdm_name == cdm_name)
@@ -201,10 +197,11 @@ def list_incidence_analyses(cdm_name: str | None = None, db=Depends(get_db)):
 
 
 @router.get("/{analysis_id}")
-def get_incidence_analysis(analysis_id: int, db=Depends(get_db)):
+def get_incidence_analysis(analysis_id: int, request: Request, db=Depends(get_db)):
     a = db.query(IncidenceAnalysis).filter(IncidenceAnalysis.id == analysis_id).first()
     if not a:
         raise HTTPException(status_code=404, detail="Incidence analysis not found")
+    check_cdm_access(request, a.cdm_name)
     return {
         "id": a.id,
         "cdm_name": a.cdm_name,
@@ -215,3 +212,15 @@ def get_incidence_analysis(analysis_id: int, db=Depends(get_db)):
         "results": json.loads(a.results_json) if a.results_json else {},
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
+
+
+@router.delete("/{analysis_id}")
+def delete_incidence_analysis(analysis_id: int, request: Request, db: Session = Depends(get_db)):
+    """Delete an incidence analysis."""
+    analysis = db.query(IncidenceAnalysis).filter(IncidenceAnalysis.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    check_cdm_access(request, analysis.cdm_name)
+    db.delete(analysis)
+    db.commit()
+    return {"message": "Deleted"}

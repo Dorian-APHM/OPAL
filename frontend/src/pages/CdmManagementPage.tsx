@@ -379,33 +379,32 @@ export default function CdmManagementPage() {
       <Card title={t('cdm.register')} className="mb-6">
         <div className="max-w-xl space-y-4">
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.name')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.name')} <span className="text-red-400">*</span></label>
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="flex items-start gap-4">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.host')}</label>
-              <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} />
+              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.host')} <span className="text-red-400">*</span></label>
+              <Input value={dbHost} onChange={(e) => setDbHost(e.target.value)} required />
             </div>
-            <div className="w-32">
-              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')}</label>
+            <div className="w-full md:w-32">
+              <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.port')} <span className="text-red-400">*</span></label>
               <NumberInput value={dbPort ?? undefined} onChange={(v) => setDbPort(v)} min={1} max={65535} />
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.database')}</label>
-            <Input value={dbName} onChange={(e) => setDbName(e.target.value)} />
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.database')} <span className="text-red-400">*</span></label>
+            <Input value={dbName} onChange={(e) => setDbName(e.target.value)} required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.user')}</label>
-            <Input value={dbUser} onChange={(e) => setDbUser(e.target.value)} />
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.user')} <span className="text-red-400">*</span></label>
+            <Input value={dbUser} onChange={(e) => setDbUser(e.target.value)} required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.password')}</label>
-            <Input type="password" value={dbPassword} onChange={(e) => setDbPassword(e.target.value)} />
+            <Input label={t('cdm.password')} type="password" value={dbPassword} onChange={(e) => setDbPassword(e.target.value)} required />
           </div>
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.schema')}</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.schema')} <span className="text-red-400">*</span></label>
             <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
           </div>
           <div className="flex items-center gap-2">
@@ -486,7 +485,7 @@ export default function CdmManagementPage() {
             value={accessCdm}
             onChange={(v) => setAccessCdm(v || null)}
             placeholder="Select CDM..."
-            className="w-64"
+            className="w-full md:w-64"
           />
 
           {grantMode === 'user' ? (
@@ -496,7 +495,7 @@ export default function CdmManagementPage() {
               value={accessUser}
               onChange={(v) => setAccessUser(v || null)}
               placeholder="Select user..."
-              className="w-64"
+              className="w-full md:w-64"
             />
           ) : (
             <Select
@@ -509,7 +508,7 @@ export default function CdmManagementPage() {
               value={accessGroup}
               onChange={(v) => setAccessGroup(v || null)}
               placeholder="Select group..."
-              className="w-64"
+              className="w-full md:w-64"
             />
           )}
 

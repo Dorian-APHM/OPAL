@@ -254,11 +254,15 @@ def create_template(req: CreateTemplateRequest, request: Request, db: Session = 
 
 
 @router.delete("/{template_id}")
-def delete_template(template_id: int, db: Session = Depends(get_db)):
+def delete_template(template_id: int, request: Request, db: Session = Depends(get_db)):
     """Delete a template."""
     t = db.query(CohortTemplate).filter(CohortTemplate.id == template_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Template not found")
+    user = getattr(request.state, "user", {})
+    current_user = user.get("preferred_username", "system")
+    if t.author != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this template")
     db.delete(t)
     db.commit()
     return {"status": "ok"}

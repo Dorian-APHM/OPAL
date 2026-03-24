@@ -42,7 +42,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({
       ref={ref}
       className={`
         inline-flex items-center justify-center rounded-[10px] font-medium
-        transition-all duration-200 cursor-pointer
+        transition-all duration-200 cursor-pointer opal-pressable
         disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none
         ${sizeClasses[size]}
         ${variantClasses[variant]}
@@ -50,14 +50,16 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({
         ${className}
       `.trim()}
       disabled={disabled || loading}
+      aria-disabled={disabled || loading || undefined}
+      aria-busy={loading || undefined}
       {...props}
     >
       {loading ? (
-        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
-      ) : icon}
+      ) : icon ? <span aria-hidden="true">{icon}</span> : null}
       {children && <span>{children}</span>}
     </button>
   );

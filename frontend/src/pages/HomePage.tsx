@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Clock, Heart, Code, FolderOpen,
   Bell, CheckCheck, ExternalLink,
 } from 'lucide-react';
-import { Card, Button, Tag, Spinner, Empty, Tooltip } from '../components/ui';
+import { Card, Button, Tag, Empty, Tooltip, FadeIn, ScaleIn, CountUp, DashboardSkeleton, useToast } from '../components/ui';
 import { cohortApi, qualityApi, favoritesApi, notificationsApi } from '../api/client';
 import type { CohortSummary } from '../types';
 
@@ -16,9 +16,20 @@ interface Props {
 
 const TYPE_ICONS: Record<string, string> = {
   mapping_review: '🗺️',
+  mapping_applied: '🗺️',
   quality_done: '✅',
   cohort_shared: '👥',
+  cohort_deleted: '🗑️',
+  cohort_updated: '✏️',
   access_request: '🔑',
+  access_granted: '🔓',
+  access_revoked: '🔒',
+  cdm_created: '🗄️',
+  cdm_updated: '⚙️',
+  cdm_deleted: '🗑️',
+  extraction_done: '📦',
+  group_added: '👥',
+  group_removed: '👤',
 };
 
 function timeAgo(dateStr: string): string {
@@ -35,6 +46,7 @@ function timeAgo(dateStr: string): string {
 export default function HomePage({ selectedCdm }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
   const [favorites, setFavorites] = useState<any[]>([]);
@@ -46,8 +58,8 @@ export default function HomePage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     setLoading(true);
     Promise.all([
-      cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts.slice(0, 5))).catch(() => {}),
-      favoritesApi.list().then(r => setFavorites(r.data.favorites)).catch(() => {}),
+      cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts.slice(0, 5))).catch(() => toast.error(t('dashboard.load_failed', 'Failed to load cohorts'))),
+      favoritesApi.list().then(r => setFavorites(r.data.favorites)).catch(() => toast.error(t('dashboard.load_failed', 'Failed to load favorites'))),
       qualityApi.getLatestSnapshot(selectedCdm, 'Dashboard')
         .then(r => setQualitySummary(r.data.results))
         .catch(() => setQualitySummary(null)),
@@ -62,22 +74,40 @@ export default function HomePage({ selectedCdm }: Props) {
       await favoritesApi.remove(id);
       setFavorites(prev => prev.filter(f => f.id !== id));
     } catch {
-      // silently fail
+      toast.error(t('common.error', 'An error occurred'));
     }
   };
+
+  // Real-time: prepend new notifications from WebSocket
+  useEffect(() => {
+    const onNotif = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail) {
+        setNotifications(prev => [detail, ...prev].slice(0, 20));
+      }
+    };
+    window.addEventListener('opal:notification', onNotif);
+    return () => window.removeEventListener('opal:notification', onNotif);
+  }, []);
 
   const markNotifRead = async (id: number) => {
     try {
       await notificationsApi.markRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-    } catch {}
+      window.dispatchEvent(new Event('opal:badges-refresh'));
+    } catch {
+      toast.error(t('common.error', 'An error occurred'));
+    }
   };
 
   const markAllNotifsRead = async () => {
     try {
       await notificationsApi.markAllRead();
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    } catch {}
+      window.dispatchEvent(new Event('opal:badges-refresh'));
+    } catch {
+      toast.error(t('common.error', 'An error occurred'));
+    }
   };
 
   const navigateToFavorite = (f: any) => {
@@ -103,14 +133,12 @@ export default function HomePage({ selectedCdm }: Props) {
 
   if (!selectedCdm) {
     return (
-      <div className="flex flex-col items-center justify-center text-center mt-20 px-6">
-        <Database className="h-16 w-16 text-text-dim mb-4" />
-        <h3 className="text-xl font-semibold text-text-bright mb-2">
-          {t('dashboard.welcome', 'Welcome to OPAL')}
-        </h3>
-        <p className="text-text-muted">
-          {t('dashboard.select_cdm', 'Select a CDM database from the sidebar to get started.')}
-        </p>
+      <div className="flex items-center justify-center" style={{ height: 'calc(100vh - 56px - 32px)' }}>
+        <Empty variant="no-cdm">
+          <Button variant="primary" size="middle" icon={<Database className="h-4 w-4" />} onClick={() => {}}>
+            {t('dashboard.select_cdm', 'Select a CDM database')}
+          </Button>
+        </Empty>
       </div>
     );
   }
@@ -119,7 +147,7 @@ export default function HomePage({ selectedCdm }: Props) {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <div className="py-3 flex flex-col" style={{ height: 'calc(100vh - 56px - 16px)' }}>
+    <div className="py-3 flex flex-col overflow-y-auto" style={{ height: 'calc(100vh - 56px - 16px)' }}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-3 flex-shrink-0">
         <LayoutDashboard className="h-6 w-6 text-emerald-accent" />
@@ -130,58 +158,63 @@ export default function HomePage({ selectedCdm }: Props) {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center flex-1">
-          <Spinner size="large" />
-        </div>
+        <DashboardSkeleton />
       ) : (
         <div className="flex flex-col flex-1 min-h-0 gap-3">
           {/* Domain Overview — prominent grid */}
           {dashData?.domains && (
-            <div className="flex-shrink-0">
-              <div className="grid grid-cols-5 xl:grid-cols-9 gap-2">
+            <FadeIn className="flex-shrink-0">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-9 gap-2">
                 {/* Total persons — highlighted */}
-                <div className="flex flex-col justify-center px-4 py-3 rounded-2xl bg-surface border border-emerald-accent/30 shadow-[0_0_15px_rgba(16,185,129,0.08)]">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Users className="h-4 w-4 text-emerald-accent" />
-                    <span className="text-[10px] uppercase tracking-wider text-text-dim">Total</span>
-                  </div>
-                  <div className="text-xl font-bold text-text-bright leading-tight">{dashData.total_persons?.toLocaleString() ?? '---'}</div>
-                  <div className="text-[10px] text-text-dim mt-0.5">persons</div>
-                </div>
-                {/* Domain cards */}
-                {dashData.domains.map((d: any) => (
-                  <div
-                    key={d.domain}
-                    className="flex flex-col justify-center px-3 py-3 rounded-2xl bg-surface border border-border-subtle cursor-pointer hover:border-border-glow hover:bg-emerald-accent/5 transition-all"
-                    onClick={() => navigate('/quality')}
-                  >
-                    <div className="text-[10px] uppercase tracking-wider text-text-dim mb-1">{String(t(`domains.${d.domain}`, d.domain))}</div>
-                    <div className="text-base font-bold text-text-bright leading-tight">{d.distinct_persons?.toLocaleString()}</div>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className="text-[9px] text-text-dim">{d.total_records?.toLocaleString()} rec.</span>
-                      {d.pct_terms_mapped != null && (
-                        <Tag
-                          color={d.pct_terms_mapped > 80 ? 'green' : d.pct_terms_mapped > 50 ? 'orange' : 'red'}
-                          style={{ fontSize: 8, padding: '0 4px', lineHeight: '16px' }}
-                        >
-                          {d.pct_terms_mapped}%
-                        </Tag>
-                      )}
+                <ScaleIn>
+                  <div className="flex flex-col justify-center px-4 py-3 rounded-2xl bg-surface border border-emerald-accent/30 shadow-[0_0_15px_rgba(16,185,129,0.08)] h-full">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Users className="h-4 w-4 text-emerald-accent" />
+                      <span className="text-[10px] uppercase tracking-wider text-text-dim">Total</span>
                     </div>
+                    <div className="text-xl font-bold text-text-bright leading-tight">
+                      {dashData.total_persons != null ? (
+                        <CountUp end={dashData.total_persons} format={(n: number) => n.toLocaleString()} />
+                      ) : '---'}
+                    </div>
+                    <div className="text-[10px] text-text-dim mt-0.5">persons</div>
                   </div>
+                </ScaleIn>
+                {/* Domain cards */}
+                {dashData.domains.map((d: any, idx: number) => (
+                  <ScaleIn key={d.domain} delay={0.03 * (idx + 1)}>
+                    <div
+                      className="flex flex-col justify-center px-3 py-3 rounded-2xl bg-surface border border-border-subtle cursor-pointer hover:border-border-glow hover:bg-emerald-accent/5 transition-all opal-pressable h-full"
+                      onClick={() => navigate('/quality')}
+                    >
+                      <div className="text-[10px] uppercase tracking-wider text-text-dim mb-1">{String(t(`domains.${d.domain}`, d.domain))}</div>
+                      <div className="text-base font-bold text-text-bright leading-tight">{d.distinct_persons?.toLocaleString()}</div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[9px] text-text-dim">{d.total_records?.toLocaleString()} rec.</span>
+                        {d.pct_terms_mapped != null && (
+                          <Tag
+                            color={d.pct_terms_mapped > 80 ? 'green' : d.pct_terms_mapped > 50 ? 'orange' : 'red'}
+                            style={{ fontSize: 8, padding: '0 4px', lineHeight: '16px' }}
+                          >
+                            {d.pct_terms_mapped}%
+                          </Tag>
+                        )}
+                      </div>
+                    </div>
+                  </ScaleIn>
                 ))}
               </div>
-            </div>
+            </FadeIn>
           )}
 
           {/* Main content: 2 columns — capped height so overview breathes */}
-          <div className="grid grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0', maxHeight: 'calc(100vh - 56px - 16px - 160px)' }}>
+          <FadeIn delay={0.15} className="grid grid-cols-1 md:grid-cols-2 gap-2 min-h-0" style={{ flex: '1 1 0' }}>
             {/* Left column: Recent Cohorts + Favorites */}
             <div className="flex flex-col gap-2 min-h-0">
               <Card
                 size="small"
                 className="flex flex-col overflow-hidden flex-1 min-h-0"
-                bodyClassName="!p-3 !pt-2"
+                bodyClassName="!p-3 !pt-2 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Users className="h-4 w-4 text-emerald-accent" />
@@ -195,7 +228,7 @@ export default function HomePage({ selectedCdm }: Props) {
                 }
               >
                 {cohorts.length === 0 ? (
-                  <Empty description={t('dashboard.no_cohorts', 'No cohorts yet')}>
+                  <Empty variant="no-cohorts">
                     <Button variant="primary" size="small" onClick={() => navigate('/cohorts')}>
                       {t('dashboard.create_cohort', 'Create a Cohort')}
                     </Button>
@@ -205,11 +238,11 @@ export default function HomePage({ selectedCdm }: Props) {
                     {cohorts.map((c) => (
                       <div
                         key={c.id}
-                        className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
+                        className="flex items-center justify-between px-3 py-3 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
                         onClick={() => navigate('/cohorts', { state: { openCohortId: c.id } })}
                       >
-                        <div>
-                          <div className="text-sm font-medium text-text-bright">{c.name}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-text-bright truncate">{c.name}</div>
                           <div className="flex items-center gap-1.5 text-xs text-text-dim">
                             <Clock className="h-3 w-3" />
                             <span>v{c.latest_version}</span>
@@ -227,7 +260,7 @@ export default function HomePage({ selectedCdm }: Props) {
               <Card
                 size="small"
                 className="flex flex-col overflow-hidden flex-1 min-h-0"
-                bodyClassName="!p-3 !pt-2"
+                bodyClassName="!p-3 !pt-2 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Star className="h-4 w-4 text-yellow-400" />
@@ -236,25 +269,23 @@ export default function HomePage({ selectedCdm }: Props) {
                 }
               >
                 {favorites.length === 0 ? (
-                  <Empty
-                    description={t('dashboard.no_favorites', 'No favorites yet. Star items from other pages.')}
-                  />
+                  <Empty variant="no-favorites" />
                 ) : (
                   <div className="overflow-y-auto flex-1">
                     {favorites.slice(0, 10).map((f) => (
                       <div
                         key={f.id}
-                        className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
+                        className="flex items-center justify-between px-3 py-3 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
                         onClick={() => navigateToFavorite(f)}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-text-dim">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <span className="text-text-dim flex-shrink-0">
                             {f.item_type === 'cohort' ? <Users className="h-4 w-4" /> :
                              f.item_type === 'query' ? <Code className="h-4 w-4" /> :
                              <Heart className="h-4 w-4" />}
                           </span>
-                          <div>
-                            <div className="text-sm font-medium text-text-bright">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-text-bright truncate">
                               {f.item_label || f.item_id}
                             </div>
                             <span className="text-xs text-text-dim">{f.item_type}</span>
@@ -309,7 +340,7 @@ export default function HomePage({ selectedCdm }: Props) {
               <Card
                 size="small"
                 className="flex flex-col overflow-hidden flex-1 min-h-0"
-                bodyClassName="!p-3 !pt-2"
+                bodyClassName="!p-3 !pt-2 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <Bell className="h-4 w-4 text-emerald-accent" />
@@ -330,16 +361,13 @@ export default function HomePage({ selectedCdm }: Props) {
                 }
               >
                 {notifications.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-4 text-text-dim text-xs">
-                    <Bell className="h-8 w-8 mb-2 opacity-30" />
-                    No notifications
-                  </div>
+                  <Empty variant="no-notifications" className="py-4" />
                 ) : (
                   <div className="overflow-y-auto flex-1">
                     {notifications.map((n) => (
                       <div
                         key={n.id}
-                        className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg transition-colors text-xs ${
+                        className={`flex items-start gap-2 px-2.5 py-2.5 rounded-lg transition-colors text-xs ${
                           n.link ? 'cursor-pointer hover:bg-emerald-accent/5' : ''
                         } ${!n.read ? 'bg-emerald-accent/[0.03]' : ''}`}
                         onClick={() => n.link && navigateToNotif(n)}
@@ -374,7 +402,7 @@ export default function HomePage({ selectedCdm }: Props) {
                 )}
               </Card>
             </div>
-          </div>        </div>
+          </FadeIn>        </div>
       )}
     </div>
   );

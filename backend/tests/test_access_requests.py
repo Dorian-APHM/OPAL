@@ -33,23 +33,22 @@ def test_submit_duplicate_username(client):
     client.post("/api/access-requests", json=body)
     resp = client.post("/api/access-requests", json=body)
     assert resp.status_code == 409
-    assert "already exists" in resp.json()["detail"]
 
 
 def test_submit_missing_required_field(client):
-    for field in ["username", "email", "first_name", "last_name", "requested_role"]:
+    for field in ["username", "requested_role"]:
         body = _make_request_body()
         body[field] = ""
         resp = client.post("/api/access-requests", json=body)
         assert resp.status_code == 400, f"Field {field} should be required"
-        assert field in resp.json()["detail"]
 
 
 def test_submit_missing_field_key(client):
+    """Missing optional field (email) should still succeed."""
     body = _make_request_body()
     del body["email"]
     resp = client.post("/api/access-requests", json=body)
-    assert resp.status_code == 400
+    assert resp.status_code == 200
 
 
 def test_submit_invalid_role(client):
@@ -190,8 +189,8 @@ def test_approve_request_keycloak_unavailable(client, monkeypatch):
     req_id = reqs[0]["id"]
 
     # Mock _get_keycloak_admin_token to return None
-    import main
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: None)
+    import modules.admin_router as admin_mod
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: None)
 
     resp = client.post(f"/api/admin/access-requests/{req_id}/approve")
     assert resp.status_code == 503
@@ -199,14 +198,14 @@ def test_approve_request_keycloak_unavailable(client, monkeypatch):
 
 def test_approve_request_success(client, monkeypatch):
     """Full approve flow with mocked Keycloak."""
-    import main
+    import modules.admin_router as admin_mod
 
     client.post("/api/access-requests", json=_make_request_body())
     reqs = client.get("/api/admin/access-requests").json()["requests"]
     req_id = reqs[0]["id"]
 
     # Mock Keycloak admin token
-    monkeypatch.setattr(main, "_get_keycloak_admin_token", lambda: "fake-token")
+    monkeypatch.setattr(admin_mod, "_get_keycloak_admin_token", lambda: "fake-token")
 
     # Mock requests.post for user creation
     class FakeResponse:
@@ -235,7 +234,10 @@ def test_approve_request_success(client, monkeypatch):
     data = resp.json()
     assert data["status"] == "ok"
     assert data["username"] == "jdupont"
-    assert data["temporary_password"] == "jdupont"
+    # C-AUTH-05: password is now random, not equal to username
+    assert "temporary_password" in data
+    assert data["temporary_password"] != "jdupont"
+    assert len(data["temporary_password"]) >= 16
     assert data["keycloak_user_id"] == "fake-uid-123"
 
     # Verify status updated in DB

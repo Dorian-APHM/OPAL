@@ -18,8 +18,8 @@ export function Card({ children, title, extra, size = 'default', accent = false,
     <div
       className={`
         bg-surface rounded-2xl border border-border-subtle
-        shadow-[10px_10px_20px_#080b13,-5px_-5px_15px_#1c2539]
-        ${hoverable ? 'transition-all duration-300 hover:shadow-[12px_12px_24px_#080b13,-6px_-6px_18px_#1c2539,0_0_25px_rgba(16,185,129,0.1)] hover:border-border-glow' : ''}
+        opal-card-shadow
+        ${hoverable ? 'transition-all duration-300 opal-card-hoverable hover:border-border-glow' : ''}
         ${accentClass} ${className}
       `.trim()}
       {...props}

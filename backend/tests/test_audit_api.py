@@ -3,29 +3,26 @@ Tests for audit log endpoints.
 """
 import json
 import os
-import shutil
-from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
-from audit.logger import AUDIT_LOG_DIR, write_audit_log
+import audit.logger as _audit_mod
+from audit.logger import write_audit_log
 
 
 @pytest.fixture(autouse=True)
-def clean_audit_logs():
-    """Clean up test audit log files before and after each test."""
-    # Save original files to restore later
-    yield
-    # Remove any test log files created during the test
-    for f in AUDIT_LOG_DIR.glob("*.jsonl"):
-        if f.stem.startswith("2099-") or f.stem.startswith("test-"):
-            f.unlink(missing_ok=True)
+def temp_audit_dir(monkeypatch, tmp_path):
+    """Use a temporary directory for audit logs during tests."""
+    log_dir = tmp_path / "audit_logs"
+    log_dir.mkdir()
+    monkeypatch.setattr(_audit_mod, "AUDIT_LOG_DIR", log_dir)
+    yield log_dir
 
 
 def _write_test_entries(dt: str, entries: list[dict]):
     """Helper to write entries to a specific date's log file."""
-    log_file = AUDIT_LOG_DIR / f"{dt}.jsonl"
+    log_file = _audit_mod.AUDIT_LOG_DIR / f"{dt}.jsonl"
     with open(log_file, "a", encoding="utf-8") as f:
         for entry in entries:
             entry.setdefault("ts", f"{dt}T12:00:00+00:00")
@@ -71,9 +68,6 @@ def test_audit_logs_with_entries(client):
     assert data["total"] == 2
     assert len(data["entries"]) == 2
 
-    # Clean up
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
-
 
 def test_audit_logs_filter_by_user(client):
     dt = "2099-01-16"
@@ -87,8 +81,6 @@ def test_audit_logs_filter_by_user(client):
     assert data["total"] == 2
     assert all(e["user"] == "alice" for e in data["entries"])
 
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
-
 
 def test_audit_logs_filter_by_action(client):
     dt = "2099-01-17"
@@ -101,8 +93,6 @@ def test_audit_logs_filter_by_action(client):
     data = resp.json()
     assert data["total"] == 2
     assert all(e["action"].startswith("quality") for e in data["entries"])
-
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
 
 
 def test_audit_logs_pagination(client):
@@ -123,8 +113,6 @@ def test_audit_logs_pagination(client):
     data = resp.json()
     assert len(data["entries"]) == 5
 
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
-
 
 def test_audit_logs_date_range(client):
     for dt in ["2099-02-01", "2099-02-02", "2099-02-03"]:
@@ -135,9 +123,6 @@ def test_audit_logs_date_range(client):
     })
     data = resp.json()
     assert data["total"] == 3
-
-    for dt in ["2099-02-01", "2099-02-02", "2099-02-03"]:
-        (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
 
 
 # ──── GET /api/audit/stats ────
@@ -174,14 +159,11 @@ def test_audit_stats_with_data(client):
     assert action_map["quality.analyze"] == 2
     assert action_map["cohort.create"] == 1
 
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
-
 
 # ──── GET /api/audit/dates ────
 
 
 def test_audit_dates(client):
-    # Create some test log files
     for dt in ["2099-04-01", "2099-04-02"]:
         _write_test_entries(dt, [_make_entry()])
 
@@ -190,9 +172,6 @@ def test_audit_dates(client):
     dates = resp.json()["dates"]
     assert "2099-04-01" in dates
     assert "2099-04-02" in dates
-
-    for dt in ["2099-04-01", "2099-04-02"]:
-        (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
 
 
 # ──── GET /api/audit/export ────
@@ -216,8 +195,6 @@ def test_audit_export_csv(client):
     assert "user" in header
     assert "action" in header
 
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
-
 
 def test_audit_export_csv_filtered(client):
     dt = "2099-05-02"
@@ -232,8 +209,6 @@ def test_audit_export_csv_filtered(client):
     lines = resp.text.strip().split("\n")
     assert len(lines) == 2  # header + 1 entry
     assert "alice" in lines[1]
-
-    (AUDIT_LOG_DIR / f"{dt}.jsonl").unlink(missing_ok=True)
 
 
 def test_audit_export_empty(client):
@@ -252,10 +227,8 @@ def test_write_audit_log_creates_file():
     entry = _make_entry(ts="2099-06-01T10:00:00+00:00")
     write_audit_log(entry)
 
-    log_file = AUDIT_LOG_DIR / "2099-06-01.jsonl"
+    log_file = _audit_mod.AUDIT_LOG_DIR / "2099-06-01.jsonl"
     assert log_file.exists()
     content = log_file.read_text().strip()
     parsed = json.loads(content)
     assert parsed["user"] == "alice"
-
-    log_file.unlink(missing_ok=True)

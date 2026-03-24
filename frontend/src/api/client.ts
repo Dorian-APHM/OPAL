@@ -34,16 +34,22 @@ import type {
   GroupSummary,
   GroupDetail,
   CohortShareInfo,
+  PathwaysResult,
+  PathwaysEventCohort,
 } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
 });
 
-// Token getter — set by AuthProvider once Keycloak is initialized
+// Token getter & refresher — set by AuthProvider once Keycloak is initialized
 let _getToken: (() => string | undefined) | null = null;
+let _refreshToken: (() => Promise<string | undefined>) | null = null;
 export function setTokenGetter(getter: () => string | undefined) {
   _getToken = getter;
+}
+export function setTokenRefresher(refresher: () => Promise<string | undefined>) {
+  _refreshToken = refresher;
 }
 
 // Attach Keycloak Bearer token to all API requests
@@ -55,22 +61,66 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Unified error response interceptor
+// Token refresh queue to avoid concurrent refresh calls
+let _isRefreshing = false;
+let _refreshQueue: Array<(token: string | undefined) => void> = [];
+
+function _processQueue(token: string | undefined) {
+  _refreshQueue.forEach((resolve) => resolve(token));
+  _refreshQueue = [];
+}
+
+// Unified error response interceptor with 401 retry
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const originalRequest = error.config;
     if (axios.isAxiosError(error) && error.response) {
       const { status, data } = error.response;
       const detail = data?.detail || data?.message || data?.error;
       if (detail && typeof detail === 'string') {
         error.message = detail;
       }
-      if (status === 401) {
+
+      // Attempt token refresh on 401 (only once per request)
+      if (status === 401 && _refreshToken && !originalRequest._retry) {
+        if (_isRefreshing) {
+          // Queue this request until token refresh completes
+          return new Promise((resolve) => {
+            _refreshQueue.push((newToken) => {
+              if (newToken) {
+                originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              }
+              resolve(api(originalRequest));
+            });
+          });
+        }
+
+        originalRequest._retry = true;
+        _isRefreshing = true;
+        try {
+          const newToken = await _refreshToken();
+          _isRefreshing = false;
+          _processQueue(newToken);
+          if (newToken) {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            return api(originalRequest);
+          }
+        } catch {
+          _isRefreshing = false;
+          _processQueue(undefined);
+        }
+        error.message = 'Session expired. Please log in again.';
+      } else if (status === 401) {
         error.message = 'Session expired. Please log in again.';
       } else if (status === 504) {
         error.message = detail || 'Query timed out. Try a simpler query.';
       } else if (status === 502) {
         error.message = detail || 'External database connection error.';
+      } else if (status === 503) {
+        error.message = detail || 'Service temporarily unavailable. Please try again.';
+      } else if (status === 429) {
+        error.message = 'Too many requests. Please slow down.';
       }
     } else if (error.code === 'ERR_NETWORK') {
       error.message = 'Network error. Please check your connection.';
@@ -78,6 +128,9 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+// Global request timeout
+api.defaults.timeout = 120000; // 2 minutes
 
 /** Get current auth token (for fetch/download calls outside axios) */
 export function getAuthToken(): string | undefined {
@@ -113,7 +166,10 @@ export function authDownload(url: string, filename?: string) {
       const cd = xhr.getResponseHeader('Content-Disposition');
       if (cd) {
         const match = cd.match(/filename="?([^";\n]+)"?/);
-        if (match) a.download = match[1];
+        if (match) {
+          // Sanitize: strip path separators to prevent directory traversal
+          a.download = match[1].replace(/[\\/]/g, '_').replace(/\.\./g, '_');
+        }
       }
       document.body.appendChild(a);
       a.click();
@@ -155,7 +211,7 @@ export const cdmApi = {
 
 // Quality endpoints
 export const qualityApi = {
-  domains: () => api.get<{ domains: string[] }>('/quality/domains'),
+  domains: (cdmName?: string) => api.get<{ domains: string[] }>('/quality/domains', { params: cdmName ? { cdm_name: cdmName } : {} }),
   analyze: (cdmName: string, domain: string) =>
     api.post('/quality/analyze', { cdm_name: cdmName, domain }),
   analyzeBatch: (cdmName: string, domains: string[]) =>
@@ -262,6 +318,20 @@ export const cohortApi = {
     api.get<{ person: PatientJourneyInfo; events: PatientJourneyEvent[] }>(
       `/cohorts/patient/${personId}/journey`, { params: { cdm_name: cdmName } }
     ),
+  // Pathways Analysis
+  pathways: (cdmName: string, criteria: CohortCriteria, eventCohorts: PathwaysEventCohort[], options?: {
+    max_depth?: number; min_cell_count?: number; combo_window?: number;
+  }) =>
+    api.post<{ task_id: string; status: string }>('/cohorts/pathways', {
+      cdm_name: cdmName, criteria, event_cohorts: eventCohorts, ...(options || {}),
+    }),
+  pathwaysStatus: (taskId: string) =>
+    api.get<{
+      task_id: string; status: string; result?: PathwaysResult;
+      error?: string; completed?: number; total?: number; current_step?: string;
+    }>(`/cohorts/pathways/status/${taskId}`),
+  pathwaysCancel: (taskId: string) =>
+    api.post(`/cohorts/pathways/cancel/${taskId}`),
 };
 
 // Mapping endpoints
@@ -360,6 +430,11 @@ export const conceptApi = {
   }) => api.get<{ results: any[]; total: number; limit: number; offset: number }>(
     '/concepts/search-source-value', { params: { cdm_name: cdmName, ...params } }
   ),
+  searchSourceValueFast: (cdmName: string, params: {
+    q?: string; domain?: string; limit?: number;
+  }) => api.get<{ results: { domain: string; source_value: string; source_name: string | null }[] }>(
+    '/concepts/search-source-value/fast', { params: { cdm_name: cdmName, ...params } }
+  ),
   exportSourceValueUrl: (cdmName: string, q: string, domain?: string) =>
     `/api/concepts/search-source-value/export?cdm_name=${encodeURIComponent(cdmName)}&q=${encodeURIComponent(q)}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
   counts: (cdmName: string, conceptIds: number[]) =>
@@ -385,11 +460,13 @@ export const ohdsiApi = {
   }) => api.post(`/ohdsi/run/${service}`, params),
   stop: (service: string) => api.post(`/ohdsi/stop/${service}`),
   status: () => api.get<Record<string, { status: string; log_count: number }>>('/ohdsi/status'),
-  logsUrl: (service: string, offset?: number) => {
-    const token = _getToken?.();
+  logsUrl: async (service: string, offset?: number): Promise<string> => {
     const params = new URLSearchParams();
     if (offset) params.set('offset', String(offset));
-    if (token) params.set('token', token);
+    try {
+      const resp = await api.post<{ ticket: string }>('/auth/sse-ticket');
+      params.set('ticket', resp.data.ticket);
+    } catch { /* will get 401 on SSE if ticket fails */ }
     const qs = params.toString();
     return `/api/ohdsi/logs/${service}${qs ? `?${qs}` : ''}`;
   },
@@ -478,6 +555,7 @@ export const incidenceApi = {
   list: (cdmName?: string) =>
     api.get<{ analyses: IncidenceAnalysisSummary[] }>('/incidence/', { params: { cdm_name: cdmName } }),
   get: (id: number) => api.get('/incidence/' + id),
+  delete: (id: number) => api.delete(`/incidence/${id}`),
 };
 
 // Estimation endpoints (Kaplan-Meier)
@@ -495,6 +573,7 @@ export const estimationApi = {
   list: (cdmName?: string) =>
     api.get<{ analyses: EstimationAnalysisSummary[] }>('/estimation/', { params: { cdm_name: cdmName } }),
   get: (id: number) => api.get('/estimation/' + id),
+  delete: (id: number) => api.delete(`/estimation/${id}`),
 };
 
 // Data Management endpoints
@@ -571,7 +650,7 @@ export const cdmAccessApi = {
 // Notifications endpoints
 export const notificationsApi = {
   list: (unreadOnly?: boolean, limit?: number, notifType?: string) =>
-    api.get<{ notifications: any[] }>('/notifications/', { params: { unread_only: unreadOnly, limit, notif_type: notifType } }),
+    api.get<{ notifications: NotificationItem[] }>('/notifications/', { params: { unread_only: unreadOnly, limit, notif_type: notifType } }),
   badges: () =>
     api.get<{ badges: Record<string, number>; total: number }>('/notifications/badges'),
   items: (notifType?: string) =>
@@ -582,7 +661,29 @@ export const notificationsApi = {
     api.post('/notifications/read-item', null, { params: { notif_type: notifType, item_id: itemId } }),
   markAllRead: (type?: string) =>
     api.post('/notifications/read-all', null, { params: { notif_type: type } }),
+  deleteNotif: (id: number) =>
+    api.delete(`/notifications/${id}`),
+  deleteAllRead: () =>
+    api.delete('/notifications/'),
+  sseTicket: () =>
+    api.post<{ ticket: string }>('/auth/sse-ticket'),
+  getPreferences: () =>
+    api.get<{ preferences: Record<string, boolean> }>('/notifications/preferences'),
+  updatePreference: (notifType: string, enabled: boolean) =>
+    api.post('/notifications/preferences', { notif_type: notifType, enabled }),
 };
+
+/** Notification shape returned by the API */
+export interface NotificationItem {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  link: string;
+  item_id: string | null;
+  read: boolean;
+  created_at: string | null;
+}
 
 // Favorites endpoints
 export const favoritesApi = {

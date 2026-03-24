@@ -48,13 +48,13 @@ export function CircularProgress({ percent, size = 48, strokeWidth = 3, classNam
   return (
     <div className={`relative inline-flex items-center justify-center ${className}`}>
       <svg className="-rotate-90" width={size} height={size}>
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(16,185,129,0.1)" strokeWidth={strokeWidth} />
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--color-emerald-glow, rgba(16,185,129,0.1))" strokeWidth={strokeWidth} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="#10B981"
+          stroke="var(--color-emerald-accent, #10B981)"
           strokeWidth={strokeWidth}
           strokeDasharray={circumference}
           strokeDashoffset={offset}
