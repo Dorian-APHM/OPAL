@@ -329,7 +329,7 @@ export default function QualityPage({ selectedCdm }: Props) {
   const singlePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const { hasNotif, markRead, hasAnyNotifExcept, markAllReadExcept } = useNotifDots('quality_done');
+  const { hasNotif, markRead, hasAnyNotifExcept } = useNotifDots('quality_done');
 
   // Track mounted state
   useEffect(() => {
@@ -343,6 +343,25 @@ export default function QualityPage({ selectedCdm }: Props) {
       if (singlePollRef.current) clearInterval(singlePollRef.current);
     };
   }, []);
+
+  // Refresh data when a quality_done notification arrives (analysis finished while on this page or after navigating back)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (!notif || notif.type !== 'quality_done') return;
+      if (selectedCdm && notif.link && notif.link.includes(`cdm=${selectedCdm}`)) {
+        qualityApi.timeline(selectedCdm).then((r) => {
+          if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines)));
+        }).catch(() => {});
+        if (selectedDomain) {
+          loadLatestSnapshot();
+          loadSnapshots();
+        }
+      }
+    };
+    window.addEventListener('opal:notification', handler);
+    return () => window.removeEventListener('opal:notification', handler);
+  }, [selectedCdm, selectedDomain]);
 
   useEffect(() => {
     qualityApi.domains(selectedCdm || undefined).then((res) => setDomains(res.data.domains));
@@ -372,6 +391,10 @@ export default function QualityPage({ selectedCdm }: Props) {
           setBatchProgress(pct);
           if (batch.domain_status?.length) setBatchStatus(batch.domain_status);
           startBatchPolling(batch.analysis_id, batch.domains);
+        } else {
+          // No active batch — clear stale loading state
+          setBatchLoading(false);
+          analysisIdRef.current = null;
         }
         // Resume single-domain if running
         const single = res.data.active.find(
@@ -381,6 +404,10 @@ export default function QualityPage({ selectedCdm }: Props) {
           singleAnalysisIdRef.current = single.analysis_id;
           setLoading(true);
           startSinglePolling(single.analysis_id, single.domains[0]);
+        } else {
+          // No active single — clear stale loading state
+          setLoading(false);
+          singleAnalysisIdRef.current = null;
         }
       })
       .catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
@@ -415,7 +442,7 @@ export default function QualityPage({ selectedCdm }: Props) {
             analysisIdRef.current = null;
             if (batchPollRef.current) clearInterval(batchPollRef.current);
             batchPollRef.current = null;
-            toast.success(t('common.success'));
+            // Toast is handled globally by TopNav via WebSocket notification
             // Refresh analyzed domains
             if (selectedCdm) {
               qualityApi.timeline(selectedCdm).then((r) => {
@@ -553,38 +580,75 @@ export default function QualityPage({ selectedCdm }: Props) {
       }
       const decoder = new TextDecoder();
       let buffer = '';
-      while (true) {
-        if (ctrl.signal.aborted) { reader.cancel(); break; }
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n'); buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event: BatchProgressEvent = JSON.parse(line.slice(6));
-              if (event.type === 'start' && event.analysis_id) {
-                analysisIdRef.current = event.analysis_id;
-              } else if (event.type === 'progress') {
-                if (mountedRef.current) {
-                  setBatchProgress(Math.round((event.completed / event.total) * 100));
-                  if (event.domain && event.status && event.status !== 'running') {
-                    setBatchStatus(prev => [...prev, { domain: event.domain!, status: event.status! }]);
-                    if (event.status === 'success') setAnalyzedDomains(prev => new Set([...prev, event.domain!]));
+      let gotStart = false;
+
+      // Start polling as fallback — authoritative source for batchStatus & progress
+      const pollFallback = setInterval(() => {
+        if (!mountedRef.current) return;
+        qualityApi.activeAnalyses().then(res => {
+          if (!mountedRef.current) return;
+          const aid = analysisIdRef.current;
+          if (!aid) return;
+          const entry = res.data.active.find(a => a.analysis_id === aid && !a.cancelled);
+          if (entry) {
+            const pct = entry.total > 0 ? Math.round((entry.completed / entry.total) * 100) : 0;
+            setBatchProgress(pct);
+            if (entry.domain_status?.length) {
+              setBatchStatus(entry.domain_status);
+              entry.domain_status.forEach((ds: { domain: string; status: string }) => {
+                if (ds.status === 'success') setAnalyzedDomains(prev => new Set([...prev, ds.domain]));
+              });
+            }
+          }
+        }).catch(() => {});
+      }, 2000);
+
+      try {
+        while (true) {
+          if (ctrl.signal.aborted) { reader.cancel(); break; }
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n'); buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const event: BatchProgressEvent = JSON.parse(line.slice(6));
+                if (event.type === 'start' && event.analysis_id) {
+                  analysisIdRef.current = event.analysis_id;
+                  gotStart = true;
+                } else if (event.type === 'progress') {
+                  if (mountedRef.current) {
+                    setBatchProgress(Math.round((event.completed / event.total) * 100));
+                    if (event.domain && event.status && event.status !== 'running') {
+                      setBatchStatus(prev => [...prev, { domain: event.domain!, status: event.status! }]);
+                      if (event.status === 'success') setAnalyzedDomains(prev => new Set([...prev, event.domain!]));
+                    }
                   }
+                } else if (event.type === 'done') {
+                  if (mountedRef.current) {
+                    setBatchProgress(100);
+                  }
+                } else if (event.type === 'error') {
+                  if (mountedRef.current) toast.error(event.message || t('common.error'));
                 }
-              } else if (event.type === 'done') {
-                if (mountedRef.current) {
-                  setBatchProgress(100);
-                  toast.success(`${event.completed}/${event.total} ${t('common.success')}`);
-                }
-              } else if (event.type === 'error') {
-                if (mountedRef.current) toast.error(event.message || t('common.error'));
-              }
-            } catch {}
+              } catch {}
+            }
           }
         }
+      } finally {
+        clearInterval(pollFallback);
       }
+
+      // If we never got the start event (stream was fully buffered), get analysis_id from active
+      if (!gotStart && !analysisIdRef.current) {
+        try {
+          const res = await qualityApi.activeAnalyses();
+          const batch = res.data.active.find(a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled);
+          if (batch) analysisIdRef.current = batch.analysis_id;
+        } catch {}
+      }
+
       if (mountedRef.current && selectedDomain) { await loadLatestSnapshot(); await loadSnapshots(); }
     } catch {
       if (mountedRef.current) toast.error(t('common.error'));
@@ -601,6 +665,7 @@ export default function QualityPage({ selectedCdm }: Props) {
 
   const handleDomainChange = (domain: string | null) => {
     setSelectedDomain(domain);
+    if (domain) markRead(domain);
   };
 
   if (!selectedCdm) {
@@ -662,6 +727,7 @@ export default function QualityPage({ selectedCdm }: Props) {
                   label: (
                     <span className="flex items-center gap-1.5">
                       {t(`domains.${d}`, d)}
+                      {hasNotif(d) && <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />}
                       {analyzedDomains.has(d) && <CheckCircle className="h-3.5 w-3.5 text-emerald-accent" />}
                     </span>
                   ),
@@ -803,10 +869,7 @@ export default function QualityPage({ selectedCdm }: Props) {
   );
 
   const handleTabChange = (key: string) => {
-    if (key === 'analysis') {
-      // Mark all domain notifs as read (everything except Conformity)
-      markAllReadExcept('Conformity');
-    } else if (key === 'conformity') {
+    if (key === 'conformity') {
       markRead('Conformity');
     }
   };
