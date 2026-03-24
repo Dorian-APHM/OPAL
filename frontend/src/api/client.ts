@@ -130,7 +130,7 @@ api.interceptors.response.use(
 );
 
 // Global request timeout
-api.defaults.timeout = 30000; // 30 seconds
+api.defaults.timeout = 120000; // 2 minutes
 
 /** Get current auth token (for fetch/download calls outside axios) */
 export function getAuthToken(): string | undefined {
@@ -429,6 +429,11 @@ export const conceptApi = {
     q?: string; domain?: string; limit?: number; offset?: number;
   }) => api.get<{ results: any[]; total: number; limit: number; offset: number }>(
     '/concepts/search-source-value', { params: { cdm_name: cdmName, ...params } }
+  ),
+  searchSourceValueFast: (cdmName: string, params: {
+    q?: string; domain?: string; limit?: number;
+  }) => api.get<{ results: { domain: string; source_value: string; source_name: string | null }[] }>(
+    '/concepts/search-source-value/fast', { params: { cdm_name: cdmName, ...params } }
   ),
   exportSourceValueUrl: (cdmName: string, q: string, domain?: string) =>
     `/api/concepts/search-source-value/export?cdm_name=${encodeURIComponent(cdmName)}&q=${encodeURIComponent(q)}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,

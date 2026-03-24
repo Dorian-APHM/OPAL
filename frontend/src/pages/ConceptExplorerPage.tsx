@@ -71,9 +71,6 @@ const DOMAIN_NOMENCLATURE: Record<string, string> = {
   Condition: 'CIM-10',
   Procedure: 'CCAM',
   Drug: 'ATC / UCD',
-  Measurement: 'NABM / LOINC',
-  Observation: 'Source',
-  Device: 'LPP',
 };
 
 export default function ConceptExplorerPage({ selectedCdm }: Props) {
