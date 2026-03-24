@@ -117,6 +117,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(({
         id={inputId}
         type="number"
         value={value ?? ''}
+        onFocus={(e) => e.target.select()}
         onChange={(e) => {
           const val = e.target.value === '' ? null : Number(e.target.value);
           onChange?.(val);

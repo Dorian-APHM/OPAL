@@ -387,11 +387,17 @@ def search_source_value(
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                where_clause = psysql.SQL("t.{} ILIKE %s").format(_ident(source_col))
-                query_params = [domain_name, f"%{q}%"]
+                # Index-friendly search: exact/prefix on source_value and source_name
+                # No leading % wildcard = B-tree index scan instead of seq scan
+                where_clause = psysql.SQL(
+                    "t.{} LIKE %s"
+                ).format(_ident(source_col))
+                query_params = [domain_name, f"{q}%"]
                 if source_name_col:
-                    where_clause = psysql.SQL("{} OR t.{} ILIKE %s").format(where_clause, _ident(source_name_col))
-                    query_params.append(f"%{q}%")
+                    where_clause = psysql.SQL(
+                        "{} OR t.{} LIKE %s"
+                    ).format(where_clause, _ident(source_name_col))
+                    query_params.append(f"{q}%")
                 source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
                 source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
                 union_parts.append(psysql.SQL("""
@@ -425,26 +431,117 @@ def search_source_value(
 
             full_query = psysql.SQL(" UNION ALL ").join(union_parts)
 
-            # Get total count
-            cur.execute(psysql.SQL("SELECT COUNT(*) AS cnt FROM ({}) sub").format(full_query), params)
-            total = cur.fetchone()["cnt"]
-
-            # Get paginated results
+            # Single pass: get results + total via window function
             cur.execute(
                 psysql.SQL("""
-                SELECT * FROM ({}) sub
+                SELECT *, COUNT(*) OVER() AS _total
+                FROM ({}) sub
                 ORDER BY n_records DESC
                 LIMIT %s OFFSET %s
                 """).format(full_query),
                 params + [limit, offset],
             )
-            results = [dict(r) for r in cur.fetchall()]
+            rows = [dict(r) for r in cur.fetchall()]
+            total = rows[0].pop("_total") if rows else 0
+            for r in rows:
+                r.pop("_total", None)
 
-        return {"results": results, "total": total, "limit": limit, "offset": offset}
+        return {"results": rows, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.exception("Source value search failed")
         conn.rollback()
         return {"results": [], "total": 0, "limit": limit, "offset": offset, "error": "An internal error occurred"}
+    finally:
+        conn.close()
+
+
+@router.get("/search-source-value/fast")
+def search_source_value_fast(
+    cdm_name: str,
+    q: str = "",
+    domain: str | None = None,
+    limit: int = Query(default=20, le=100),
+    db: Session = Depends(get_db),
+):
+    """Fast source value lookup: DISTINCT values only, no record/person counts.
+    Designed for cohort builder autocomplete where speed matters more than stats."""
+    if not q or len(q) < 2:
+        return {"results": []}
+
+    from config import DOMAIN_CONFIG
+
+    conn, schema = _get_conn(db, cdm_name)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            domain_names = [domain] if domain and domain in DOMAIN_CONFIG else list(DOMAIN_CONFIG.keys())
+
+            union_parts = []
+            params = []
+            for domain_name in domain_names:
+                cfg = get_domain_config(conn, schema, domain_name)
+                if not cfg:
+                    continue
+                table = safe_identifier(cfg["table"])
+                source_col = safe_identifier(cfg["source_value"])
+                source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+
+                source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
+
+                # Search by source_value prefix
+                union_parts.append(psysql.SQL("""(
+                    SELECT %s AS domain,
+                           t.{source_col} AS source_value,
+                           {source_name_select} AS source_name
+                    FROM {schema}.{table} t
+                    WHERE t.{source_col} LIKE %s
+                    GROUP BY t.{source_col}, {source_name_select}
+                    LIMIT %s
+                )""").format(
+                    source_col=_ident(source_col),
+                    source_name_select=source_name_select,
+                    schema=_ident(schema),
+                    table=_ident(table),
+                ))
+                params.extend([domain_name, f"{q}%", limit])
+
+                # Search by source_name prefix
+                if source_name_col:
+                    union_parts.append(psysql.SQL("""(
+                        SELECT %s AS domain,
+                               t.{source_col} AS source_value,
+                               t.{source_name_col} AS source_name
+                        FROM {schema}.{table} t
+                        WHERE t.{source_name_col} LIKE %s
+                        GROUP BY t.{source_col}, t.{source_name_col}
+                        LIMIT %s
+                    )""").format(
+                        source_col=_ident(source_col),
+                        source_name_col=_ident(source_name_col),
+                        schema=_ident(schema),
+                        table=_ident(table),
+                    ))
+                    params.extend([domain_name, f"{q}%", limit])
+
+            if not union_parts:
+                return {"results": []}
+
+            full_query = psysql.SQL(" UNION ALL ").join(union_parts)
+            cur.execute(
+                psysql.SQL("""
+                SELECT DISTINCT ON (domain, source_value) *
+                FROM ({}) sub
+                ORDER BY domain, source_value
+                LIMIT %s
+                """).format(full_query),
+                params + [limit],
+            )
+            results = [dict(r) for r in cur.fetchall()]
+
+        return {"results": results}
+    except Exception:
+        logger.exception("Fast source value search failed")
+        conn.rollback()
+        return {"results": []}
     finally:
         conn.close()
 
@@ -477,11 +574,18 @@ def export_source_value_search(
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                where_clause = psysql.SQL("t.{} ILIKE %s").format(_ident(source_col))
-                query_params = [domain_name, f"%{q}%"]
+
+                # Index-friendly search: exact/prefix on source_value and source_name
+                # No leading % wildcard = B-tree index scan instead of seq scan
+                where_clause = psysql.SQL(
+                    "t.{} LIKE %s"
+                ).format(_ident(source_col))
+                query_params = [domain_name, f"{q}%"]
                 if source_name_col:
-                    where_clause = psysql.SQL("{} OR t.{} ILIKE %s").format(where_clause, _ident(source_name_col))
-                    query_params.append(f"%{q}%")
+                    where_clause = psysql.SQL(
+                        "{} OR t.{} LIKE %s"
+                    ).format(where_clause, _ident(source_name_col))
+                    query_params.append(f"{q}%")
                 source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
                 source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
                 union_parts.append(psysql.SQL("""
