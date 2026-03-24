@@ -6,14 +6,18 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.cdm_helper import check_cdm_access
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from psycopg2 import sql as psysql
 
 from db.app_db import get_db
 from db.models import ConceptSet, CdmConfig, AnalysisSettings
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
+from utils.sql_safety import safe_identifier
 from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -27,7 +31,7 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     password = decrypt_password(cdm.db_password_encrypted)
     conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
-    schema = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    schema = safe_identifier(settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA)
     return conn, schema
 
 
@@ -79,6 +83,7 @@ def list_concept_sets(
 
 @router.post("/")
 def create_concept_set(body: ConceptSetCreate, request: Request, db=Depends(get_db)):
+    check_cdm_access(request, body.cdm_name)
     user_info = getattr(request.state, "user", {})
     cs = ConceptSet(
         name=body.name,
@@ -113,10 +118,15 @@ def get_concept_set(concept_set_id: int, db=Depends(get_db)):
 
 
 @router.put("/{concept_set_id}")
-def update_concept_set(concept_set_id: int, body: ConceptSetUpdate, db=Depends(get_db)):
+def update_concept_set(concept_set_id: int, body: ConceptSetUpdate, request: Request, db=Depends(get_db)):
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+    user_info = getattr(request.state, "user", {})
+    current_user = user_info.get("preferred_username", "system")
+    is_admin = "admin" in user_info.get("roles", [])
+    if cs.created_by != current_user and not is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized")
     if body.name is not None:
         cs.name = body.name
     if body.domain is not None:
@@ -130,17 +140,22 @@ def update_concept_set(concept_set_id: int, body: ConceptSetUpdate, db=Depends(g
 
 
 @router.delete("/{concept_set_id}")
-def delete_concept_set(concept_set_id: int, db=Depends(get_db)):
+def delete_concept_set(concept_set_id: int, request: Request, db=Depends(get_db)):
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+    user_info = getattr(request.state, "user", {})
+    current_user = user_info.get("preferred_username", "system")
+    is_admin = "admin" in user_info.get("roles", [])
+    if cs.created_by != current_user and not is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized")
     db.delete(cs)
     db.commit()
     return {"status": "ok"}
 
 
 @router.get("/{concept_set_id}/resolve")
-def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Depends(get_db)):
+def resolve_concept_set(concept_set_id: int, request: Request, cdm_name: str | None = None, db=Depends(get_db)):
     """Resolve a concept set: return all concept_ids including descendants."""
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
@@ -151,6 +166,7 @@ def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Dep
         return {"concept_ids": [], "total": 0}
 
     target_cdm = cdm_name or cs.cdm_name
+    check_cdm_access(request, target_cdm)
     conn, omop_schema = _get_cdm_conn(db, target_cdm)
     try:
         all_ids = set()
@@ -164,11 +180,11 @@ def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Dep
 
         if expand_ids:
             cur = conn.cursor()
-            placeholders = ",".join(str(int(i)) for i in expand_ids)
-            cur.execute(
-                f"SELECT DISTINCT descendant_concept_id FROM {omop_schema}.concept_ancestor "
-                f"WHERE ancestor_concept_id IN ({placeholders})"
-            )
+            sql = psysql.SQL(
+                "SELECT DISTINCT descendant_concept_id FROM {}.{} "
+                "WHERE ancestor_concept_id = ANY(%s)"
+            ).format(psysql.Identifier(omop_schema), psysql.Identifier('concept_ancestor'))
+            cur.execute(sql, (list(expand_ids),))
             for row in cur.fetchall():
                 all_ids.add(row[0])
             cur.close()
@@ -179,13 +195,14 @@ def resolve_concept_set(concept_set_id: int, cdm_name: str | None = None, db=Dep
 
 
 @router.post("/{concept_set_id}/counts")
-def concept_set_counts(concept_set_id: int, body: dict, db=Depends(get_db)):
+def concept_set_counts(concept_set_id: int, body: dict, request: Request, db=Depends(get_db)):
     """Get record and person counts for each concept in the set."""
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
 
     target_cdm = body.get("cdm_name", cs.cdm_name)
+    check_cdm_access(request, target_cdm)
     concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
     if not concepts:
         return {"counts": {}}
@@ -196,17 +213,24 @@ def concept_set_counts(concept_set_id: int, body: dict, db=Depends(get_db)):
         counts = {}
         cur = conn.cursor()
         for cfg in DOMAIN_CONFIG.values():
-            table = cfg["table"]
-            concept_col = cfg["concept_id"]
-            pid_col = cfg["person_id"]
-            placeholders = ",".join(str(i) for i in concept_ids)
+            table = safe_identifier(cfg["table"])
+            concept_col = safe_identifier(cfg["concept_id"])
+            pid_col = safe_identifier(cfg["person_id"])
             try:
-                cur.execute(
-                    f"SELECT {concept_col}, COUNT(*) AS n_records, COUNT(DISTINCT {pid_col}) AS n_persons "
-                    f"FROM {omop_schema}.{table} "
-                    f"WHERE {concept_col} IN ({placeholders}) "
-                    f"GROUP BY {concept_col}"
+                sql = psysql.SQL(
+                    "SELECT {concept_col}, COUNT(*) AS n_records, COUNT(DISTINCT {pid_col}) AS n_persons "
+                    "FROM {schema}.{table} "
+                    "WHERE {concept_col2} = ANY(%s) "
+                    "GROUP BY {concept_col3}"
+                ).format(
+                    concept_col=psysql.Identifier(concept_col),
+                    pid_col=psysql.Identifier(pid_col),
+                    schema=psysql.Identifier(omop_schema),
+                    table=psysql.Identifier(table),
+                    concept_col2=psysql.Identifier(concept_col),
+                    concept_col3=psysql.Identifier(concept_col),
                 )
+                cur.execute(sql, (concept_ids,))
                 for row in cur.fetchall():
                     cid = row[0]
                     if cid not in counts:
@@ -214,6 +238,7 @@ def concept_set_counts(concept_set_id: int, body: dict, db=Depends(get_db)):
                     counts[cid]["n_records"] += row[1]
                     counts[cid]["n_persons"] += row[2]
             except Exception:
+                logger.warning("Failed to fetch concept set counts for domain", exc_info=True)
                 conn.rollback()
                 continue
         cur.close()

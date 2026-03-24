@@ -32,13 +32,16 @@ class UpdateQueryRequest(BaseModel):
 def list_queries(
     cdm_name: str | None = None,
     request: Request = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     """List saved queries, optionally filtered by CDM."""
     q = db.query(SavedQuery)
     if cdm_name:
         q = q.filter(SavedQuery.cdm_name == cdm_name)
-    queries = q.order_by(SavedQuery.updated_at.desc()).all()
+    total = q.count()
+    queries = q.order_by(SavedQuery.updated_at.desc()).offset(offset).limit(limit).all()
     return {
         "queries": [
             {
@@ -52,7 +55,10 @@ def list_queries(
                 "updated_at": sq.updated_at.isoformat() if sq.updated_at else None,
             }
             for sq in queries
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -73,11 +79,15 @@ def create_query(req: SaveQueryRequest, request: Request, db: Session = Depends(
 
 
 @router.put("/{query_id}")
-def update_query(query_id: int, req: UpdateQueryRequest, db: Session = Depends(get_db)):
+def update_query(query_id: int, req: UpdateQueryRequest, request: Request, db: Session = Depends(get_db)):
     """Update a saved query."""
     sq = db.query(SavedQuery).filter(SavedQuery.id == query_id).first()
     if not sq:
         raise HTTPException(status_code=404, detail="Query not found")
+    user = getattr(request.state, "user", {})
+    current_user = user.get("preferred_username", "system")
+    if sq.created_by != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to update this query")
     if req.name is not None:
         sq.name = req.name
     if req.sql is not None:
@@ -89,11 +99,15 @@ def update_query(query_id: int, req: UpdateQueryRequest, db: Session = Depends(g
 
 
 @router.delete("/{query_id}")
-def delete_query(query_id: int, db: Session = Depends(get_db)):
+def delete_query(query_id: int, request: Request, db: Session = Depends(get_db)):
     """Delete a saved query."""
     sq = db.query(SavedQuery).filter(SavedQuery.id == query_id).first()
     if not sq:
         raise HTTPException(status_code=404, detail="Query not found")
+    user = getattr(request.state, "user", {})
+    current_user = user.get("preferred_username", "system")
+    if sq.created_by != current_user:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this query")
     db.delete(sq)
     db.commit()
     return {"status": "ok"}

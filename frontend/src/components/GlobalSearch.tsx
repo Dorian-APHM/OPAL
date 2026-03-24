@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Search, Users, BookOpen, Database,
-  Code, GitBranch, Command, SearchX,
+  Code, GitBranch, SearchX,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/KeycloakContext';
@@ -36,7 +36,7 @@ export default function GlobalSearch({ selectedCdm }: Props) {
   const [results, setResults] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
-  const [open, setOpen] = useState(false);
+  const [visible, setVisible] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -52,39 +52,36 @@ export default function GlobalSearch({ selectedCdm }: Props) {
     }
   }
 
-  // Ctrl+K to focus
+  const closeSearch = useCallback(() => {
+    setVisible(false);
+    setQuery('');
+    setResults({});
+    setTotal(0);
+    setActiveIndex(-1);
+  }, []);
+
+  // Ctrl+K to open, Escape to close
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        inputRef.current?.focus();
+        setVisible(true);
       }
-      // Escape to close
-      if (e.key === 'Escape' && open) {
-        setOpen(false);
-        inputRef.current?.blur();
+      if (e.key === 'Escape' && visible) {
+        closeSearch();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open]);
+  }, [visible, closeSearch]);
 
-  // Close dropdown on outside click
+  // Auto-focus input when palette opens
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target as Node) &&
-        !inputRef.current?.parentElement?.parentElement?.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    };
-    if (open) {
-      document.addEventListener('mousedown', handler);
-      return () => document.removeEventListener('mousedown', handler);
+    if (visible) {
+      // Small delay to ensure DOM is painted
+      requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [open]);
+  }, [visible]);
 
   const doSearch = useCallback(
     (q: string) => {
@@ -92,7 +89,6 @@ export default function GlobalSearch({ selectedCdm }: Props) {
       if (!q.trim()) {
         setResults({});
         setTotal(0);
-        setOpen(false);
         return;
       }
       debounceRef.current = setTimeout(async () => {
@@ -108,7 +104,6 @@ export default function GlobalSearch({ selectedCdm }: Props) {
           }
           setResults(filtered);
           setTotal(Object.values(filtered).reduce((s, arr) => s + arr.length, 0));
-          setOpen(true);
         } catch {
           setResults({});
         } finally {
@@ -126,17 +121,8 @@ export default function GlobalSearch({ selectedCdm }: Props) {
     doSearch(v);
   };
 
-  const handleClear = () => {
-    setQuery('');
-    setResults({});
-    setTotal(0);
-    setOpen(false);
-  };
-
   const handleNavigate = (type: string, item: any) => {
-    setOpen(false);
-    setQuery('');
-    setResults({});
+    closeSearch();
 
     switch (type) {
       case 'concepts':
@@ -161,7 +147,7 @@ export default function GlobalSearch({ selectedCdm }: Props) {
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!open || allResults.length === 0) return;
+    if (allResults.length === 0) return;
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -184,7 +170,7 @@ export default function GlobalSearch({ selectedCdm }: Props) {
     }
   }, [activeIndex]);
 
-  const isOpen = open && (loading || query.length > 0);
+  const hasResults = !loading && allResults.length > 0;
 
   // Group results by type for rendering with section headers
   const groupedTypes = Object.entries(results);
@@ -192,128 +178,145 @@ export default function GlobalSearch({ selectedCdm }: Props) {
   // Track cumulative index for keyboard highlight mapping
   let cumulativeIndex = 0;
 
+  if (!visible) return null;
+
   return (
-    <div className="relative">
-      <Input
-        ref={inputRef}
-        prefix={<Search className="h-4 w-4" />}
-        suffix={
-          query ? (
-            <button
-              onClick={handleClear}
-              className="text-text-dim hover:text-text-muted transition-colors bg-transparent border-none cursor-pointer p-0"
-              tabIndex={-1}
-            >
-              <SearchX className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-surface-light border border-glass-border text-[10px] text-text-dim font-mono">
-              <Command className="h-2.5 w-2.5" />K
-            </kbd>
-          )
-        }
-        placeholder="Search..."
-        value={query}
-        onChange={handleChange}
-        onFocus={() => { if (query.trim()) setOpen(true); }}
-        onKeyDown={handleKeyDown}
-        className="w-[280px] sm:w-[320px]"
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm"
+        onClick={closeSearch}
       />
 
-      {isOpen && (
+      {/* Command palette */}
+      <div className="fixed inset-0 z-[71] flex items-start justify-center pt-[15vh] pointer-events-none">
         <div
-          ref={dropdownRef}
-          className="
-            absolute top-full left-0 mt-2 w-[500px] max-h-[400px] overflow-auto z-50
-            bg-surface border border-glass-border rounded-xl
-            shadow-[0_8px_32px_rgba(0,0,0,0.4),0_0_0_1px_rgba(16,185,129,0.05)]
-            backdrop-blur-sm
-          "
+          className="pointer-events-auto w-[90vw] max-w-[560px] bg-surface border border-glass-border rounded-xl shadow-[0_16px_64px_rgba(0,0,0,0.5),0_0_0_1px_rgba(16,185,129,0.08)]"
+          onClick={(e) => e.stopPropagation()}
         >
-          {/* Loading state */}
-          {loading && (
-            <div className="flex items-center justify-center py-6">
-              <Spinner size="small" />
-            </div>
-          )}
+          {/* Search input */}
+          <div className="p-3 border-b border-glass-border">
+            <Input
+              ref={inputRef}
+              prefix={<Search className="h-4 w-4" />}
+              suffix={
+                query ? (
+                  <button
+                    onClick={() => { setQuery(''); setResults({}); setTotal(0); }}
+                    className="text-text-dim hover:text-text-muted transition-colors bg-transparent border-none cursor-pointer p-0"
+                    tabIndex={-1}
+                  >
+                    <SearchX className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <kbd className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-surface-light border border-glass-border text-[10px] text-text-dim font-mono">
+                    ESC
+                  </kbd>
+                )
+              }
+              placeholder="Search cohorts, concepts, mappings..."
+              value={query}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              className="w-full"
+            />
+          </div>
 
-          {/* Empty state */}
-          {!loading && query && allResults.length === 0 && (
-            <div className="flex flex-col items-center py-8 text-text-dim">
-              <SearchX className="h-8 w-8 opacity-40 mb-2" />
-              <span className="text-sm">No results found</span>
-            </div>
-          )}
+          {/* Results area */}
+          <div ref={dropdownRef} className="max-h-[400px] overflow-auto">
+            {/* Loading state */}
+            {loading && (
+              <div className="flex items-center justify-center py-6">
+                <Spinner size="small" />
+              </div>
+            )}
 
-          {/* Results grouped by type */}
-          {!loading && allResults.length > 0 && (
-            <div className="py-1">
-              {groupedTypes.map(([type, items]) => {
-                const cfg = TYPE_CONFIG[type];
-                if (!cfg) return null;
+            {/* Empty state */}
+            {!loading && query && allResults.length === 0 && (
+              <div className="flex flex-col items-center py-8 text-text-dim">
+                <SearchX className="h-8 w-8 opacity-40 mb-2" />
+                <span className="text-sm">No results found</span>
+              </div>
+            )}
 
-                const sectionItems = items.map((item, i) => {
-                  const idx = cumulativeIndex + i;
-                  return (
-                    <button
-                      key={`${type}-${i}`}
-                      data-result-item
-                      onClick={() => handleNavigate(type, item)}
-                      className={`
-                        w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors
-                        border-none cursor-pointer bg-transparent
-                        ${activeIndex === idx
-                          ? 'bg-emerald-500/10 text-text-bright'
-                          : 'text-text-muted hover:bg-surface-light hover:text-text-bright'
-                        }
-                      `}
-                    >
-                      <span className="shrink-0 text-text-dim">{cfg.icon}</span>
-                      <Tag color={cfg.color} className="shrink-0 text-[10px]">
-                        {cfg.label}
-                      </Tag>
-                      <span className="flex-1 text-sm font-medium truncate">
-                        {item.name || item.concept_name || item.source_value}
-                      </span>
-                      {item.concept_code && (
-                        <span className="text-[11px] text-text-dim shrink-0">
-                          {item.vocabulary_id}:{item.concept_code}
-                        </span>
-                      )}
-                      {item.concept_id && (
-                        <span className="text-[11px] text-text-dim shrink-0">
-                          #{item.concept_id}
-                        </span>
-                      )}
-                      {item.domain && (
-                        <Tag color="default" className="shrink-0 text-[10px]">
-                          {String(t(`domains.${item.domain}`, item.domain))}
+            {/* Hint when no query */}
+            {!query && !loading && (
+              <div className="flex flex-col items-center py-8 text-text-dim">
+                <Search className="h-6 w-6 opacity-30 mb-2" />
+                <span className="text-xs">Type to search across OPAL</span>
+              </div>
+            )}
+
+            {/* Results grouped by type */}
+            {hasResults && (
+              <div className="py-1">
+                {groupedTypes.map(([type, items]) => {
+                  const cfg = TYPE_CONFIG[type];
+                  if (!cfg) return null;
+
+                  const sectionItems = items.map((item, i) => {
+                    const idx = cumulativeIndex + i;
+                    return (
+                      <button
+                        key={`${type}-${i}`}
+                        data-result-item
+                        onClick={() => handleNavigate(type, item)}
+                        className={`
+                          w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors
+                          border-none cursor-pointer bg-transparent
+                          ${activeIndex === idx
+                            ? 'bg-emerald-500/10 text-text-bright'
+                            : 'text-text-muted hover:bg-surface-light hover:text-text-bright'
+                          }
+                        `}
+                      >
+                        <span className="shrink-0 text-text-dim">{cfg.icon}</span>
+                        <Tag color={cfg.color} className="shrink-0 text-[10px]">
+                          {cfg.label}
                         </Tag>
-                      )}
-                      {item.n_records != null && (
-                        <span className="text-[11px] text-text-dim shrink-0">
-                          {item.n_records.toLocaleString()} rec.
+                        <span className="flex-1 text-sm font-medium truncate">
+                          {item.name || item.concept_name || item.source_value}
                         </span>
-                      )}
-                    </button>
-                  );
-                });
+                        {item.concept_code && (
+                          <span className="text-[11px] text-text-dim shrink-0">
+                            {item.vocabulary_id}:{item.concept_code}
+                          </span>
+                        )}
+                        {item.concept_id && (
+                          <span className="text-[11px] text-text-dim shrink-0">
+                            #{item.concept_id}
+                          </span>
+                        )}
+                        {item.domain && (
+                          <Tag color="default" className="shrink-0 text-[10px]">
+                            {String(t(`domains.${item.domain}`, item.domain))}
+                          </Tag>
+                        )}
+                        {item.n_records != null && (
+                          <span className="text-[11px] text-text-dim shrink-0">
+                            {item.n_records.toLocaleString()} rec.
+                          </span>
+                        )}
+                      </button>
+                    );
+                  });
 
-                cumulativeIndex += items.length;
+                  cumulativeIndex += items.length;
 
-                return (
-                  <div key={type}>
-                    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-dim">
-                      {cfg.label}s
+                  return (
+                    <div key={type}>
+                      <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-dim">
+                        {cfg.label}s
+                      </div>
+                      {sectionItems}
                     </div>
-                    {sectionItems}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
-          {/* Footer with total */}
+          {/* Footer */}
           {!loading && total > 0 && (
             <div className="px-3 py-2 border-t border-glass-border flex items-center justify-between">
               <span className="text-[11px] text-text-dim">
@@ -332,7 +335,7 @@ export default function GlobalSearch({ selectedCdm }: Props) {
             </div>
           )}
         </div>
-      )}
-    </div>
+      </div>
+    </>
   );
 }

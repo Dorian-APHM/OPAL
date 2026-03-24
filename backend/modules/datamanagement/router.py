@@ -10,19 +10,25 @@ as cohort characterization / quality analysis).
 import csv
 import io
 import logging
+import os
+import tempfile
 import threading
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from utils.rate_limit import limiter
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from psycopg2.extras import DictCursor
 
 from db.app_db import get_db, SessionLocal
 from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
+from utils.cdm_helper import check_cdm_access
 from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA
 from modules.cohort.sql_builder import build_cohort_sql
@@ -39,6 +45,20 @@ router = APIRouter(prefix="/api/datamanagement", tags=["datamanagement"])
 
 # ──── Helpers ────
 
+def _assert_task_owner(request: Request, task: dict) -> None:
+    """Raise HTTP 403 if the current user is not the task owner (or admin/data-manager)."""
+    from config import AUTH_ENABLED
+    if not AUTH_ENABLED:
+        return
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", []) or user.get("realm_access", {}).get("roles", [])
+    if username == task.get("username") or any(r in ("admin", "data-manager") for r in roles):
+        return
+    raise HTTPException(status_code=403, detail="Access denied: not your extraction task")
+
 def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
@@ -54,7 +74,8 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", cdm.name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return cdm, conn
 
 
@@ -106,6 +127,8 @@ class ExtractRequest(BaseModel):
 
 # ──── Background task registry ────
 _active_extractions: dict[str, dict] = {}
+_extractions_lock = threading.Lock()
+_MAX_ACTIVE_EXTRACTIONS = 100
 
 
 # ──── Endpoints ────
@@ -116,20 +139,30 @@ def list_cohorts_for_extraction(
     db: Session = Depends(get_db),
 ):
     """List saved cohorts available for data extraction."""
-    cohorts = (
-        db.query(Cohort)
+    # Subquery: get the max version per cohort_id
+    max_ver_subq = (
+        db.query(
+            CohortVersion.cohort_id,
+            func.max(CohortVersion.version).label("max_version"),
+        )
+        .group_by(CohortVersion.cohort_id)
+        .subquery()
+    )
+    # Join cohorts with their latest version in a single query
+    rows = (
+        db.query(Cohort, CohortVersion)
+        .outerjoin(max_ver_subq, Cohort.id == max_ver_subq.c.cohort_id)
+        .outerjoin(
+            CohortVersion,
+            (CohortVersion.cohort_id == Cohort.id)
+            & (CohortVersion.version == max_ver_subq.c.max_version),
+        )
         .filter(Cohort.cdm_name == cdm_name)
         .order_by(Cohort.updated_at.desc())
         .all()
     )
     result = []
-    for c in cohorts:
-        latest = (
-            db.query(CohortVersion)
-            .filter(CohortVersion.cohort_id == c.id)
-            .order_by(CohortVersion.version.desc())
-            .first()
-        )
+    for c, latest in rows:
         has_same_visit = False
         if latest and latest.criteria_json:
             has_same_visit = _cohort_has_same_visit(latest.criteria_json)
@@ -217,6 +250,7 @@ def _build_extraction_context(db: Session, req: ExtractRequest):
 
 
 @router.post("/extract/start")
+@limiter.limit("3/minute")
 def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch extraction as a background task.
@@ -232,6 +266,7 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     # Validate upfront (will raise HTTPException if invalid)
     cohort, version = _get_cohort_and_version(db, req.cohort_id)
     cdm_name = cohort.cdm_name
+    check_cdm_access(request, cdm_name)
     cohort_name = cohort.name
 
     criteria = version.criteria_json
@@ -248,20 +283,29 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     username = user.get("preferred_username", "anonymous")
 
     task_id = str(uuid.uuid4())
-    _active_extractions[task_id] = {
-        "status": "running",
-        "cdm_name": cdm_name,
-        "cohort_name": cohort_name,
-        "cohort_id": req.cohort_id,
-        "username": username,
-        "completed": 0,
-        "total": 3,  # count + preview + full CSV
-        "current_step": "",
-        "result": None,
-        "csv_data": None,
-        "csv_filename": None,
-        "error": None,
-    }
+    with _extractions_lock:
+        # Evict completed/error tasks if at capacity
+        if len(_active_extractions) >= _MAX_ACTIVE_EXTRACTIONS:
+            stale = [k for k, v in _active_extractions.items() if v["status"] in ("completed", "error")]
+            for k in stale:
+                del _active_extractions[k]
+        if len(_active_extractions) >= _MAX_ACTIVE_EXTRACTIONS:
+            raise HTTPException(status_code=429, detail="Too many concurrent extractions")
+        _active_extractions[task_id] = {
+            "status": "running",
+            "cdm_name": cdm_name,
+            "cohort_name": cohort_name,
+            "cohort_id": req.cohort_id,
+            "username": username,
+            "completed": 0,
+            "total": 3,  # count + preview + full CSV
+            "current_step": "",
+            "result": None,
+            "csv_path": None,
+            "csv_filename": None,
+            "completed_at": None,
+            "error": None,
+        }
 
     # Serialise request params for the thread
     cohort_id = req.cohort_id
@@ -270,11 +314,12 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     preview_limit = req.preview_limit
 
     def _progress(completed: int, total: int, step_label: str):
-        task = _active_extractions.get(task_id)
-        if task:
-            task["completed"] = completed
-            task["total"] = total
-            task["current_step"] = step_label
+        with _extractions_lock:
+            task = _active_extractions.get(task_id)
+            if task:
+                task["completed"] = completed
+                task["total"] = total
+                task["current_step"] = step_label
 
     def _worker():
         conn = None
@@ -325,44 +370,53 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                             row[k] = str(v)
             _progress(2, 3, "Fetching preview")
 
-            # Step 3: Build full CSV
+            # Step 3: Build full CSV — stream to temp file to avoid OOM
             _progress(2, 3, "Building CSV...")
-            csv_buf = io.StringIO()
-            writer = csv.writer(csv_buf)
-            with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
-                cur.itersize = 2000
-                cur.execute(extraction_sql)
-                # Named cursors: description is None until first fetch
-                first_row = cur.fetchone()
-                csv_columns = [desc[0] for desc in cur.description] if cur.description else []
-                writer.writerow(csv_columns)
-                if first_row:
-                    writer.writerow([
-                        v.isoformat() if hasattr(v, 'isoformat') else v
-                        for v in (first_row[col] for col in csv_columns)
-                    ])
-                for row in cur:
-                    writer.writerow([
-                        v.isoformat() if hasattr(v, 'isoformat') else v
-                        for v in (row[col] for col in csv_columns)
-                    ])
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".csv", prefix="opal_extract_")
+            try:
+                with os.fdopen(tmp_fd, "w", newline="", encoding="utf-8") as tmp_f:
+                    writer = csv.writer(tmp_f)
+                    with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
+                        cur.itersize = 2000
+                        cur.execute(extraction_sql)
+                        first_row = cur.fetchone()
+                        csv_columns = [desc[0] for desc in cur.description] if cur.description else []
+                        writer.writerow(csv_columns)
+                        if first_row:
+                            writer.writerow([
+                                v.isoformat() if hasattr(v, 'isoformat') else v
+                                for v in (first_row[col] for col in csv_columns)
+                            ])
+                        for row in cur:
+                            writer.writerow([
+                                v.isoformat() if hasattr(v, 'isoformat') else v
+                                for v in (row[col] for col in csv_columns)
+                            ])
+            except Exception:
+                # Clean up temp file on error
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             _progress(3, 3, "Done")
 
             filename = f"dataset_{cohort_name.replace(' ', '_')}_{cohort_id}.csv"
 
-            task = _active_extractions.get(task_id)
-            if task:
-                task["result"] = {
-                    "columns": columns,
-                    "rows": rows,
-                    "total_count": total_count,
-                    "preview_limit": preview_limit,
-                    "cohort_name": cohort_name,
-                    "sql": extraction_sql,
-                }
-                task["csv_data"] = csv_buf.getvalue()
-                task["csv_filename"] = filename
-                task["status"] = "completed"
+            with _extractions_lock:
+                task = _active_extractions.get(task_id)
+                if task:
+                    task["result"] = {
+                        "columns": columns,
+                        "rows": rows,
+                        "total_count": total_count,
+                        "preview_limit": preview_limit,
+                        "cohort_name": cohort_name,
+                    }
+                    task["csv_path"] = tmp_path
+                    task["csv_filename"] = filename
+                    task["completed_at"] = time.time()
+                    task["status"] = "completed"
 
             # Send notification
             try:
@@ -385,10 +439,11 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
 
         except Exception as e:
             logger.exception("Extraction failed")
-            task = _active_extractions.get(task_id)
-            if task:
-                task["error"] = str(e)
-                task["status"] = "error"
+            with _extractions_lock:
+                task = _active_extractions.get(task_id)
+                if task:
+                    task["error"] = "An internal error occurred during data extraction"
+                    task["status"] = "error"
         finally:
             if conn:
                 try:
@@ -396,18 +451,20 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                 except Exception:
                     pass
 
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"task_id": task_id, "status": "running"}
 
 
 @router.get("/extract/status/{task_id}")
-def extract_status(task_id: str):
+def extract_status(task_id: str, request: Request):
     """Poll the status of an extraction task."""
-    task = _active_extractions.get(task_id)
+    with _extractions_lock:
+        task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    _assert_task_owner(request, task)
 
     resp: dict = {
         "task_id": task_id,
@@ -422,47 +479,84 @@ def extract_status(task_id: str):
         # Don't clean up yet — CSV may still be downloaded
     elif task["status"] == "error":
         resp["error"] = task["error"]
-        _active_extractions.pop(task_id, None)
+        with _extractions_lock:
+            _active_extractions.pop(task_id, None)
     return resp
 
 
 @router.get("/extract/download/{task_id}")
-def extract_download_task(task_id: str):
+def extract_download_task(task_id: str, request: Request):
     """Download the CSV produced by a completed extraction task."""
-    task = _active_extractions.get(task_id)
+    with _extractions_lock:
+        task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    _assert_task_owner(request, task)
     if task["status"] != "completed":
         raise HTTPException(status_code=400, detail="Extraction not yet completed")
 
-    csv_data = task.get("csv_data")
+    csv_path = task.get("csv_path")
     filename = task.get("csv_filename", "dataset.csv")
-    if not csv_data:
+    if not csv_path or not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="CSV data not available")
 
-    # Clean up after download
-    _active_extractions.pop(task_id, None)
+    file_size = os.path.getsize(csv_path)
+
+    def _stream_and_cleanup():
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                while True:
+                    chunk = f.read(65536)  # 64KB chunks
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            # Clean up temp file and task entry after streaming
+            try:
+                os.unlink(csv_path)
+            except OSError:
+                pass
+            with _extractions_lock:
+                _active_extractions.pop(task_id, None)
 
     return StreamingResponse(
-        iter([csv_data]),
+        _stream_and_cleanup(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(file_size),
+        },
     )
 
 
 @router.post("/extract/cancel/{task_id}")
-def extract_cancel(task_id: str):
+def extract_cancel(task_id: str, request: Request):
     """Cancel/clean up an extraction task."""
-    task = _active_extractions.pop(task_id, None)
+    with _extractions_lock:
+        task = _active_extractions.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    _assert_task_owner(request, task)
+    with _extractions_lock:
+        task = _active_extractions.pop(task_id, None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    # Clean up temp file if present
+    csv_path = task.get("csv_path")
+    if csv_path:
+        try:
+            os.unlink(csv_path)
+        except OSError:
+            pass
     return {"status": "cancelled"}
 
 
 @router.get("/extract/active")
 def extract_active():
     """Return any currently running extraction task."""
-    for tid, task in _active_extractions.items():
+    with _extractions_lock:
+        items = list(_active_extractions.items())
+    for tid, task in items:
         if task["status"] == "running":
             return {
                 "task_id": tid,
@@ -474,7 +568,7 @@ def extract_active():
                 "current_step": task.get("current_step", ""),
             }
     # Also return completed tasks not yet downloaded
-    for tid, task in _active_extractions.items():
+    for tid, task in items:
         if task["status"] == "completed":
             return {
                 "task_id": tid,

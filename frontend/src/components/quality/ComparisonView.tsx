@@ -150,14 +150,14 @@ export default function ComparisonView({ cdmNameA, cdmNameB, domain, onCdmBChang
           )}
 
           {/* Side by side results */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="min-w-0">
               <h5 className="text-sm font-semibold text-text-bright mb-2">{comparison.snapshot_a.cdm_name} (v{comparison.snapshot_a.version})</h5>
-              <AnalysisResults results={comparison.results_a} />
+              <AnalysisResults results={comparison.results_a} compact />
             </div>
-            <div>
+            <div className="min-w-0">
               <h5 className="text-sm font-semibold text-text-bright mb-2">{comparison.snapshot_b.cdm_name} (v{comparison.snapshot_b.version})</h5>
-              <AnalysisResults results={comparison.results_b} />
+              <AnalysisResults results={comparison.results_b} compact />
             </div>
           </div>
         </>

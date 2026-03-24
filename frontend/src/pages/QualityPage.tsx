@@ -96,7 +96,7 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
           setAnalysisId(null);
         }
       })
-      .catch(() => {});
+      .catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
 
     return () => {
       mountedRef.current = false;
@@ -149,7 +149,9 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
     try {
       await conformityApi.cancel(analysisId);
       toast.info(t('common.cancelled', 'Cancelled'));
-    } catch {}
+    } catch {
+      toast.error(t('common.error', 'An error occurred'));
+    }
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
     setRunning(false);
@@ -323,9 +325,11 @@ export default function QualityPage({ selectedCdm }: Props) {
   const [analyzedDomains, setAnalyzedDomains] = useSessionState('quality:analyzedDomains', new Set<string>());
   const streamAbortRef = useRef<AbortController | null>(null);
   const analysisIdRef = useRef<string | null>(null);
+  const singleAnalysisIdRef = useRef<string | null>(null);
+  const singlePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const { hasNotif, markRead, hasAnyNotifExcept, markAllReadExcept } = useNotifDots('quality_done');
+  const { hasNotif, markRead, hasAnyNotifExcept } = useNotifDots('quality_done');
 
   // Track mounted state
   useEffect(() => {
@@ -336,12 +340,32 @@ export default function QualityPage({ selectedCdm }: Props) {
       if (streamAbortRef.current) streamAbortRef.current.abort();
       streamAbortRef.current = null;
       if (batchPollRef.current) clearInterval(batchPollRef.current);
+      if (singlePollRef.current) clearInterval(singlePollRef.current);
     };
   }, []);
 
+  // Refresh data when a quality_done notification arrives (analysis finished while on this page or after navigating back)
   useEffect(() => {
-    qualityApi.domains().then((res) => setDomains(res.data.domains));
-  }, []);
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (!notif || notif.type !== 'quality_done') return;
+      if (selectedCdm && notif.link && notif.link.includes(`cdm=${selectedCdm}`)) {
+        qualityApi.timeline(selectedCdm).then((r) => {
+          if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines)));
+        }).catch(() => {});
+        if (selectedDomain) {
+          loadLatestSnapshot();
+          loadSnapshots();
+        }
+      }
+    };
+    window.addEventListener('opal:notification', handler);
+    return () => window.removeEventListener('opal:notification', handler);
+  }, [selectedCdm, selectedDomain]);
+
+  useEffect(() => {
+    qualityApi.domains(selectedCdm || undefined).then((res) => setDomains(res.data.domains));
+  }, [selectedCdm]);
 
   useEffect(() => {
     if (!selectedCdm) { setAnalyzedDomains(new Set()); return; }
@@ -350,28 +374,43 @@ export default function QualityPage({ selectedCdm }: Props) {
     }).catch(() => setAnalyzedDomains(new Set()));
   }, [selectedCdm]);
 
-  // Check for running batch analyses on mount / CDM change
+  // Check for running batch/single analyses on mount / CDM change
   useEffect(() => {
     if (!selectedCdm) return;
     qualityApi.activeAnalyses()
       .then(res => {
         if (!mountedRef.current) return;
-        const active = res.data.active.find(
+        // Resume batch if running
+        const batch = res.data.active.find(
           a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled
         );
-        if (active) {
-          // Resume batch monitoring with current progress
-          analysisIdRef.current = active.analysis_id;
+        if (batch) {
+          analysisIdRef.current = batch.analysis_id;
           setBatchLoading(true);
-          const pct = active.total > 0 ? Math.round((active.completed / active.total) * 100) : 0;
+          const pct = batch.total > 0 ? Math.round((batch.completed / batch.total) * 100) : 0;
           setBatchProgress(pct);
-          if (active.domain_status?.length) {
-            setBatchStatus(active.domain_status);
-          }
-          startBatchPolling(active.analysis_id, active.domains);
+          if (batch.domain_status?.length) setBatchStatus(batch.domain_status);
+          startBatchPolling(batch.analysis_id, batch.domains);
+        } else {
+          // No active batch — clear stale loading state
+          setBatchLoading(false);
+          analysisIdRef.current = null;
+        }
+        // Resume single-domain if running
+        const single = res.data.active.find(
+          a => a.type === 'single' && a.cdm_name === selectedCdm && !a.cancelled
+        );
+        if (single) {
+          singleAnalysisIdRef.current = single.analysis_id;
+          setLoading(true);
+          startSinglePolling(single.analysis_id, single.domains[0]);
+        } else {
+          // No active single — clear stale loading state
+          setLoading(false);
+          singleAnalysisIdRef.current = null;
         }
       })
-      .catch(() => {});
+      .catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
   }, [selectedCdm]);
 
   // Poll for batch analysis completion when we've reconnected
@@ -403,12 +442,12 @@ export default function QualityPage({ selectedCdm }: Props) {
             analysisIdRef.current = null;
             if (batchPollRef.current) clearInterval(batchPollRef.current);
             batchPollRef.current = null;
-            toast.success(t('common.success'));
+            // Toast is handled globally by TopNav via WebSocket notification
             // Refresh analyzed domains
             if (selectedCdm) {
               qualityApi.timeline(selectedCdm).then((r) => {
                 if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines)));
-              }).catch(() => {});
+              }).catch(() => toast.error(t('quality.timeline_failed', 'Failed to refresh timeline')));
             }
             // Reload current snapshot if viewing an analyzed domain
             if (selectedDomain) {
@@ -417,7 +456,7 @@ export default function QualityPage({ selectedCdm }: Props) {
             }
           }
         })
-        .catch(() => {});
+        .catch(() => {}); // polling — silent
     }, 2000);
   }, [selectedCdm, selectedDomain, t, toast]);
 
@@ -463,30 +502,64 @@ export default function QualityPage({ selectedCdm }: Props) {
     }
     if (batchPollRef.current) { clearInterval(batchPollRef.current); batchPollRef.current = null; }
     setBatchLoading(false);
+    setBatchProgress(0);
     toast.info(t('common.cancelled', 'Cancelled'));
   };
 
+  // Poll for single-domain analysis completion
+  const startSinglePolling = useCallback((aid: string, domain: string) => {
+    if (singlePollRef.current) clearInterval(singlePollRef.current);
+    singlePollRef.current = setInterval(() => {
+      qualityApi.activeAnalyses()
+        .then(res => {
+          if (!mountedRef.current) return;
+          const entry = res.data.active.find(a => a.analysis_id === aid);
+          if (entry && !entry.cancelled) return; // still running
+          // Finished or cancelled — stop polling
+          if (singlePollRef.current) clearInterval(singlePollRef.current);
+          singlePollRef.current = null;
+          singleAnalysisIdRef.current = null;
+          setLoading(false);
+          // Check if it succeeded
+          const succeeded = !entry; // entry removed = finished
+          if (succeeded) {
+            setAnalyzedDomains(prev => new Set([...prev, domain]));
+            toast.success(t('common.success'));
+            if (selectedDomain === domain) {
+              loadLatestSnapshot();
+              loadSnapshots();
+            }
+          } else {
+            toast.info(t('common.cancelled', 'Cancelled'));
+          }
+        })
+        .catch(() => {}); // polling — silent
+    }, 2000);
+  }, [selectedDomain, t, toast]);
+
   const cancelSingleAnalysis = () => {
-    if (streamAbortRef.current) { streamAbortRef.current.abort(); streamAbortRef.current = null; }
+    if (singleAnalysisIdRef.current) {
+      qualityApi.cancelAnalysis(singleAnalysisIdRef.current).catch(() => {});
+      singleAnalysisIdRef.current = null;
+    }
+    if (singlePollRef.current) { clearInterval(singlePollRef.current); singlePollRef.current = null; }
     setLoading(false);
     toast.info(t('common.cancelled', 'Cancelled'));
   };
 
   const runAnalysis = async () => {
     if (!selectedCdm || !selectedDomain) return;
-    const ctrl = new AbortController(); streamAbortRef.current = ctrl;
     setLoading(true);
     try {
       const res = await qualityApi.analyze(selectedCdm, selectedDomain);
-      if (ctrl.signal.aborted || !mountedRef.current) return;
-      setResults(res.data.results); setSnapshotId(res.data.snapshot_id);
-      setAnalyzedDomains(prev => new Set([...prev, selectedDomain]));
-      await loadSnapshots();
-      toast.success(t('common.success'));
+      const aid = res.data.analysis_id;
+      singleAnalysisIdRef.current = aid;
+      startSinglePolling(aid, selectedDomain);
     } catch (err: any) {
-      if (ctrl.signal.aborted || !mountedRef.current) return;
+      if (!mountedRef.current) return;
       toast.error(err?.response?.data?.detail || t('common.error'));
-    } finally { if (mountedRef.current) setLoading(false); streamAbortRef.current = null; }
+      setLoading(false);
+    }
   };
 
   const runBatchAnalysis = useCallback(async () => {
@@ -507,38 +580,75 @@ export default function QualityPage({ selectedCdm }: Props) {
       }
       const decoder = new TextDecoder();
       let buffer = '';
-      while (true) {
-        if (ctrl.signal.aborted) { reader.cancel(); break; }
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n'); buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event: BatchProgressEvent = JSON.parse(line.slice(6));
-              if (event.type === 'start' && event.analysis_id) {
-                analysisIdRef.current = event.analysis_id;
-              } else if (event.type === 'progress') {
-                if (mountedRef.current) {
-                  setBatchProgress(Math.round((event.completed / event.total) * 100));
-                  if (event.domain && event.status && event.status !== 'running') {
-                    setBatchStatus(prev => [...prev, { domain: event.domain!, status: event.status! }]);
-                    if (event.status === 'success') setAnalyzedDomains(prev => new Set([...prev, event.domain!]));
+      let gotStart = false;
+
+      // Start polling as fallback — authoritative source for batchStatus & progress
+      const pollFallback = setInterval(() => {
+        if (!mountedRef.current) return;
+        qualityApi.activeAnalyses().then(res => {
+          if (!mountedRef.current) return;
+          const aid = analysisIdRef.current;
+          if (!aid) return;
+          const entry = res.data.active.find(a => a.analysis_id === aid && !a.cancelled);
+          if (entry) {
+            const pct = entry.total > 0 ? Math.round((entry.completed / entry.total) * 100) : 0;
+            setBatchProgress(pct);
+            if (entry.domain_status?.length) {
+              setBatchStatus(entry.domain_status);
+              entry.domain_status.forEach((ds: { domain: string; status: string }) => {
+                if (ds.status === 'success') setAnalyzedDomains(prev => new Set([...prev, ds.domain]));
+              });
+            }
+          }
+        }).catch(() => {});
+      }, 2000);
+
+      try {
+        while (true) {
+          if (ctrl.signal.aborted) { reader.cancel(); break; }
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n'); buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const event: BatchProgressEvent = JSON.parse(line.slice(6));
+                if (event.type === 'start' && event.analysis_id) {
+                  analysisIdRef.current = event.analysis_id;
+                  gotStart = true;
+                } else if (event.type === 'progress') {
+                  if (mountedRef.current) {
+                    setBatchProgress(Math.round((event.completed / event.total) * 100));
+                    if (event.domain && event.status && event.status !== 'running') {
+                      setBatchStatus(prev => [...prev, { domain: event.domain!, status: event.status! }]);
+                      if (event.status === 'success') setAnalyzedDomains(prev => new Set([...prev, event.domain!]));
+                    }
                   }
+                } else if (event.type === 'done') {
+                  if (mountedRef.current) {
+                    setBatchProgress(100);
+                  }
+                } else if (event.type === 'error') {
+                  if (mountedRef.current) toast.error(event.message || t('common.error'));
                 }
-              } else if (event.type === 'done') {
-                if (mountedRef.current) {
-                  setBatchProgress(100);
-                  toast.success(`${event.completed}/${event.total} ${t('common.success')}`);
-                }
-              } else if (event.type === 'error') {
-                if (mountedRef.current) toast.error(event.message || t('common.error'));
-              }
-            } catch {}
+              } catch {}
+            }
           }
         }
+      } finally {
+        clearInterval(pollFallback);
       }
+
+      // If we never got the start event (stream was fully buffered), get analysis_id from active
+      if (!gotStart && !analysisIdRef.current) {
+        try {
+          const res = await qualityApi.activeAnalyses();
+          const batch = res.data.active.find(a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled);
+          if (batch) analysisIdRef.current = batch.analysis_id;
+        } catch {}
+      }
+
       if (mountedRef.current && selectedDomain) { await loadLatestSnapshot(); await loadSnapshots(); }
     } catch {
       if (mountedRef.current) toast.error(t('common.error'));
@@ -555,6 +665,7 @@ export default function QualityPage({ selectedCdm }: Props) {
 
   const handleDomainChange = (domain: string | null) => {
     setSelectedDomain(domain);
+    if (domain) markRead(domain);
   };
 
   if (!selectedCdm) {
@@ -569,20 +680,22 @@ export default function QualityPage({ selectedCdm }: Props) {
   const analysisContent = (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-2xl font-bold text-text-bright">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <h3 className="text-xl sm:text-2xl font-bold text-text-bright">
           {t('quality.title')} — {selectedCdm}
         </h3>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             icon={<LineChart className="h-4 w-4" />}
             variant={showTimeline ? 'primary' : 'default'}
             onClick={() => setShowTimeline(!showTimeline)}
+            size="small"
           >
             {t('quality.timeline_title')}
           </Button>
           <Button
             icon={<Download className="h-4 w-4" />}
+            size="small"
             onClick={() => authDownload(
               compareMode && compareCdm
                 ? qualityApi.comparisonReportUrl(selectedCdm, compareCdm, i18n.language, selectedDomain || undefined)
@@ -598,9 +711,9 @@ export default function QualityPage({ selectedCdm }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-3">
+      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-3">
         {/* Left panel */}
-        <div className="col-span-12 lg:col-span-2 space-y-3">
+        <div className="w-full lg:col-span-2 space-y-3">
           {/* Domain selector */}
           <Card size="small">
             <div className="space-y-3">
@@ -614,6 +727,7 @@ export default function QualityPage({ selectedCdm }: Props) {
                   label: (
                     <span className="flex items-center gap-1.5">
                       {t(`domains.${d}`, d)}
+                      {hasNotif(d) && <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />}
                       {analyzedDomains.has(d) && <CheckCircle className="h-3.5 w-3.5 text-emerald-accent" />}
                     </span>
                   ),
@@ -634,7 +748,7 @@ export default function QualityPage({ selectedCdm }: Props) {
 
           {/* Batch analysis */}
           <Card size="small">
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold text-text-bright">{t('quality.run_batch')}</span>
                 <button
@@ -714,7 +828,7 @@ export default function QualityPage({ selectedCdm }: Props) {
         </div>
 
         {/* Main content */}
-        <div className="col-span-12 lg:col-span-10">
+        <div className="w-full lg:col-span-10">
           {showTimeline && (
             <div className="mb-4">
               <SnapshotTimeline selectedCdm={selectedCdm} />
@@ -755,10 +869,7 @@ export default function QualityPage({ selectedCdm }: Props) {
   );
 
   const handleTabChange = (key: string) => {
-    if (key === 'analysis') {
-      // Mark all domain notifs as read (everything except Conformity)
-      markAllReadExcept('Conformity');
-    } else if (key === 'conformity') {
+    if (key === 'conformity') {
       markRead('Conformity');
     }
   };

@@ -34,14 +34,14 @@ Bienvenue dans OPAL (OMOP Platform for Analytics & Lineage). Ce guide vous accom
 Si vous n'avez pas de compte :
 
 1. Cliquer sur l'onglet **Inscription**
-2. Remplir le formulaire : nom d'utilisateur, email, prenom, nom, role souhaite
+2. Remplir le formulaire : **matricule** (identifiant APHM) et **role souhaite**
 3. Soumettre la demande
 4. Attendre la validation par un administrateur
-5. Vous recevrez un mot de passe temporaire a changer a la premiere connexion
+5. Vous vous connecterez ensuite avec vos identifiants APHM une fois approuve
 
 #### Sans authentification
 
-Si Keycloak n'est pas active (`AUTH_ENABLED=false`), vous accedez directement a toutes les fonctionnalites en tant qu'administrateur.
+Si Keycloak n'est pas active (`AUTH_ENABLED=true` par defaut, a mettre a `false` pour desactiver), vous accedez directement a toutes les fonctionnalites en tant qu'administrateur.
 
 ### Roles et permissions
 
@@ -54,13 +54,13 @@ Votre role determine les pages et fonctionnalites auxquelles vous avez acces :
 | **Chercheur** | Recherche clinique | Qualite, Cohortes, Concepts |
 | **Medecin** | Medecin / terminologue | Mapping, Cohortes, Concepts |
 
-Votre role est affiche sous votre nom d'utilisateur dans le menu lateral.
+Votre role est affiche sous votre nom d'utilisateur dans la barre de navigation supérieure (TopNav).
 
 ### Selectionner un CDM
 
 Avant d'utiliser la plupart des fonctionnalites, vous devez selectionner un CDM :
 
-1. Dans le menu lateral (a gauche), deployer le selecteur **CDM**
+1. Dans la barre de navigation supérieure (TopNav), deployer le selecteur **CDM**
 2. Choisir le CDM sur lequel vous souhaitez travailler
 3. Le CDM selectionne est retenu entre les sessions
 
@@ -70,10 +70,11 @@ Avant d'utiliser la plupart des fonctionnalites, vous devez selectionner un CDM 
 
 ## 2. Navigation et interface
 
-### Menu lateral
+### Barre de navigation supérieure (TopNav)
 
-Le menu lateral a gauche est votre point d'acces a toutes les fonctionnalites :
+La barre de navigation supérieure est votre point d'acces a toutes les fonctionnalites :
 
+- **Logo OPAL** : retour a la page d'accueil
 - **Selecteur CDM** : choisir la base OMOP active
 - **Qualite** : analyse qualite des donnees
 - **Cohortes** : constructeur de cohortes
@@ -85,14 +86,33 @@ Le menu lateral a gauche est votre point d'acces a toutes les fonctionnalites :
 - **Audit** : journal d'activite (admin)
 - **Utilisateurs** : gestion des comptes (admin)
 
-Le menu lateral est repliable en cliquant sur le bouton hamburger.
-
-### Barre de pied de page
-
-En bas du menu lateral :
+A droite de la TopNav :
 - **Bouton langue** (FR/EN) : basculer entre francais et anglais
 - **Mode sombre** : activer/desactiver le theme sombre
+- **Cloche notifications** : voir les notifications non lues
 - **Deconnexion** : fermer votre session
+
+### Page d'accueil (Dashboard)
+
+La page d'accueil s'affiche apres connexion et offre une vue d'ensemble de votre environnement OPAL :
+
+- **CDM enregistres** : liste des bases OMOP disponibles avec leurs informations principales
+- **Activites recentes** : dernieres actions effectuees (analyses, cohortes, mappings)
+- **Favoris** : acces rapide aux elements marques comme favoris
+- **Acces rapide** : raccourcis vers les fonctionnalites principales (Qualite, Cohortes, Mapping, Concepts)
+
+### Notifications
+
+L'icone cloche dans la TopNav affiche le nombre de notifications non lues :
+
+- Cliquer sur la cloche pour ouvrir le **tiroir de notifications**
+- Les notifications sont classees par categorie :
+  - **Analyses** : fin d'analyse qualite, nouveaux snapshots
+  - **Cohortes** : partage de cohortes, mises a jour
+  - **Mapping** : suggestions generees, decisions appliquees
+  - **Administration** : demandes d'acces, changements de role
+- Actions disponibles : **marquer comme lu**, **supprimer** une notification
+- Les notifications arrivent en **temps reel via WebSocket** (pas besoin de rafraichir la page)
 
 ### Conventions d'interface
 
@@ -138,7 +158,7 @@ La liste des CDM enregistres affiche :
 
 **Acces** : Admin, OMOP DIM, Chercheur
 
-L'analyse qualite evalue vos donnees OMOP a travers 11 domaines et stocke les resultats sous forme de snapshots versiones.
+L'analyse qualite evalue vos donnees OMOP a travers 14 domaines (3 speciaux + 11 cliniques) et stocke les resultats sous forme de snapshots versiones.
 
 ### Lancer une analyse
 
@@ -148,7 +168,7 @@ L'analyse qualite evalue vos donnees OMOP a travers 11 domaines et stocke les re
    - **Dashboard** : vue d'ensemble globale
    - **Person** : demographie
    - **ObservationPeriod** : periodes d'observation
-   - **Condition, Drug, Measurement, Observation, Procedure, Visit, Device, Death** : domaines cliniques
+   - **Condition, Drug, Measurement, Observation, Procedure, Visit, Device, Death, Specimen, Note, Payer_Plan_Period** : domaines cliniques
 2. Cliquer sur **Analyser**
 3. Les resultats s'affichent avec graphiques et tableaux
 
@@ -639,7 +659,7 @@ Le journal d'audit trace toutes les actions effectuees dans OPAL.
 R : Votre role ne vous donne pas acces a ces fonctionnalites. Contactez un administrateur pour modifier vos permissions.
 
 **Q : Comment changer la langue ?**
-R : Cliquez sur le bouton FR/EN en bas du menu lateral. Le choix est retenu entre les sessions.
+R : Cliquez sur le bouton FR/EN dans la barre de navigation supérieure (TopNav). Le choix est retenu entre les sessions.
 
 **Q : Les analyses sont lentes, que faire ?**
 R : La duree depend de la taille de votre CDM. Pour les gros CDM (>1M patients), certaines analyses peuvent prendre plusieurs minutes. Utilisez l'analyse par lot pour lancer tous les domaines en une fois.

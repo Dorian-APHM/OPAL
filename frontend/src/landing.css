@@ -151,3 +151,59 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-emerald-accent);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Crème Sauge — Light Theme
+   No white anywhere. Warm cream + sage green.
+   Activated via data-theme="light" on <html>.
+   ═══════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  /* Core surfaces — warmer, more contrast between bg and cards */
+  --color-deep-base: #D5CDBC;
+  --color-surface: #C8BFA9;
+  --color-surface-light: #DDD6C7;
+  --color-surface-dark: #B8AF99;
+
+  /* Brand — sage green */
+  --color-emerald-accent: #8FAE6B;
+  --color-emerald-light: #A8C484;
+  --color-emerald-glow: rgba(143, 174, 107, 0.20);
+  --color-emerald-glow-strong: rgba(143, 174, 107, 0.50);
+  --color-teal-accent: #6B9E5A;
+
+  /* Text — dark on cream */
+  --color-text-bright: #2D3B1E;
+  --color-text-muted: #5E6D50;
+  --color-text-dim: #8B9A7D;
+
+  /* Borders */
+  --color-border-subtle: rgba(45, 59, 30, 0.08);
+  --color-border-glow: rgba(143, 174, 107, 0.30);
+
+  /* Glass */
+  --color-glass-bg: rgba(213, 205, 188, 0.85);
+  --color-glass-border: rgba(45, 59, 30, 0.12);
+}
+
+/* ── Light: gradient text ──────────────────────────────── */
+[data-theme="light"] .gradient-text {
+  background: linear-gradient(135deg, #2D3B1E 0%, #5E6D50 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+[data-theme="light"] .gradient-text-emerald {
+  background: linear-gradient(135deg, #8FAE6B 0%, #6B9E5A 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* ── Light: emerald button ─────────────────────────────── */
+[data-theme="light"] .btn-emerald {
+  background: linear-gradient(135deg, #8FAE6B 0%, #6B9E5A 100%);
+  color: #FFFFFF;
+  box-shadow: 0 4px 15px rgba(143, 174, 107, 0.30);
+}
+[data-theme="light"] .btn-emerald:hover {
+  box-shadow: 0 6px 25px rgba(143, 174, 107, 0.45);
+}

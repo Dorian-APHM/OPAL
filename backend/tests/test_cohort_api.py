@@ -10,7 +10,7 @@ def cdm_name(client):
     """Create a test CDM and return its name."""
     client.post("/api/cdm/", json={
         "name": "test_cdm",
-        "db_host": "localhost",
+        "db_host": "db.example.com",
         "db_port": 5432,
         "db_name": "testdb",
         "db_user": "user",

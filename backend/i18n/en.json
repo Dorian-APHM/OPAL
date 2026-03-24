@@ -85,7 +85,10 @@
     "Procedure": "Procedure",
     "Visit": "Visit",
     "Device": "Device",
-    "Death": "Death"
+    "Death": "Death",
+    "Specimen": "Specimen",
+    "Note": "Note",
+    "Payer_Plan_Period": "Payer Plan Period"
   },
   "cohort": {
     "title": "Cohort Builder",
@@ -334,5 +337,5 @@
     "use_template": "Use Template",
     "category": "Category",
     "no_templates": "No templates available"
-  },
+  }
 }

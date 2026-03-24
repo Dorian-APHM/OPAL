@@ -85,7 +85,10 @@
     "Procedure": "Acte",
     "Visit": "Séjour",
     "Device": "Dispositif médical",
-    "Death": "Décès"
+    "Death": "Décès",
+    "Specimen": "Prélèvement",
+    "Note": "Note clinique",
+    "Payer_Plan_Period": "Période de couverture"
   },
   "cohort": {
     "title": "Constructeur de cohortes",
@@ -334,5 +337,5 @@
     "use_template": "Utiliser le template",
     "category": "Catégorie",
     "no_templates": "Aucun template disponible"
-  },
+  }
 }

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Cohort module API endpoints.
 
@@ -9,11 +11,12 @@ import io
 import logging
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from utils.cdm_helper import check_cdm_access
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -32,9 +35,46 @@ from modules.cohort.sql_builder import (
 )
 from modules.cohort.characterization import run_characterization
 from modules.cohort.comparison import compare_cohorts
+from utils.rate_limit import limiter
+from utils.notifications import notify
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cohorts", tags=["cohorts"])
+
+
+# ──── Criteria validation ────
+
+_MAX_CRITERIA_DEPTH = 5
+_MAX_CONCEPT_IDS = 10000
+
+
+def _validate_criteria(criteria: dict, _depth: int = 0) -> dict:
+    """Validate cohort criteria structure: limit nesting depth and concept_ids count."""
+    if _depth > _MAX_CRITERIA_DEPTH:
+        raise ValueError(f"Criteria nesting depth exceeds maximum of {_MAX_CRITERIA_DEPTH}")
+    if not isinstance(criteria, dict):
+        raise ValueError("Criteria must be a JSON object")
+
+    for group_key in ("inclusion", "exclusion"):
+        group = criteria.get(group_key)
+        if group is not None:
+            if not isinstance(group, dict):
+                raise ValueError(f"'{group_key}' must be a JSON object")
+            for crit in group.get("criteria", []):
+                if not isinstance(crit, dict):
+                    raise ValueError(f"Each criterion in '{group_key}' must be a JSON object")
+                cids = crit.get("concept_ids", [])
+                if not isinstance(cids, list):
+                    raise ValueError("concept_ids must be a list")
+                if len(cids) > _MAX_CONCEPT_IDS:
+                    raise ValueError(f"concept_ids count ({len(cids)}) exceeds maximum of {_MAX_CONCEPT_IDS}")
+                for cid in cids:
+                    if not isinstance(cid, (int, float)):
+                        raise ValueError(f"concept_ids must contain integers, got {type(cid).__name__}")
+            for sub_group in group.get("groups", []):
+                _validate_criteria({"inclusion": sub_group}, _depth=_depth + 1)
+
+    return criteria
 
 
 # ──── Request / Response models ────
@@ -45,22 +85,44 @@ class CohortCreateRequest(BaseModel):
     description: str = Field(default="", max_length=5000)
     criteria: dict
 
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict) -> dict:
+        return _validate_criteria(v)
+
 
 class CohortUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=5000)
     criteria: dict | None = None
 
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict | None) -> dict | None:
+        if v is not None:
+            return _validate_criteria(v)
+        return v
+
 
 class CohortCountRequest(BaseModel):
     cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
+
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict) -> dict:
+        return _validate_criteria(v)
 
 
 class CohortSampleRequest(BaseModel):
     cdm_name: str = Field(..., min_length=1, max_length=255)
     criteria: dict
     limit: int = Field(default=10, ge=1, le=1000)
+
+    @field_validator("criteria")
+    @classmethod
+    def validate_criteria(cls, v: dict) -> dict:
+        return _validate_criteria(v)
 
 
 class ConceptSearchRequest(BaseModel):
@@ -90,18 +152,20 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", cdm.name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return cdm, conn
 
 
 # ──── Concept Search ────
 
 @router.post("/concepts/search")
-def search_concepts(req: ConceptSearchRequest, db: Session = Depends(get_db)):
+def search_concepts(req: ConceptSearchRequest, request: Request, db: Session = Depends(get_db)):
     """
     Search OMOP concepts by name or code.
     Searches the concept table with ILIKE and returns matching concepts.
     """
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -153,7 +217,7 @@ def search_concepts(req: ConceptSearchRequest, db: Session = Depends(get_db)):
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as e:
         logger.exception("Concept search failed")
-        raise HTTPException(status_code=500, detail=f"Concept search error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during concept search")
     finally:
         conn.close()
 
@@ -176,7 +240,8 @@ def list_vocabularies(cdm_name: str, db: Session = Depends(get_db)):
             """)
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vocabulary listing error: {e}")
+        logger.exception("Vocabulary listing failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred while listing vocabularies")
     finally:
         conn.close()
 
@@ -239,14 +304,32 @@ def list_cohorts(cdm_name: str | None = None, request: Request = None, db: Sessi
 
     cohorts = query.order_by(Cohort.updated_at.desc()).all()
 
+    # P48 fix: fetch latest versions for all cohorts in a single query
+    cohort_ids = [c.id for c in cohorts]
+    latest_versions_map: dict[int, tuple] = {}
+    if cohort_ids:
+        from sqlalchemy import and_
+        # Subquery: max version per cohort
+        max_ver_sq = (
+            db.query(CohortVersion.cohort_id, func.max(CohortVersion.version).label("max_ver"))
+            .filter(CohortVersion.cohort_id.in_(cohort_ids))
+            .group_by(CohortVersion.cohort_id)
+            .subquery()
+        )
+        latest_rows = (
+            db.query(CohortVersion)
+            .join(max_ver_sq, and_(
+                CohortVersion.cohort_id == max_ver_sq.c.cohort_id,
+                CohortVersion.version == max_ver_sq.c.max_ver,
+            ))
+            .all()
+        )
+        for lv in latest_rows:
+            latest_versions_map[lv.cohort_id] = (lv.version, lv.patient_count)
+
     result = []
     for c in cohorts:
-        latest = (
-            db.query(CohortVersion)
-            .filter(CohortVersion.cohort_id == c.id)
-            .order_by(CohortVersion.version.desc())
-            .first()
-        )
+        ver, pcount = latest_versions_map.get(c.id, (0, None))
         result.append({
             "id": c.id,
             "cdm_name": c.cdm_name,
@@ -256,8 +339,8 @@ def list_cohorts(cdm_name: str | None = None, request: Request = None, db: Sessi
             "shared_with_all": bool(c.shared_with_all),
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
-            "latest_version": latest.version if latest else 0,
-            "patient_count": latest.patient_count if latest else None,
+            "latest_version": ver,
+            "patient_count": pcount,
         })
     return {"cohorts": result}
 
@@ -391,11 +474,17 @@ def get_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/{cohort_id}")
-def update_cohort(cohort_id: int, req: CohortUpdateRequest, db: Session = Depends(get_db)):
+def update_cohort(cohort_id: int, req: CohortUpdateRequest, request: Request, db: Session = Depends(get_db)):
     """Update a cohort. If criteria change, creates a new version."""
     cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
     if not cohort:
         raise HTTPException(status_code=404, detail="Cohort not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    if not _can_access_cohort(db, cohort, username, user_roles):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
 
     if req.name is not None:
         cohort.name = req.name
@@ -424,7 +513,7 @@ def update_cohort(cohort_id: int, req: CohortUpdateRequest, db: Session = Depend
         )
         db.add(new_version)
 
-    cohort.updated_at = datetime.utcnow()
+    cohort.updated_at = datetime.now(timezone.utc)
     db.commit()
 
     return {
@@ -449,6 +538,29 @@ def delete_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db
     if not is_privileged and not is_owner:
         raise HTTPException(status_code=403, detail="Only the owner, admin, or data-manager can delete cohorts")
 
+    # Notify users who had this cohort shared with them
+    shares = db.query(CohortShare).filter(CohortShare.cohort_id == cohort_id).all()
+    for s in shares:
+        if s.share_type == "user" and s.share_target != username:
+            notify(
+                db, s.share_target, "cohort_deleted",
+                title=f"Cohorte supprimée : {cohort.name}",
+                message=f"{username} a supprimé la cohorte « {cohort.name} ».",
+                link="/cohorts",
+                item_id=str(cohort_id),
+            )
+        elif s.share_type == "group":
+            members = db.query(UserGroupMember).filter(UserGroupMember.group_name == s.share_target).all()
+            for m in members:
+                if m.username != username:
+                    notify(
+                        db, m.username, "cohort_deleted",
+                        title=f"Cohorte supprimée : {cohort.name}",
+                        message=f"{username} a supprimé la cohorte « {cohort.name} ».",
+                        link="/cohorts",
+                        item_id=str(cohort_id),
+                    )
+
     db.query(CohortShare).filter(CohortShare.cohort_id == cohort_id).delete()
     db.query(CohortVersion).filter(CohortVersion.cohort_id == cohort_id).delete()
     db.delete(cohort)
@@ -459,8 +571,9 @@ def delete_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db
 # ──── Cohort Execution ────
 
 @router.post("/count")
-def cohort_count(req: CohortCountRequest, db: Session = Depends(get_db)):
+def cohort_count(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """Execute a cohort definition and return the patient count."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -478,19 +591,20 @@ def cohort_count(req: CohortCountRequest, db: Session = Depends(get_db)):
             count = row["patient_count"] if row else 0
     except Exception as e:
         logger.exception("Cohort count failed")
-        raise HTTPException(status_code=500, detail=f"Cohort count error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during cohort count")
     finally:
         conn.close()
 
-    return {"patient_count": count, "sql": sql}
+    return {"patient_count": count}
 
 
 @router.post("/count/approximate")
-def cohort_count_approximate(req: CohortCountRequest, db: Session = Depends(get_db)):
+def cohort_count_approximate(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """
     Quick approximate count using TABLESAMPLE.
     Useful for initial iterations before running exact count.
     """
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -516,47 +630,76 @@ def cohort_count_approximate(req: CohortCountRequest, db: Session = Depends(get_
         }
     except Exception as e:
         logger.exception("Approximate count failed")
-        raise HTTPException(status_code=500, detail=f"Count error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during count")
     finally:
         conn.close()
 
 
 @router.post("/attrition")
-def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
+def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """
     Run attrition analysis: execute each step incrementally and return
     the patient count at each step.
     """
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
     try:
         steps = build_attrition_sql(req.criteria, schema)
         from psycopg2.extras import DictCursor
-        results = []
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            for step in steps:
+
+        # Build a single CTE-based query for all steps to reduce round-trips
+        if len(steps) > 1:
+            cte_parts = []
+            for i, step in enumerate(steps):
+                cte_parts.append(f"step_{i} AS ({step['sql']})")
+            cte_query = "WITH " + ", ".join(cte_parts) + " SELECT " + ", ".join(
+                f"(SELECT * FROM step_{i}) AS count_{i}" for i in range(len(steps))
+            )
+            results = []
+            with conn.cursor(cursor_factory=DictCursor) as cur:
                 try:
-                    cur.execute(step["sql"])
+                    cur.execute(cte_query)
                     row = cur.fetchone()
-                    count = row[0] if row else 0
-                    results.append({
-                        "step": step["step"],
-                        "label": step["label"],
-                        "count": count,
-                    })
-                except Exception as e:
-                    logger.warning("Attrition step %d failed: %s", step["step"], e)
+                    for i, step in enumerate(steps):
+                        count = row[i] if row else None
+                        results.append({
+                            "step": step["step"],
+                            "label": step["label"],
+                            "count": count,
+                        })
+                except Exception:
+                    # Fallback to individual queries if CTE fails
+                    logger.debug("CTE attrition failed, falling back to individual queries", exc_info=True)
                     conn.rollback()
-                    results.append({
-                        "step": step["step"],
-                        "label": step["label"],
-                        "count": None,
-                        "error": str(e),
-                    })
+                    results = []
+                    for step in steps:
+                        try:
+                            cur.execute(step["sql"])
+                            row = cur.fetchone()
+                            count = row[0] if row else 0
+                            results.append({"step": step["step"], "label": step["label"], "count": count})
+                        except Exception as e:
+                            logger.warning("Attrition step %d failed: %s", step["step"], e)
+                            conn.rollback()
+                            results.append({"step": step["step"], "label": step["label"], "count": None, "error": "An internal error occurred"})
+        else:
+            results = []
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                for step in steps:
+                    try:
+                        cur.execute(step["sql"])
+                        row = cur.fetchone()
+                        count = row[0] if row else 0
+                        results.append({"step": step["step"], "label": step["label"], "count": count})
+                    except Exception as e:
+                        logger.warning("Attrition step %d failed: %s", step["step"], e)
+                        conn.rollback()
+                        results.append({"step": step["step"], "label": step["label"], "count": None, "error": "An internal error occurred"})
     except Exception as e:
         logger.exception("Attrition analysis failed")
-        raise HTTPException(status_code=500, detail=f"Attrition error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during attrition analysis")
     finally:
         conn.close()
 
@@ -564,8 +707,9 @@ def cohort_attrition(req: CohortCountRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/sample")
-def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
+def cohort_sample(req: CohortSampleRequest, request: Request, db: Session = Depends(get_db)):
     """Return a random sample of patients matching the cohort criteria."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -582,7 +726,7 @@ def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
                         p[k] = v.isoformat()
     except Exception as e:
         logger.exception("Cohort sampling failed")
-        raise HTTPException(status_code=500, detail=f"Sampling error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during sampling")
     finally:
         conn.close()
 
@@ -590,8 +734,9 @@ def cohort_sample(req: CohortSampleRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/sample/detailed")
-def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_db)):
+def cohort_sample_detailed(req: CohortSampleRequest, request: Request, db: Session = Depends(get_db)):
     """Return a detailed patient sample with per-criterion matched codes and values."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -609,7 +754,7 @@ def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_d
                         p[k] = None
     except Exception as e:
         logger.exception("Detailed sampling failed")
-        raise HTTPException(status_code=500, detail=f"Detailed sampling error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during detailed sampling")
     finally:
         conn.close()
 
@@ -646,8 +791,9 @@ def cohort_sample_detailed(req: CohortSampleRequest, db: Session = Depends(get_d
 
 
 @router.post("/export/direct")
-def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
+def export_direct(req: CohortCountRequest, request: Request, db: Session = Depends(get_db)):
     """Export full patient list as CSV directly from criteria (no save required)."""
+    check_cdm_access(request, req.cdm_name)
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_omop_schema(db, cdm)
 
@@ -674,7 +820,7 @@ def export_direct(req: CohortCountRequest, db: Session = Depends(get_db)):
         output.seek(0)
     except Exception as e:
         logger.exception("Direct export failed")
-        raise HTTPException(status_code=500, detail=f"Export error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during export")
     finally:
         conn.close()
 
@@ -721,11 +867,13 @@ def get_sql_schema(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.post("/sql/execute")
-def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def execute_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(get_db)):
     """
     Execute a raw read-only SQL query against a CDM.
     Only SELECT statements are allowed.
     """
+    check_cdm_access(request, req.cdm_name)
     import re
     sql_stripped = req.sql.strip().rstrip(";")
 
@@ -772,7 +920,7 @@ def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
                         row[k] = str(v)
     except Exception as e:
         logger.exception("Raw SQL execution failed")
-        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during SQL execution")
     finally:
         conn.close()
 
@@ -785,8 +933,9 @@ def execute_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/sql/export")
-def export_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
+def export_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(get_db)):
     """Execute a raw SQL query and return results as CSV."""
+    check_cdm_access(request, req.cdm_name)
     import re
     sql_stripped = req.sql.strip().rstrip(";")
 
@@ -811,7 +960,8 @@ def export_raw_sql(req: RawSqlRequest, db: Session = Depends(get_db)):
             columns = [desc[0] for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SQL error: {e}")
+        logger.exception("SQL query execution failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred during SQL execution")
     finally:
         conn.close()
 
@@ -841,10 +991,12 @@ class CharacterizationRequest(BaseModel):
 
 # ──── Background characterization task tracking ────
 _active_characterizations: dict[str, dict] = {}
+_characterizations_lock = threading.Lock()
 
 
 @router.post("/characterize")
-def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def cohort_characterize(req: CharacterizationRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch Table 1 characterization as a background task.
     Returns a task_id for polling via /characterize/status/{task_id}.
@@ -853,23 +1005,25 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
     schema = _get_omop_schema(db, cdm)
 
     task_id = str(uuid.uuid4())
-    _active_characterizations[task_id] = {
-        "status": "running",
-        "cdm_name": req.cdm_name,
-        "cohort_id": None,
-        "result": None,
-        "error": None,
-        "completed": 0,
-        "total": 0,
-        "current_step": "",
-    }
+    with _characterizations_lock:
+        _active_characterizations[task_id] = {
+            "status": "running",
+            "cdm_name": req.cdm_name,
+            "cohort_id": None,
+            "result": None,
+            "error": None,
+            "completed": 0,
+            "total": 0,
+            "current_step": "",
+        }
 
     def _progress(completed: int, total: int, step_label: str):
-        task = _active_characterizations.get(task_id)
-        if task:
-            task["completed"] = completed
-            task["total"] = total
-            task["current_step"] = step_label
+        with _characterizations_lock:
+            task = _active_characterizations.get(task_id)
+            if task:
+                task["completed"] = completed
+                task["total"] = total
+                task["current_step"] = step_label
 
     def _worker():
         try:
@@ -878,17 +1032,19 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
                 visit_level=req.visit_level,
                 progress_callback=_progress,
             )
-            _active_characterizations[task_id]["result"] = result
-            _active_characterizations[task_id]["status"] = "completed"
+            with _characterizations_lock:
+                _active_characterizations[task_id]["result"] = result
+                _active_characterizations[task_id]["status"] = "completed"
         except Exception as e:
             logger.exception("Characterization failed")
-            _active_characterizations[task_id]["error"] = str(e)
-            _active_characterizations[task_id]["status"] = "error"
+            with _characterizations_lock:
+                _active_characterizations[task_id]["error"] = "An internal error occurred during characterization"
+                _active_characterizations[task_id]["status"] = "error"
         finally:
             conn.close()
 
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"task_id": task_id, "status": "running"}
 
@@ -896,7 +1052,8 @@ def cohort_characterize(req: CharacterizationRequest, db: Session = Depends(get_
 @router.get("/characterize/status/{task_id}")
 def characterize_status(task_id: str):
     """Poll the status of a characterization task."""
-    task = _active_characterizations.get(task_id)
+    with _characterizations_lock:
+        task = _active_characterizations.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -910,17 +1067,20 @@ def characterize_status(task_id: str):
     if task["status"] == "completed":
         resp["result"] = task["result"]
         # Clean up after delivering results
-        _active_characterizations.pop(task_id, None)
+        with _characterizations_lock:
+            _active_characterizations.pop(task_id, None)
     elif task["status"] == "error":
         resp["error"] = task["error"]
-        _active_characterizations.pop(task_id, None)
+        with _characterizations_lock:
+            _active_characterizations.pop(task_id, None)
     return resp
 
 
 @router.post("/characterize/cancel/{task_id}")
 def characterize_cancel(task_id: str):
     """Cancel/clean up a characterization task."""
-    task = _active_characterizations.pop(task_id, None)
+    with _characterizations_lock:
+        task = _active_characterizations.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"status": "cancelled"}
@@ -929,10 +1089,131 @@ def characterize_cancel(task_id: str):
 @router.get("/characterize/active")
 def characterize_active():
     """Return any currently running characterization task."""
-    for tid, task in _active_characterizations.items():
+    with _characterizations_lock:
+        items = list(_active_characterizations.items())
+    for tid, task in items:
         if task["status"] == "running":
             return {"task_id": tid, "status": "running", "cdm_name": task["cdm_name"]}
     return {"task_id": None, "status": "none"}
+
+
+# ──── Pathways Analysis ────
+
+class PathwaysEventCohort(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    domain: str = Field(..., min_length=1, max_length=100)
+    concept_ids: list[int] = Field(..., min_length=1)
+    include_descendants: bool = False
+
+
+class PathwaysRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    criteria: dict
+    event_cohorts: list[PathwaysEventCohort] = Field(..., min_length=1, max_length=20)
+    max_depth: int = Field(default=5, ge=1, le=10)
+    min_cell_count: int = Field(default=5, ge=1, le=1000)
+    combo_window: int = Field(default=0, ge=0, le=365)
+
+
+_active_pathways: dict[str, dict] = {}
+_pathways_lock = threading.Lock()
+
+
+@router.post("/pathways")
+@limiter.limit("3/minute")
+def cohort_pathways(req: PathwaysRequest, request: Request, db: Session = Depends(get_db)):
+    """
+    Launch a pathways analysis as a background task.
+    Returns a task_id for polling via /pathways/status/{task_id}.
+    """
+    from modules.cohort.pathways import run_pathways_analysis
+
+    cdm, conn = _get_cdm_conn(db, req.cdm_name)
+    schema = _get_omop_schema(db, cdm)
+
+    task_id = str(uuid.uuid4())
+    with _pathways_lock:
+        _active_pathways[task_id] = {
+            "status": "running",
+            "cdm_name": req.cdm_name,
+            "result": None,
+            "error": None,
+            "completed": 0,
+            "total": 0,
+            "current_step": "",
+        }
+
+    def _progress(completed: int, total: int, step_label: str):
+        with _pathways_lock:
+            task = _active_pathways.get(task_id)
+            if task:
+                task["completed"] = completed
+                task["total"] = total
+                task["current_step"] = step_label
+
+    def _worker():
+        try:
+            result = run_pathways_analysis(
+                conn,
+                req.criteria,
+                [ec.model_dump() for ec in req.event_cohorts],
+                schema,
+                max_depth=req.max_depth,
+                min_cell_count=req.min_cell_count,
+                combo_window=req.combo_window,
+                progress_callback=_progress,
+            )
+            with _pathways_lock:
+                _active_pathways[task_id]["result"] = result
+                _active_pathways[task_id]["status"] = "completed"
+        except Exception as e:
+            logger.exception("Pathways analysis failed")
+            with _pathways_lock:
+                _active_pathways[task_id]["error"] = "An internal error occurred during pathways analysis"
+                _active_pathways[task_id]["status"] = "error"
+        finally:
+            conn.close()
+
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
+
+    return {"task_id": task_id, "status": "running"}
+
+
+@router.get("/pathways/status/{task_id}")
+def pathways_status(task_id: str):
+    """Poll the status of a pathways analysis task."""
+    with _pathways_lock:
+        task = _active_pathways.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    resp: dict = {
+        "task_id": task_id,
+        "status": task["status"],
+        "completed": task.get("completed", 0),
+        "total": task.get("total", 0),
+        "current_step": task.get("current_step", ""),
+    }
+    if task["status"] == "completed":
+        resp["result"] = task["result"]
+        with _pathways_lock:
+            _active_pathways.pop(task_id, None)
+    elif task["status"] == "error":
+        resp["error"] = task["error"]
+        with _pathways_lock:
+            _active_pathways.pop(task_id, None)
+    return resp
+
+
+@router.post("/pathways/cancel/{task_id}")
+def pathways_cancel(task_id: str):
+    """Cancel/clean up a pathways analysis task."""
+    with _pathways_lock:
+        task = _active_pathways.pop(task_id, None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "cancelled"}
 
 
 class CohortCompareRequest(BaseModel):
@@ -1000,7 +1281,7 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
                 )
                 if not req.visit_level:
                     ver_a.characterization_json = char_a
-                    ver_a.characterized_at = datetime.utcnow()
+                    ver_a.characterized_at = datetime.now(timezone.utc)
             if not char_b or force_rerun:
                 char_b = run_characterization(
                     conn, ver_b.criteria_json, schema,
@@ -1008,11 +1289,11 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
                 )
                 if not req.visit_level:
                     ver_b.characterization_json = char_b
-                    ver_b.characterized_at = datetime.utcnow()
+                    ver_b.characterized_at = datetime.now(timezone.utc)
             db.commit()
         except Exception as e:
             logger.exception("On-the-fly characterization failed during comparison")
-            raise HTTPException(status_code=500, detail=f"Characterization error: {e}")
+            raise HTTPException(status_code=500, detail="An internal error occurred during characterization")
         finally:
             conn.close()
 
@@ -1023,11 +1304,17 @@ def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(ge
 
 
 @router.put("/{cohort_id}/characterization")
-def save_characterization(cohort_id: int, payload: dict, db: Session = Depends(get_db)):
+def save_characterization(cohort_id: int, payload: dict, request: Request, db: Session = Depends(get_db)):
     """Save characterization results to the latest version of a cohort."""
     cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
     if not cohort:
         raise HTTPException(status_code=404, detail="Cohort not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    if not _can_access_cohort(db, cohort, username, user_roles):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
 
     latest = (
         db.query(CohortVersion)
@@ -1039,7 +1326,7 @@ def save_characterization(cohort_id: int, payload: dict, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="No version found")
 
     latest.characterization_json = payload.get("characterization")
-    latest.characterized_at = datetime.utcnow()
+    latest.characterized_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "saved", "cohort_id": cohort_id, "version": latest.version}
 
@@ -1098,7 +1385,7 @@ def execute_cohort(cohort_id: int, db: Session = Depends(get_db)):
             count = row["patient_count"] if row else 0
     except Exception as e:
         logger.exception("Cohort execution failed")
-        raise HTTPException(status_code=500, detail=f"Execution error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during cohort execution")
     finally:
         conn.close()
 
@@ -1167,7 +1454,8 @@ def export_cohort(
                 writer.writerow([row["person_id"]])
         output.seek(0)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Export error: {e}")
+        logger.exception("Cohort export failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred during export")
     finally:
         conn.close()
 
@@ -1283,6 +1571,7 @@ def patient_journey(
                     cur.execute(sql, (person_id,))
                     rows = cur.fetchall()
                 except Exception:
+                    logger.warning("Failed to fetch patient events for domain %s", domain_name, exc_info=True)
                     conn.rollback()
                     continue
 
@@ -1307,7 +1596,7 @@ def patient_journey(
         raise
     except Exception as e:
         logger.exception("Patient journey query failed")
-        raise HTTPException(status_code=500, detail=f"Journey query error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during journey query")
     finally:
         conn.close()
 

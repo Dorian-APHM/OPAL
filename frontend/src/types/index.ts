@@ -567,6 +567,36 @@ export interface CohortComparisonResult {
   all_variables: CohortComparisonVariable[];
 }
 
+// ──── Pathways Analysis types ────
+
+export interface PathwaysSunburstNode {
+  name: string;
+  count: number;
+  pct: number;
+  children: PathwaysSunburstNode[];
+}
+
+export interface PathwaysTableRow {
+  pathway: string[];
+  count: number;
+  pct: number;
+}
+
+export interface PathwaysResult {
+  target_size: number;
+  persons_with_pathways: number;
+  pathways_table: PathwaysTableRow[];
+  sunburst_tree: PathwaysSunburstNode;
+  event_colors: Record<string, string>;
+}
+
+export interface PathwaysEventCohort {
+  name: string;
+  domain: string;
+  concept_ids: number[];
+  include_descendants: boolean;
+}
+
 // ──── Phase 3: Mapping types ────
 
 /** Domain mapping stats from dashboard */

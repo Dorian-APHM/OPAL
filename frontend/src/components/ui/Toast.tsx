@@ -1,13 +1,16 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle, AlertCircle, Info, XCircle, X } from 'lucide-react';
 
 type ToastType = 'success' | 'error' | 'info' | 'warning';
 
+const TOAST_DURATION = 4000;
+
 interface Toast {
   id: number;
   type: ToastType;
   message: string;
+  createdAt: number;
 }
 
 interface ToastContextType {
@@ -35,15 +38,44 @@ const borderColors: Record<ToastType, string> = {
   warning: 'border-l-yellow-500',
 };
 
+const progressColors: Record<ToastType, string> = {
+  success: 'bg-emerald-500',
+  error: 'bg-red-500',
+  info: 'bg-blue-500',
+  warning: 'bg-yellow-500',
+};
+
+/** Countdown progress bar that shrinks from 100% to 0% */
+function ToastProgress({ type, duration }: { type: ToastType; duration: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Force reflow before starting animation
+    el.style.width = '100%';
+    requestAnimationFrame(() => {
+      el.style.transition = `width ${duration}ms linear`;
+      el.style.width = '0%';
+    });
+  }, [duration]);
+
+  return (
+    <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden rounded-b-xl">
+      <div ref={ref} className={`h-full ${progressColors[type]} opacity-60`} />
+    </div>
+  );
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const addToast = useCallback((type: ToastType, message: string) => {
     const id = nextId++;
-    setToasts((prev) => [...prev, { id, type, message }]);
+    setToasts((prev) => [...prev, { id, type, message, createdAt: Date.now() }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    }, TOAST_DURATION);
   }, []);
 
   const remove = useCallback((id: number) => {
@@ -68,21 +100,33 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               initial={{ opacity: 0, x: 50, scale: 0.95 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 50, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              role="alert"
+              aria-live="assertive"
               className={`
-                pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl
+                pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl relative overflow-hidden
                 bg-surface border border-glass-border border-l-4 ${borderColors[toast.type]}
                 shadow-[0_8px_32px_rgba(0,0,0,0.4)]
                 min-w-[300px] max-w-[420px]
               `}
             >
-              {icons[toast.type]}
+              <motion.span
+                initial={{ scale: 0, rotate: -180 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 20, delay: 0.1 }}
+                aria-hidden="true"
+              >
+                {icons[toast.type]}
+              </motion.span>
               <span className="flex-1 text-sm text-text-bright">{toast.message}</span>
               <button
                 onClick={() => remove(toast.id)}
                 className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none shrink-0"
+                aria-label="Close notification"
               >
                 <X className="h-4 w-4" />
               </button>
+              <ToastProgress type={toast.type} duration={TOAST_DURATION} />
             </motion.div>
           ))}
         </AnimatePresence>
