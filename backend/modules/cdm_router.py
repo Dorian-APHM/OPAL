@@ -21,6 +21,7 @@ from utils.crypto import encrypt_password, decrypt_password
 from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA
 from utils.rate_limit import limiter
+from modules.ohdsi.router import ensure_cdm_output_dirs
 
 router = APIRouter(prefix="/api/cdm", tags=["cdm"])
 
@@ -183,6 +184,12 @@ def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(ge
         logger.exception("Failed to create CDM '%s'", req.name)
         raise HTTPException(status_code=500, detail="Failed to register CDM")
     db.refresh(cdm)
+
+    # Create OHDSI output directories for this CDM (even empty, for manual uploads)
+    try:
+        ensure_cdm_output_dirs(cdm.name)
+    except OSError:
+        logger.warning("Could not create OHDSI output dirs for CDM '%s'", cdm.name)
 
     return {
         "id": cdm.id,
