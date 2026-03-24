@@ -19,6 +19,7 @@ type ServiceStatus = 'idle' | 'running' | 'done' | 'error';
 interface ServiceState {
   status: ServiceStatus;
   logs: string[];
+  cdm_name?: string;
 }
 
 interface FileEntry {
@@ -87,7 +88,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         setResultsSchema(res.data.omop_schema);
         setVocabSchema(res.data.omop_schema);
       }
-    }).catch(() => {});
+    }).catch(() => toast.error('Failed to load CDM settings'));
     setCdmSourceName(selectedCdm);
   }, [selectedCdm]);
 
@@ -99,7 +100,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
           const next = { ...prev };
           for (const [svc, info] of Object.entries(res.data)) {
             if (!next[svc]) next[svc] = { status: 'idle', logs: [] };
-            next[svc] = { ...next[svc], status: info.status as ServiceStatus };
+            next[svc] = { ...next[svc], status: info.status as ServiceStatus, cdm_name: (info as any).cdm_name || '' };
           }
           return next;
         });
@@ -117,19 +118,25 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     }).catch(() => setFiles([])).finally(() => setLoadingFiles(false));
   }, []);
 
+  // Auto-navigate file browser to CDM-specific folder
   useEffect(() => {
-    loadFiles('');
-  }, [loadFiles]);
+    if (selectedCdm) {
+      loadFiles(selectedCdm);
+    } else {
+      loadFiles('');
+    }
+  }, [loadFiles, selectedCdm]);
 
   // SSE log streaming with auto-reconnect and offset tracking
-  const startSSE = useCallback((service: string) => {
+  const startSSE = useCallback(async (service: string) => {
     // Close existing
     if (eventSourcesRef.current[service]) {
       eventSourcesRef.current[service].close();
     }
 
     const offset = logOffsetRef.current[service] || 0;
-    const es = new EventSource(ohdsiApi.logsUrl(service, offset));
+    const url = await ohdsiApi.logsUrl(service, offset);
+    const es = new EventSource(url);
     eventSourcesRef.current[service] = es;
 
     es.onmessage = (event) => {
@@ -200,7 +207,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         if (status === 'running') {
           startSSE(key);
         }
-      }).catch(() => {});
+      }).catch(() => toast.error(`Failed to recover logs for ${key}`));
     });
     return () => {
       // Cleanup SSE connections on unmount
@@ -317,34 +324,40 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         <Card title={t('ohdsi.configuration')} size="small" className="mb-4 md:mb-0">
           <div className="flex flex-col gap-3">
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.results_schema')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.results_schema')} <span className="text-red-400">*</span></span>
               <Input value={resultsSchema} onChange={(e) => setResultsSchema(e.target.value)} />
             </div>
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.vocab_schema')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.vocab_schema')} <span className="text-red-400">*</span></span>
               <Input value={vocabSchema} onChange={(e) => setVocabSchema(e.target.value)} />
             </div>
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.cdm_version')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.cdm_version')} <span className="text-red-400">*</span></span>
               <Input value={cdmVersion} onChange={(e) => setCdmVersion(e.target.value)} />
             </div>
             <div>
-              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.source_name')}</span>
+              <span className="text-text-dim text-xs block mb-1">{t('ohdsi.source_name')} <span className="text-red-400">*</span></span>
               <Input value={cdmSourceName} onChange={(e) => setCdmSourceName(e.target.value)} />
             </div>
           </div>
         </Card>
 
         {/* Services grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           {SERVICES.map(({ key, label }) => {
             const status = getStatus(key);
+            const svcCdm = services[key]?.cdm_name;
             const isRunning = status === 'running';
             return (
               <Card key={key} size="small" className="text-center">
                 <div className="flex flex-col items-center gap-2">
                   <Badge status={STATUS_BADGE[status]} />
                   <div className="font-semibold text-text-bright text-[13px]">{label}</div>
+                  {svcCdm && status !== 'idle' && (
+                    <div className="text-xs text-text-dim truncate max-w-full" title={svcCdm}>
+                      CDM: {svcCdm}
+                    </div>
+                  )}
                   <Tag color={STATUS_TAG_COLOR[status]}>
                     {t(`ohdsi.status_${status}`)}
                   </Tag>
@@ -430,7 +443,10 @@ export default function OhdsiPage({ selectedCdm }: Props) {
 
         {/* File list */}
         {loadingFiles ? (
-          <div className="flex justify-center py-6"><Spinner /></div>
+          <div className="text-center py-6">
+            <Spinner />
+            <p className="text-sm text-text-muted mt-2">{t('ohdsi.loading_files', 'Loading files...')}</p>
+          </div>
         ) : files.length === 0 ? (
           <div className="text-center py-6 text-text-dim text-sm">{t('ohdsi.no_files')}</div>
         ) : (

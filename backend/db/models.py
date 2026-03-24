@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 def _utcnow():
     return datetime.now(timezone.utc)
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -32,6 +32,11 @@ class CdmConfig(Base):
 class AnalysisSnapshot(Base):
     """Versioned analysis snapshots."""
     __tablename__ = "analysis_snapshots"
+    __table_args__ = (
+        Index("ix_snapshots_cdm_domain", "cdm_name", "domain"),
+        Index("ix_snapshots_cdm_domain_version", "cdm_name", "domain", "version"),
+        UniqueConstraint("cdm_name", "domain", "version", name="uq_snapshot_cdm_domain_version"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     cdm_name = Column(String(255), nullable=False, index=True)
@@ -63,18 +68,28 @@ class Cohort(Base):
     cdm_name = Column(String(255), nullable=False, index=True)
     name = Column(String(500), nullable=False)
     description = Column(Text, default="")
-    created_by = Column(String(255), nullable=True, index=True)
+    created_by = Column(String(255), nullable=False, default="system", index=True)
     shared_with_all = Column(Integer, default=0)  # 0=private, 1=public (Integer for SQLite compat)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    # Cascade relationships
+    versions = relationship("CohortVersion", cascade="all, delete-orphan", passive_deletes=True,
+                            primaryjoin="Cohort.id == foreign(CohortVersion.cohort_id)")
+    shares = relationship("CohortShare", cascade="all, delete-orphan", passive_deletes=True,
+                          primaryjoin="Cohort.id == foreign(CohortShare.cohort_id)")
 
 
 class CohortVersion(Base):
     """Versioned cohort criteria & results. Each edit creates a new version."""
     __tablename__ = "cohort_versions"
+    __table_args__ = (
+        Index("ix_cohort_versions_cohort_version", "cohort_id", "version"),
+        UniqueConstraint("cohort_id", "version", name="uq_cohort_version"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    cohort_id = Column(Integer, nullable=False, index=True)
+    cohort_id = Column(Integer, ForeignKey("cohorts.id", ondelete="CASCADE"), nullable=False, index=True)
     version = Column(Integer, nullable=False, default=1)
     criteria_json = Column(JSON, nullable=False)
     generated_sql = Column(Text, default="")
@@ -90,6 +105,10 @@ class MappingDecision(Base):
     Each row records one decision: approve, modify, reject, or rollback.
     """
     __tablename__ = "mapping_decisions"
+    __table_args__ = (
+        Index("ix_mapping_decisions_cdm_domain", "cdm_name", "domain"),
+        Index("ix_mapping_decisions_cdm_domain_sv", "cdm_name", "domain", "source_value"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     cdm_name = Column(String(255), nullable=False, index=True)
@@ -251,6 +270,9 @@ class SavedQuery(Base):
 class Notification(Base):
     """In-app notifications."""
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read", "username", "read"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(255), nullable=False, index=True)
@@ -262,6 +284,20 @@ class Notification(Base):
     read = Column(Integer, default=0)  # 0=unread, 1=read (using Integer for SQLite compat)
     target_role = Column(String(50), nullable=True, index=True)  # if set, visible to all users with this role
     created_at = Column(DateTime, default=_utcnow)
+
+
+class NotificationPreference(Base):
+    """Per-user notification preferences. Users can mute specific notification types."""
+    __tablename__ = "notification_preferences"
+    __table_args__ = (
+        UniqueConstraint("username", "notif_type", name="uq_notif_pref"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, index=True)
+    notif_type = Column(String(50), nullable=False)  # e.g. "quality_done", "cohort_shared"
+    enabled = Column(Integer, default=1)  # 1=enabled, 0=muted
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class CohortTemplate(Base):
@@ -285,7 +321,7 @@ class CohortShare(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    cohort_id = Column(Integer, nullable=False, index=True)
+    cohort_id = Column(Integer, ForeignKey("cohorts.id", ondelete="CASCADE"), nullable=False, index=True)
     share_type = Column(String(20), nullable=False)  # "user" or "group"
     share_target = Column(String(255), nullable=False)  # username or group name
     shared_by = Column(String(255), nullable=False)
@@ -301,6 +337,9 @@ class UserGroup(Base):
     description = Column(Text, default="")
     created_by = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+
+    members = relationship("UserGroupMember", cascade="all, delete-orphan", passive_deletes=True,
+                           primaryjoin="UserGroup.name == foreign(UserGroupMember.group_name)")
 
 
 class UserGroupMember(Base):

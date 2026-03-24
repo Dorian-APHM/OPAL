@@ -5,7 +5,9 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime
+import re
+import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -20,7 +22,11 @@ from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from modules.quality.engine import get_available_domains, run_domain_analysis
 from modules.quality.comparator import compare_snapshots
+from utils.csv_safety import csv_safe
+from utils.cdm_helper import get_cdm_connection
 from config import DEFAULT_OMOP_SCHEMA
+from utils.rate_limit import limiter
+from utils.cdm_helper import check_cdm_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quality", tags=["quality"])
@@ -28,6 +34,8 @@ router = APIRouter(prefix="/api/quality", tags=["quality"])
 # Track active streaming analyses for cancel support.
 # Key: analysis_id (str), Value: {"cancelled": bool, "conn": psycopg2 connection or None}
 _active_analyses: dict[str, dict] = {}
+_active_analyses_lock = threading.Lock()
+_MAX_ACTIVE_ANALYSES = 100
 
 
 class AnalysisRequest(BaseModel):
@@ -74,7 +82,7 @@ def _save_snapshot(db: Session, cdm_name: str, domain: str, results: dict) -> An
         domain=domain,
         version=max_version + 1,
         results=results,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     db.add(snapshot)
     db.commit()
@@ -83,14 +91,32 @@ def _save_snapshot(db: Session, cdm_name: str, domain: str, results: dict) -> An
 
 
 @router.get("/domains")
-def list_domains():
-    """List all available analysis domains."""
+def list_domains(cdm_name: str | None = None, db: Session = Depends(get_db)):
+    """List available analysis domains. If cdm_name is provided, only returns
+    domains whose tables exist in the CDM schema."""
+    if cdm_name:
+        try:
+            conn, schema = get_cdm_connection(db, cdm_name)
+            domains = get_available_domains(conn=conn, omop_schema=schema)
+            conn.close()
+            return {"domains": domains}
+        except Exception:
+            pass
     return {"domains": get_available_domains()}
 
 
 @router.post("/analyze")
+@limiter.limit("3/minute")
 def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
-    """Run analysis for a single domain on a CDM."""
+    """Run analysis for a single domain on a CDM in a background thread.
+
+    Returns immediately with an analysis_id.  The frontend polls
+    /analyze/active and loads the snapshot when done.  A WebSocket
+    notification is sent on completion.
+    """
+    import uuid as _uuid
+
+    check_cdm_access(request, req.cdm_name)
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -101,53 +127,93 @@ def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends
 
     params = _get_cdm_analysis_params(db, cdm)
     password = decrypt_password(cdm.db_password_encrypted)
-    try:
-        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
 
-    try:
-        results = run_domain_analysis(
-            conn, req.domain,
-            omop_schema=params["omop_schema"],
-            top_unmapped=params["top_unmapped"],
-            top_concepts=params["top_concepts"],
-            max_records_per_person=params["max_rpp"],
-            max_observation_months=params["max_obs"],
-        )
-    except Exception as e:
-        logger.exception("Analysis failed for %s/%s", req.cdm_name, req.domain)
-        raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
-    finally:
-        conn.close()
-
-    snapshot = _save_snapshot(db, req.cdm_name, req.domain, results)
-
-    # Notify the user who launched the analysis
+    # Copy values before the thread starts (db session may close).
+    cdm_host, cdm_port, cdm_dbname, cdm_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
+    cdm_name = req.cdm_name
+    domain = req.domain
     user = getattr(request.state, "user", {})
-    username = user.get("preferred_username", "")
-    if username:
-        notify(
-            db, username, "quality_done",
-            title=f"Analyse terminée : {req.domain}",
-            message=f"L'analyse qualité de « {req.domain} » sur {req.cdm_name} est terminée.",
-            link=f"/quality?cdm={req.cdm_name}&domain={req.domain}",
-            item_id=req.domain,
-        )
-        db.commit()
+    trigger_username = user.get("preferred_username", "")
 
-    return {
-        "snapshot_id": snapshot.id,
-        "version": snapshot.version,
-        "domain": req.domain,
-        "cdm_name": req.cdm_name,
-        "results": results,
-    }
+    analysis_id = f"single-{_uuid.uuid4().hex[:8]}"
+    with _active_analyses_lock:
+        _active_analyses[analysis_id] = {
+            "cancelled": False, "conn": None,
+            "cdm_name": cdm_name, "domains": [domain],
+            "completed": 0, "total": 1, "domain_status": [],
+            "username": trigger_username,
+        }
+
+    def _worker():
+        try:
+            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
+        except Exception:
+            logger.exception("Cannot connect to CDM '%s'", cdm_name)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
+            return
+
+        with _active_analyses_lock:
+            _active_analyses[analysis_id]["conn"] = conn
+
+        try:
+            with _active_analyses_lock:
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    return
+
+            results = run_domain_analysis(
+                conn, domain,
+                omop_schema=params["omop_schema"],
+                top_unmapped=params["top_unmapped"],
+                top_concepts=params["top_concepts"],
+                max_records_per_person=params["max_rpp"],
+                max_observation_months=params["max_obs"],
+            )
+
+            with _active_analyses_lock:
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    return
+                _active_analyses[analysis_id]["completed"] = 1
+                _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "success"})
+
+            local_db = SessionLocal()
+            try:
+                _save_snapshot(local_db, cdm_name, domain, results)
+                if trigger_username:
+                    notify(
+                        local_db, trigger_username, "quality_done",
+                        title=f"Analyse terminée : {domain}",
+                        message=f"L'analyse qualité de « {domain} » sur {cdm_name} est terminée.",
+                        link=f"/quality?cdm={cdm_name}&domain={domain}",
+                        item_id=domain,
+                    )
+                    local_db.commit()
+            finally:
+                local_db.close()
+
+        except Exception:
+            with _active_analyses_lock:
+                cancelled = _active_analyses.get(analysis_id, {}).get("cancelled")
+                _active_analyses[analysis_id]["completed"] = 1
+                _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
+            if not cancelled:
+                logger.exception("Analysis failed for %s/%s", cdm_name, domain)
+        finally:
+            conn.close()
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
+
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
+
+    return {"cdm_name": cdm_name, "domain": domain, "analysis_id": analysis_id, "status": "started"}
 
 
 @router.post("/analyze/batch")
 def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run analysis for multiple domains on a CDM."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -162,7 +228,8 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", req.cdm_name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
 
     results_list = []
     errors = []
@@ -185,7 +252,7 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
                 })
             except Exception as e:
                 logger.exception("Batch analysis failed for %s/%s", req.cdm_name, domain)
-                errors.append({"domain": domain, "error": str(e)})
+                errors.append({"domain": domain, "error": "Analysis failed due to an internal error"})
     finally:
         conn.close()
 
@@ -215,8 +282,11 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
 
 
 @router.post("/analyze/batch/stream")
+@limiter.limit("2/minute")
 def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run batch analysis with SSE progress stream."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     cdm = db.query(CdmConfig).filter(CdmConfig.name == req.cdm_name).first()
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{req.cdm_name}' not found")
@@ -239,6 +309,11 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
     user = getattr(request.state, "user", {})
     trigger_username = user.get("preferred_username", "")
 
+    # Enforce cap on concurrent analyses
+    with _active_analyses_lock:
+        if len(_active_analyses) >= _MAX_ACTIVE_ANALYSES:
+            raise HTTPException(status_code=429, detail="Too many concurrent analyses")
+
     # Register this analysis for cancel support
     import queue as _queue
     import threading as _threading
@@ -254,17 +329,21 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
         end.  The thread is completely independent of the SSE stream so
         the analysis survives client disconnects and page navigations.
         """
-        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": []}
+        with _active_analyses_lock:
+            _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": [], "username": trigger_username}
 
         try:
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
         except Exception as e:
-            progress_q.put({"type": "error", "message": str(e)})
+            logger.exception("Stream analysis: cannot connect to CDM '%s'", cdm_name)
+            progress_q.put({"type": "error", "message": "Cannot connect to CDM database"})
             progress_q.put(None)  # sentinel
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
             return
 
-        _active_analyses[analysis_id]["conn"] = conn
+        with _active_analyses_lock:
+            _active_analyses[analysis_id]["conn"] = conn
         total = len(domains)
         completed = 0
         cancelled = False
@@ -272,8 +351,10 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
         try:
             for domain in domains:
-                if _active_analyses.get(analysis_id, {}).get("cancelled"):
-                    cancelled = True
+                with _active_analyses_lock:
+                    if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                        cancelled = True
+                if cancelled:
                     progress_q.put({"type": "cancelled", "completed": completed, "total": total})
                     break
 
@@ -295,21 +376,24 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
                     completed += 1
                     succeeded_domains.append(domain)
-                    if analysis_id in _active_analyses:
-                        _active_analyses[analysis_id]["completed"] = completed
-                        _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "success"})
+                    with _active_analyses_lock:
+                        if analysis_id in _active_analyses:
+                            _active_analyses[analysis_id]["completed"] = completed
+                            _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "success"})
                     progress_q.put({"type": "progress", "domain": domain, "status": "success",
                                     "completed": completed, "total": total})
                 except Exception as e:
                     completed += 1
-                    if analysis_id in _active_analyses:
-                        _active_analyses[analysis_id]["completed"] = completed
-                        _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
+                    with _active_analyses_lock:
+                        if analysis_id in _active_analyses:
+                            _active_analyses[analysis_id]["completed"] = completed
+                            _active_analyses[analysis_id]["domain_status"].append({"domain": domain, "status": "error"})
                     progress_q.put({"type": "progress", "domain": domain, "status": "error",
-                                    "error": str(e), "completed": completed, "total": total})
+                                    "error": "Analysis failed due to an internal error", "completed": completed, "total": total})
         finally:
             conn.close()
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
 
         if not cancelled and succeeded_domains:
             if trigger_username:
@@ -330,44 +414,61 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
 
         progress_q.put(None)  # sentinel — tells the SSE generator to stop
 
-    # Start the worker thread — it runs independently of the HTTP connection.
-    thread = _threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    # Start the worker in the bounded thread pool (P20 fix).
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     import asyncio as _asyncio
 
     async def event_generator():
         loop = _asyncio.get_event_loop()
-        yield f"data: {json.dumps({'type': 'start', 'analysis_id': analysis_id, 'total': len(domains)})}\n\n"
+        try:
+            yield f"data: {json.dumps({'type': 'start', 'analysis_id': analysis_id, 'total': len(domains)})}\n\n"
 
-        while True:
-            # Read from the queue in a thread-safe, non-blocking way.
-            try:
-                event = await loop.run_in_executor(None, progress_q.get, True, 2.0)
-            except _queue.Empty:
-                continue
-            if event is None:
-                break
-            yield f"data: {json.dumps(event)}\n\n"
+            while True:
+                # Read from the queue in a thread-safe, non-blocking way.
+                try:
+                    event = await loop.run_in_executor(None, lambda: progress_q.get(block=True, timeout=2.0))
+                except _queue.Empty:
+                    continue
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        except _asyncio.CancelledError:
+            # Client disconnected — drain remaining events to avoid blocking the worker
+            logger.info("SSE client disconnected for analysis %s", analysis_id)
+            while not progress_q.empty():
+                try:
+                    progress_q.get_nowait()
+                except _queue.Empty:
+                    break
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/analyze/cancel/{analysis_id}")
-def cancel_analysis(analysis_id: str):
+def cancel_analysis(analysis_id: str, request: Request):
     """Cancel a running streaming analysis.
 
     Sets the cancelled flag so the generator stops between domains.
     Also attempts to cancel the active PostgreSQL query.
+    Only the user who launched the analysis (or an admin) can cancel it.
     """
-    entry = _active_analyses.get(analysis_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", [])
 
-    entry["cancelled"] = True
+    with _active_analyses_lock:
+        entry = _active_analyses.get(analysis_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Analysis not found or already finished")
+        owner = entry.get("username", "")
+        if owner and username != owner and "admin" not in roles:
+            raise HTTPException(status_code=403, detail="Only the analysis owner or admin can cancel")
+        entry["cancelled"] = True
+        conn = entry.get("conn")
 
-    # Try to cancel the running PostgreSQL query
-    conn = entry.get("conn")
+    # Try to cancel the running PostgreSQL query (outside lock — cancel() may block)
     if conn and not conn.closed:
         try:
             conn.cancel()
@@ -381,24 +482,27 @@ def cancel_analysis(analysis_id: str):
 @router.get("/analyze/active")
 def list_active_analyses():
     """List currently running analyses (batch + conformity)."""
+    with _active_analyses_lock:
+        items = list(_active_analyses.items())
     return {
         "active": [
             {
                 "analysis_id": aid,
                 "cancelled": info.get("cancelled", False),
                 "cdm_name": info.get("cdm_name", ""),
-                "type": "conformity" if aid.startswith("conf-") else "batch",
+                "type": "conformity" if aid.startswith("conf-") else ("single" if aid.startswith("single-") else "batch"),
                 "domains": info.get("domains", []),
                 "completed": info.get("completed", 0),
                 "total": info.get("total", 0),
                 "domain_status": info.get("domain_status", []),
             }
-            for aid, info in _active_analyses.items()
+            for aid, info in items
         ]
     }
 
 
 @router.post("/conformity")
+@limiter.limit("3/minute")
 def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends(get_db)):
     """Run CDM conformity validation checks in a background thread.
 
@@ -406,6 +510,9 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
     an AnalysisSnapshot with domain='Conformity' so it survives page
     navigation.  Supports cancel via /conformity/cancel/{analysis_id}.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
+
     import threading as _threading
     import uuid as _uuid
 
@@ -424,7 +531,8 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
     trigger_username = user.get("preferred_username", "")
 
     analysis_id = f"conf-{_uuid.uuid4().hex[:8]}"
-    _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"]}
+    with _active_analyses_lock:
+        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"], "username": trigger_username}
 
     def _worker():
         from modules.quality.conformity import run_conformity_checks
@@ -433,19 +541,23 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
             conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
         except Exception as e:
             logger.error("Conformity: cannot connect to CDM %s: %s", cdm_name, e)
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
             return
 
-        _active_analyses[analysis_id]["conn"] = conn
+        with _active_analyses_lock:
+            _active_analyses[analysis_id]["conn"] = conn
 
         try:
-            if _active_analyses.get(analysis_id, {}).get("cancelled"):
-                return
+            with _active_analyses_lock:
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    return
 
             report = run_conformity_checks(conn, omop_schema=omop_schema)
 
-            if _active_analyses.get(analysis_id, {}).get("cancelled"):
-                return
+            with _active_analyses_lock:
+                if _active_analyses.get(analysis_id, {}).get("cancelled"):
+                    return
 
             # Persist result as a snapshot with domain='Conformity'
             local_db = SessionLocal()
@@ -464,25 +576,38 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
                 local_db.close()
 
         except Exception as e:
-            if not _active_analyses.get(analysis_id, {}).get("cancelled"):
+            with _active_analyses_lock:
+                cancelled = _active_analyses.get(analysis_id, {}).get("cancelled")
+            if not cancelled:
                 logger.exception("Conformity check failed for %s", cdm_name)
         finally:
             conn.close()
-            _active_analyses.pop(analysis_id, None)
+            with _active_analyses_lock:
+                _active_analyses.pop(analysis_id, None)
 
-    thread = _threading.Thread(target=_worker, daemon=True)
-    thread.start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
 
     return {"cdm_name": cdm_name, "analysis_id": analysis_id, "status": "started"}
 
 
 @router.post("/conformity/cancel/{analysis_id}")
-def cancel_conformity(analysis_id: str):
+def cancel_conformity(analysis_id: str, request: Request):
     """Cancel a running conformity check."""
-    entry = _active_analyses.get(analysis_id)
+    with _active_analyses_lock:
+        entry = _active_analyses.get(analysis_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Analysis not found or already finished")
-    entry["cancelled"] = True
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    roles = user.get("roles", [])
+    owner = entry.get("username", "")
+    if owner and username != owner and "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Only the analysis owner or admin can cancel")
+
+    with _active_analyses_lock:
+        entry["cancelled"] = True
     conn = entry.get("conn")
     if conn and not conn.closed:
         try:
@@ -513,17 +638,27 @@ def get_conformity(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.get("/snapshots/{cdm_name}/{domain}")
-def list_snapshots(cdm_name: str, domain: str, db: Session = Depends(get_db)):
-    """List all snapshots for a CDM/domain pair."""
-    snapshots = (
-        db.query(AnalysisSnapshot)
+def list_snapshots(
+    cdm_name: str,
+    domain: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """List snapshots for a CDM/domain pair (paginated, without heavy results column)."""
+    base = (
+        db.query(AnalysisSnapshot.id, AnalysisSnapshot.version, AnalysisSnapshot.created_at)
         .filter(AnalysisSnapshot.cdm_name == cdm_name, AnalysisSnapshot.domain == domain)
         .order_by(AnalysisSnapshot.version.desc())
-        .all()
     )
+    total = base.count()
+    snapshots = base.offset((page - 1) * page_size).limit(page_size).all()
     return {
         "cdm_name": cdm_name,
         "domain": domain,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
         "snapshots": [
             {
                 "id": s.id,
@@ -584,13 +719,15 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
     results = snapshot.results
     output = io.StringIO()
     writer = csv.writer(output)
-    filename = f"{snapshot.cdm_name}_{snapshot.domain}_v{snapshot.version}_{table_type}.csv"
+    safe_cdm = re.sub(r'[^\w\-.]', '_', snapshot.cdm_name)
+    safe_domain = re.sub(r'[^\w\-.]', '_', snapshot.domain)
+    filename = f"{safe_cdm}_{safe_domain}_v{snapshot.version}_{table_type}.csv"
 
     if table_type == "top_concepts":
         concepts = results.get("achilles_like", {}).get("top_concepts", [])
         writer.writerow(["concept_id", "concept_name", "source_value", "n_records", "n_persons"])
         for c in concepts:
-            writer.writerow([c["concept_id"], c["concept_name"], c["source_value"], c["n_records"], c["n_persons"]])
+            writer.writerow([c["concept_id"], csv_safe(c["concept_name"]), csv_safe(c["source_value"]), c["n_records"], c["n_persons"]])
 
     elif table_type == "top_unmapped":
         unmapped = results.get("mapping", {}).get("top_unmapped_terms", [])
@@ -601,9 +738,9 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
         header.append("count")
         writer.writerow(header)
         for u in unmapped:
-            row = [u["source_value"]]
+            row = [csv_safe(u["source_value"])]
             if has_name:
-                row.append(u.get("source_name", ""))
+                row.append(csv_safe(u.get("source_name", "")))
             row.append(u["count"])
             writer.writerow(row)
 
@@ -612,7 +749,7 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
         writer.writerow(["domain", "total_records", "distinct_persons", "pct_persons",
                          "total_terms", "mapped_terms", "unmapped_terms", "pct_terms_mapped"])
         for d in domains:
-            writer.writerow([d["domain"], d["total_records"], d["distinct_persons"],
+            writer.writerow([csv_safe(d["domain"]), d["total_records"], d["distinct_persons"],
                              d["pct_persons"], d["total_terms"], d["mapped_terms"],
                              d["unmapped_terms"], d["pct_terms_mapped"]])
 
@@ -620,14 +757,14 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
         rows = results.get("achilles_like", {}).get("age_by_gender", {}).get("rows", [])
         writer.writerow(["gender_name", "n", "mean_age", "p10", "p25", "median_age", "p75", "p90"])
         for r in rows:
-            writer.writerow([r["gender_name"], r["n"], r.get("mean_age"), r["p10"], r["p25"],
+            writer.writerow([csv_safe(r["gender_name"]), r["n"], r.get("mean_age"), r["p10"], r["p25"],
                              r.get("median_age"), r["p75"], r["p90"]])
 
     elif table_type == "duration_by_gender":
         rows = results.get("achilles_like", {}).get("duration_by_gender", {}).get("rows", [])
         writer.writerow(["gender_name", "n", "mean_months", "p10", "p25", "median_months", "p75", "p90"])
         for r in rows:
-            writer.writerow([r["gender_name"], r["n"], r.get("mean_months"), r["p10"], r["p25"],
+            writer.writerow([csv_safe(r["gender_name"]), r["n"], r.get("mean_months"), r["p10"], r["p25"],
                              r.get("median_months"), r["p75"], r["p90"]])
 
     else:
@@ -766,11 +903,14 @@ def generate_comparison_report(
 
     html = build_comparison_html_report(cdm_name_a, cdm_name_b, comparisons, lang=lang)
 
-    suffix = f"_{domain}" if domain else ""
+    safe_a = re.sub(r'[^\w\-.]', '_', cdm_name_a)
+    safe_b = re.sub(r'[^\w\-.]', '_', cdm_name_b)
+    safe_domain_str = re.sub(r'[^\w\-.]', '_', domain) if domain else ""
+    suffix = f"_{safe_domain_str}" if domain else ""
     return StreamingResponse(
         iter([html]),
         media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=opal_comparison_{cdm_name_a}_vs_{cdm_name_b}{suffix}.html"},
+        headers={"Content-Disposition": f"attachment; filename=opal_comparison_{safe_a}_vs_{safe_b}{suffix}.html"},
     )
 
 
@@ -804,16 +944,20 @@ def generate_report(
 
     html = build_html_report(cdm_name, snapshots_data, lang=lang)
 
+    safe_name = re.sub(r'[^\w\-.]', '_', cdm_name)
     return StreamingResponse(
         iter([html]),
         media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=opal_report_{cdm_name}.html"},
+        headers={"Content-Disposition": f"attachment; filename=opal_report_{safe_name}.html"},
     )
 
 
 @router.post("/compare")
-def compare_cdms(req: CompareRequest, db: Session = Depends(get_db)):
+def compare_cdms(req: CompareRequest, request: Request, db: Session = Depends(get_db)):
     """Compare analysis results between two CDMs or two snapshots."""
+    # cdm_name_a/b are in the JSON body, so the Keycloak middleware cannot see them — check here.
+    check_cdm_access(request, req.cdm_name_a)
+    check_cdm_access(request, req.cdm_name_b)
     # Get snapshot A
     if req.snapshot_id_a:
         snap_a = db.query(AnalysisSnapshot).filter(AnalysisSnapshot.id == req.snapshot_id_a).first()

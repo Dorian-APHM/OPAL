@@ -148,3 +148,55 @@ export const layout = {
   contentPadding: spacing.lg,
   headerHeight: 48,
 } as const;
+
+// ── Light Mode Colors (Crème Sauge) ────────────────────────
+export const lightColors = {
+  deepBase: '#EDE7D9',
+  surface: '#E0D9C8',
+  surfaceLight: '#E8E2D3',
+  surfaceDark: '#CFC8B6',
+  surfaceHover: '#D8D1C0',
+
+  primary: '#8FAE6B',
+  primaryLight: '#A8C484',
+  primaryDark: '#6B9E5A',
+  accent: '#8FAE6B',
+  accentHover: '#A8C484',
+  accentLight: 'rgba(143, 174, 107, 0.15)',
+  accentMuted: 'rgba(143, 174, 107, 0.10)',
+  accentSubtle: 'rgba(143, 174, 107, 0.06)',
+  accentGlow: 'rgba(143, 174, 107, 0.25)',
+
+  teal: '#6B9E5A',
+  tealLight: '#8BB87A',
+
+  textPrimary: '#2D3B1E',
+  textSecondary: '#5E6D50',
+  textDisabled: '#A8B49C',
+  textDim: '#8B9A7D',
+
+  border: 'rgba(45, 59, 30, 0.08)',
+  borderSubtle: 'rgba(45, 59, 30, 0.10)',
+  borderGlow: 'rgba(143, 174, 107, 0.30)',
+  divider: 'rgba(45, 59, 30, 0.10)',
+
+  success: '#5A9E6F',
+  warning: '#D4A04A',
+  error: '#C75C5C',
+  info: '#5B8DB8',
+
+  chart: ['#8FAE6B', '#6B9E5A', '#5B8DB8', '#8B7EC8', '#D4A04A', '#C75C5C', '#D17BA5', '#6366F1', '#84CC16', '#06B6D4'],
+} as const;
+
+export const lightShadows = {
+  sm: '2px 2px 4px #CFC8B6, -2px -2px 4px #E8E2D3',
+  md: '3px 3px 8px #CFC8B6, -2px -2px 6px #E8E2D3',
+  lg: '4px 4px 12px #CFC8B6, -3px -3px 8px #E8E2D3',
+  xl: '6px 6px 16px #CFC8B6, -4px -4px 10px #E8E2D3',
+  card: '3px 3px 10px #CFC8B6, -2px -2px 6px #E8E2D3',
+  cardHover: '4px 4px 16px #C5BEAC, -3px -3px 8px #E8E2D3, 0 0 20px rgba(143, 174, 107, 0.10)',
+  sidebar: '2px 0 12px rgba(45, 59, 30, 0.06)',
+  glow: '0 0 20px rgba(143, 174, 107, 0.15)',
+  glowStrong: '0 0 30px rgba(143, 174, 107, 0.25)',
+  inset: 'inset 2px 2px 4px #CFC8B6, inset -2px -2px 4px #E8E2D3',
+} as const;

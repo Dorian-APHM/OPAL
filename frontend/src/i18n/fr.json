@@ -158,7 +158,10 @@
     "Procedure": "Acte",
     "Visit": "Séjour",
     "Device": "Dispositif médical",
-    "Death": "Décès"
+    "Death": "Décès",
+    "Specimen": "Prélèvement",
+    "Note": "Note clinique",
+    "Payer_Plan_Period": "Période de couverture"
   },
   "settings": {
     "title": "Paramètres",
@@ -286,7 +289,22 @@
     "ref_loaded": "Référentiels chargés",
     "ref_entries_loaded": "entrées chargées",
     "ref_codes": "codes",
-    "ref_enriched": "suggestions enrichies"
+    "ref_enriched": "suggestions enrichies",
+    "write_confirm_title": "Confirmation requise",
+    "write_confirm_cancel": "Annuler",
+    "write_confirm_submit": "Confirmer l'écriture",
+    "write_confirm_message_pre": "Vous allez écrire",
+    "write_confirm_message_mappings": "mappings",
+    "write_confirm_message_mid": "dans la table",
+    "write_confirm_message_post": "du CDM",
+    "write_confirm_impact_pre": "Cela impactera",
+    "write_confirm_impact_rows": "lignes",
+    "write_confirm_impact_mid": "et",
+    "write_confirm_impact_patients": "patients",
+    "write_confirm_type_cdm": "Pour confirmer, tapez le nom exact du CDM ci-dessous :",
+    "write_confirm_mismatch": "Le nom du CDM ne correspond pas",
+    "write_warning": "Cette action va modifier directement la table source_to_concept_map du CDM. Cette opération est difficilement réversible.",
+    "export_stcm_instead": "Exporter en CSV (recommandé)"
   },
   "common": {
     "save": "Enregistrer",

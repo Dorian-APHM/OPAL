@@ -1,13 +1,18 @@
 """
 User group management endpoints.
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from db.app_db import get_db
 from db.models import UserGroup, UserGroupMember
 from utils.notifications import notify as _notify
+from auth.keycloak import require_roles
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
@@ -32,26 +37,49 @@ def _get_user(request: Request) -> dict:
 
 
 @router.get("/")
-def list_groups(db: Session = Depends(get_db)):
-    """List all user groups with member counts."""
-    groups = db.query(UserGroup).order_by(UserGroup.name).all()
-    result = []
-    for g in groups:
-        count = db.query(UserGroupMember).filter(UserGroupMember.group_name == g.name).count()
-        result.append({
-            "name": g.name,
-            "description": g.description,
-            "created_by": g.created_by,
-            "member_count": count,
-            "created_at": g.created_at.isoformat() if g.created_at else None,
-        })
-    return {"groups": result}
+def list_groups(request: Request, db: Session = Depends(get_db)):
+    """List all user groups with member counts.
+
+    Non-admin users only see groups they belong to, and member_count is hidden.
+    """
+    user = _get_user(request)
+    roles = user.get("roles", [])
+    username = user.get("preferred_username", "")
+    is_admin = any(r in ("admin", "data-manager") for r in roles)
+
+    results = (
+        db.query(UserGroup, func.count(UserGroupMember.id))
+        .outerjoin(UserGroupMember, UserGroupMember.group_name == UserGroup.name)
+        .group_by(UserGroup.id)
+        .order_by(UserGroup.name)
+        .all()
+    )
+
+    if not is_admin:
+        # Filter: only groups this user belongs to
+        my_groups = {
+            m.group_name for m in
+            db.query(UserGroupMember).filter(UserGroupMember.username == username).all()
+        }
+        results = [(g, count) for g, count in results if g.name in my_groups]
+
+    return {
+        "groups": [
+            {
+                "name": g.name,
+                "description": g.description,
+                "created_by": g.created_by,
+                "member_count": count if is_admin else None,
+                "created_at": g.created_at.isoformat() if g.created_at else None,
+            }
+            for g, count in results
+        ]
+    }
 
 
 @router.post("/")
-def create_group(req: GroupCreateRequest, request: Request, db: Session = Depends(get_db)):
-    """Create a user group."""
-    user = _get_user(request)
+def create_group(req: GroupCreateRequest, request: Request, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Create a user group (admin/data-manager only)."""
     username = user.get("preferred_username", "system")
 
     existing = db.query(UserGroup).filter(UserGroup.name == req.name).first()
@@ -61,17 +89,22 @@ def create_group(req: GroupCreateRequest, request: Request, db: Session = Depend
     group = UserGroup(name=req.name, description=req.description, created_by=username)
     db.add(group)
 
-    for member in req.members:
-        db.add(UserGroupMember(group_name=req.name, username=member, added_by=username))
-        if member != username:
-            _notify(
-                db, member, "group_added",
-                title=f"Ajouté au groupe : {req.name}",
-                message=f"{username} vous a ajouté au groupe « {req.name} ».",
-                item_id=req.name,
-            )
+    try:
+        for member in req.members:
+            db.add(UserGroupMember(group_name=req.name, username=member, added_by=username))
+            if member != username:
+                _notify(
+                    db, member, "group_added",
+                    title=f"Ajouté au groupe : {req.name}",
+                    message=f"{username} vous a ajouté au groupe « {req.name} ».",
+                    item_id=req.name,
+                )
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create group '%s'", req.name)
+        raise HTTPException(status_code=500, detail="Failed to create group")
     return {"name": req.name, "members": req.members}
 
 
@@ -92,9 +125,8 @@ def get_group(group_name: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{group_name}")
-def update_group(group_name: str, req: GroupUpdateRequest, request: Request, db: Session = Depends(get_db)):
-    """Update a group. If members list is provided, it replaces all current members."""
-    user = _get_user(request)
+def update_group(group_name: str, req: GroupUpdateRequest, request: Request, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Update a group (admin/data-manager only). If members list is provided, it replaces all current members."""
     username = user.get("preferred_username", "system")
 
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
@@ -104,21 +136,38 @@ def update_group(group_name: str, req: GroupUpdateRequest, request: Request, db:
     if req.description is not None:
         group.description = req.description
 
-    if req.members is not None:
-        db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).delete()
-        for member in req.members:
-            db.add(UserGroupMember(group_name=group_name, username=member, added_by=username))
+    try:
+        if req.members is not None:
+            db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).delete()
+            for member in req.members:
+                db.add(UserGroupMember(group_name=group_name, username=member, added_by=username))
 
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to update group '%s'", group_name)
+        raise HTTPException(status_code=500, detail="Failed to update group")
     return {"name": group_name, "updated": True}
 
 
 @router.delete("/{group_name}")
-def delete_group(group_name: str, db: Session = Depends(get_db)):
-    """Delete a group and all its members."""
+def delete_group(group_name: str, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Delete a group and all its members (admin/data-manager only)."""
+    username = user.get("preferred_username", "system")
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
     if not group:
         raise HTTPException(status_code=404, detail=f"Group '{group_name}' not found")
+
+    # Notify all members before deleting
+    members = db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).all()
+    for m in members:
+        if m.username != username:
+            _notify(
+                db, m.username, "group_removed",
+                title=f"Groupe supprimé : {group_name}",
+                message=f"{username} a supprimé le groupe « {group_name} ».",
+                item_id=group_name,
+            )
 
     db.query(UserGroupMember).filter(UserGroupMember.group_name == group_name).delete()
     db.delete(group)
@@ -127,9 +176,8 @@ def delete_group(group_name: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{group_name}/members")
-def add_member(group_name: str, req: GroupMemberRequest, request: Request, db: Session = Depends(get_db)):
-    """Add a member to a group."""
-    user = _get_user(request)
+def add_member(group_name: str, req: GroupMemberRequest, request: Request, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Add a member to a group (admin/data-manager only)."""
     username = user.get("preferred_username", "system")
 
     group = db.query(UserGroup).filter(UserGroup.name == group_name).first()
@@ -156,13 +204,23 @@ def add_member(group_name: str, req: GroupMemberRequest, request: Request, db: S
 
 
 @router.delete("/{group_name}/members/{member_username}")
-def remove_member(group_name: str, member_username: str, db: Session = Depends(get_db)):
-    """Remove a member from a group."""
+def remove_member(group_name: str, member_username: str, user=require_roles("admin", "data-manager"), db: Session = Depends(get_db)):
+    """Remove a member from a group (admin/data-manager only)."""
+    username = user.get("preferred_username", "system")
     deleted = db.query(UserGroupMember).filter(
         UserGroupMember.group_name == group_name,
         UserGroupMember.username == member_username,
     ).delete()
-    db.commit()
     if not deleted:
         raise HTTPException(status_code=404, detail="Member not found in group")
+
+    if member_username != username:
+        _notify(
+            db, member_username, "group_removed",
+            title=f"Retiré du groupe : {group_name}",
+            message=f"{username} vous a retiré du groupe « {group_name} ».",
+            item_id=group_name,
+        )
+
+    db.commit()
     return {"removed": member_username, "group": group_name}

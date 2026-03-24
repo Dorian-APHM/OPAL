@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
 import {
-  Card, Input, Select, Button, Table, Tag, Switch, Tabs, Drawer, Alert, Empty, Spinner, Tooltip,
+  Card, Input, Select, Button, Table, Tag, Switch, Tabs, Drawer, Alert, Empty, Spinner, Tooltip, useToast,
 } from '../components/ui';
 import type { Column, TabItem } from '../components/ui';
 import {
@@ -71,13 +71,11 @@ const DOMAIN_NOMENCLATURE: Record<string, string> = {
   Condition: 'CIM-10',
   Procedure: 'CCAM',
   Drug: 'ATC / UCD',
-  Measurement: 'NABM / LOINC',
-  Observation: 'Source',
-  Device: 'LPP',
 };
 
 export default function ConceptExplorerPage({ selectedCdm }: Props) {
   const { t } = useTranslation();
+  const toast = useToast();
   const isMobile = useIsMobile();
   const [query, setQuery] = useSessionState('concepts:query', '');
   const [domainFilter, setDomainFilter] = useSessionState('concepts:domainFilter', undefined as string | undefined);
@@ -116,8 +114,8 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) return;
-    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains)).catch(() => {});
-    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies)).catch(() => {});
+    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load domains')));
+    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load vocabularies')));
   }, [selectedCdm]);
 
   const doSearch = useCallback(async (p: number = 1) => {
@@ -141,7 +139,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         setCountsLoading(true);
         conceptApi.counts(selectedCdm, ids)
           .then(cRes => { if (!ctrl.signal.aborted) setConceptCounts(cRes.data.counts); })
-          .catch(() => {})
+          .catch(() => toast.error(t('concepts.counts_failed', 'Failed to load concept counts')))
           .finally(() => { if (!ctrl.signal.aborted) setCountsLoading(false); });
       } else {
         setConceptCounts({});
@@ -150,6 +148,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       if (ctrl.signal.aborted) return;
       setConcepts([]);
       setTotal(0);
+      toast.error(t('common.error', 'An error occurred'));
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
       if (abortRef.current === ctrl) abortRef.current = null;
@@ -174,6 +173,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       if (ctrl.signal.aborted) return;
       setSourceResults([]);
       setSourceTotal(0);
+      toast.error(t('common.error', 'An error occurred'));
     } finally {
       if (!ctrl.signal.aborted) setSourceLoading(false);
       if (abortRef.current === ctrl) abortRef.current = null;
@@ -209,7 +209,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       setAncestors(hierRes.data.ancestors || []);
       setDescendants(hierRes.data.descendants || []);
       setSourceValues(svRes.data.source_values || []);
-    } catch { /* ignore */ }
+    } catch { toast.error(t('common.error', 'An error occurred')); }
     finally { setDetailLoading(false); }
   };
 
@@ -473,7 +473,10 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
   const detailContent = selectedConcept ? (
     detailLoading ? (
-      <div className="flex justify-center py-10"><Spinner /></div>
+      <div className="text-center py-10">
+        <Spinner size="large" />
+        <p className="text-sm text-text-muted mt-4">{t('concept.loading_details', 'Loading concept details...')}</p>
+      </div>
     ) : (
       <Tabs items={detailTabItems} />
     )
@@ -485,9 +488,9 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         {t('concept.title')} — {selectedCdm}
       </h3>
 
-      <div className="grid grid-cols-24 gap-4">
+      <div className="flex flex-col lg:flex-row gap-4">
         {/* Search panel */}
-        <div className={selectedConcept && !isMobile ? 'col-span-14' : 'col-span-24'} style={{ gridColumn: selectedConcept && !isMobile ? 'span 14' : 'span 24' }}>
+        <div className={selectedConcept && !isMobile ? 'lg:w-[58%]' : 'w-full'}>
           <Card size="small" className="mb-4">
             {/* Search mode toggle */}
             <div className="flex mb-3">
@@ -609,7 +612,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
         {/* Detail panel -- desktop: inline side panel */}
         {selectedConcept && !isMobile && (
-          <div style={{ gridColumn: 'span 10' }}>
+          <div className="lg:w-[42%]">
             <Card
               size="small"
               title={

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
+import { useChartTheme } from '../hooks/useChartTheme';
 import { BarChart3, Calculator } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -13,6 +14,7 @@ import type { Column } from '../components/ui';
 export default function IncidencePage({ selectedCdm }: { selectedCdm: string | null }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const ct = useChartTheme();
   const [cohorts, setCohorts] = useSessionState<CohortSummary[]>('incidence:cohorts', []);
   const [targetId, setTargetId] = useSessionState<number | null>('incidence:targetId', null);
   const [outcomeId, setOutcomeId] = useSessionState<number | null>('incidence:outcomeId', null);
@@ -25,7 +27,7 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
 
   useEffect(() => {
     if (!selectedCdm) return;
-    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => {});
+    cohortApi.list(selectedCdm).then(r => setCohorts(r.data.cohorts)).catch(() => toast.error(t('common.error', 'Failed to load cohorts')));
   }, [selectedCdm]);
 
   const compute = async () => {
@@ -94,7 +96,7 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
 
       <Card size="small" className="mb-4">
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <span className="text-sm font-semibold text-text-bright block mb-1">
                 {t('incidence.target_cohort', 'Target Cohort')}
@@ -119,7 +121,7 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <span className="text-sm font-semibold text-text-bright block mb-1">
                 {t('incidence.tar_start', 'TAR Start (days)')}
@@ -200,7 +202,7 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
 
       {result && !computing && (
         <>
-          <div className="grid grid-cols-4 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <Card size="small">
               <Statistic title={t('incidence.persons_at_risk', 'At Risk')} value={result.target_count?.toLocaleString()} />
             </Card>
@@ -243,11 +245,11 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
                     label: Object.values(s.strata_values || {}).join(' / '),
                     rate: (s.incidence_rate || 0) * 1000,
                   }))}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" />
-                    <YAxis label={{ value: 'IR / 1000 PY', angle: -90, position: 'insideLeft' }} />
-                    <Tooltip />
-                    <Bar dataKey="rate" fill="#3B82F6" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                    <XAxis dataKey="label" stroke={ct.axis} />
+                    <YAxis label={{ value: 'IR / 1000 PY', angle: -90, position: 'insideLeft' }} stroke={ct.axis} />
+                    <Tooltip contentStyle={ct.tooltipStyle} />
+                    <Bar dataKey="rate" fill={ct.blue} />
                   </BarChart>
                 </ResponsiveContainer>
               </Card>

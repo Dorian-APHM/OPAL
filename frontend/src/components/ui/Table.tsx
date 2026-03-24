@@ -83,7 +83,7 @@ export function Table<T extends Record<string, any>>({
   return (
     <div className={`w-full ${className}`}>
       <div className={`overflow-auto ${scroll?.y ? `max-h-[${scroll.y}px]` : ''}`} style={scroll?.y ? { maxHeight: scroll.y } : undefined}>
-        <table className="w-full border-collapse">
+        <table className="w-full border-collapse" role="table">
           <thead>
             <tr>
               {columns.map((col) => (
@@ -92,6 +92,8 @@ export function Table<T extends Record<string, any>>({
                   className={`${px} ${py} text-left text-xs font-semibold uppercase tracking-wider text-text-muted bg-surface-dark border-b border-glass-border sticky top-0 ${col.sorter ? 'cursor-pointer select-none hover:text-emerald-accent' : ''}`}
                   style={{ width: col.width, textAlign: col.align }}
                   onClick={() => handleSort(col)}
+                  aria-sort={col.sorter && sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : col.sorter ? 'none' : undefined}
+                  scope="col"
                 >
                   <span className="inline-flex items-center gap-1">
                     {col.title}

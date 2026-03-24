@@ -7,7 +7,7 @@ validation workflow, apply mapping, and audit history.
 import csv
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -22,13 +22,33 @@ from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA, DOMAIN_CONFIG
 from modules.mapping.suggest import suggest_mappings, suggest_batch
+from utils.csv_safety import csv_safe
+from utils.sql_safety import safe_identifier
+from utils.rate_limit import limiter
+from utils.cdm_helper import check_cdm_access, get_domain_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 
 # Background suggestion tasks — survive page navigation
 _active_suggestions: dict[str, dict] = {}
-# Stores: { task_id: { status, cdm_name, domain, results, error, cancelled } }
+_suggestions_lock = __import__('threading').Lock()
+# Stores: { task_id: { status, cdm_name, domain, results, error, cancelled, created_at } }
+_SUGGESTION_TTL_SECONDS = 600  # 10 minutes — auto-evict completed/orphaned tasks
+
+
+def _cleanup_stale_suggestions():
+    """Remove suggestions older than TTL (completed or stuck)."""
+    import time
+    now = time.time()
+    stale = [
+        tid for tid, entry in _active_suggestions.items()
+        if now - entry.get("created_at", 0) > _SUGGESTION_TTL_SECONDS
+    ]
+    for tid in stale:
+        _active_suggestions.pop(tid, None)
+    if stale:
+        logger.info("Cleaned up %d stale suggestion tasks", len(stale))
 
 
 # ──── Request models ────
@@ -88,7 +108,8 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to CDM: {e}")
+        logger.exception("Cannot connect to CDM '%s'", cdm.name)
+        raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return cdm, conn
 
 
@@ -96,7 +117,8 @@ def _get_schema(db: Session, cdm: CdmConfig) -> str:
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
     ).first()
-    return settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    raw = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    return safe_identifier(raw)
 
 
 # ──── 5.1 Mapping Dashboard ────
@@ -107,22 +129,26 @@ def mapping_dashboard(cdm_name: str, db: Session = Depends(get_db)):
     Mapping rates by domain with record counts.
     Uses latest quality analysis snapshots per domain.
     """
-    domains_data = []
-    for domain_name in DOMAIN_CONFIG.keys():
-        snapshot = (
-            db.query(AnalysisSnapshot)
-            .filter(AnalysisSnapshot.cdm_name == cdm_name, AnalysisSnapshot.domain == domain_name)
-            .order_by(AnalysisSnapshot.version.desc())
-            .first()
+    # P44 fix: single query with DISTINCT ON instead of N+1 loop
+    from sqlalchemy import text
+    latest_snapshots = (
+        db.query(AnalysisSnapshot)
+        .filter(
+            AnalysisSnapshot.cdm_name == cdm_name,
+            AnalysisSnapshot.domain.in_(list(DOMAIN_CONFIG.keys())),
         )
-        if not snapshot:
-            continue
+        .order_by(AnalysisSnapshot.domain, AnalysisSnapshot.version.desc())
+        .distinct(AnalysisSnapshot.domain)
+        .all()
+    )
+    domains_data = []
+    for snapshot in latest_snapshots:
         results = snapshot.results
         mapping = results.get("mapping", {})
         terms = mapping.get("terms", {})
         rows = mapping.get("rows", {})
         domains_data.append({
-            "domain": domain_name,
+            "domain": snapshot.domain,
             "total_terms": terms.get("total_terms", 0),
             "mapped_terms": terms.get("mapped_terms", 0),
             "unmapped_terms": terms.get("unmapped_terms", 0),
@@ -190,39 +216,38 @@ def strategy_stats(
     Returns per-strategy: total decisions, approval rate, avg confidence,
     rejection rate, and modification rate.
     """
-    query = db.query(MappingDecision).filter(
+    # P45 fix: push aggregation to SQL instead of loading all decisions into memory
+    from sqlalchemy import case, literal_column
+    query = db.query(
+        MappingDecision.suggestion_source,
+        func.count(MappingDecision.id).label("total"),
+        func.count(case((MappingDecision.action == "approved", 1))).label("approved"),
+        func.count(case((MappingDecision.action == "modified", 1))).label("modified"),
+        func.count(case((MappingDecision.action == "rejected", 1))).label("rejected"),
+        func.avg(MappingDecision.confidence_score).label("avg_confidence"),
+        func.avg(case((MappingDecision.action == "approved", MappingDecision.confidence_score))).label("avg_confidence_approved"),
+        func.avg(case((MappingDecision.action == "rejected", MappingDecision.confidence_score))).label("avg_confidence_rejected"),
+    ).filter(
         MappingDecision.cdm_name == cdm_name,
         MappingDecision.suggestion_source.isnot(None),
         MappingDecision.suggestion_source != "",
         MappingDecision.suggestion_source != "bulk",
-    )
+        ~MappingDecision.suggestion_source.startswith("rollback"),
+    ).group_by(MappingDecision.suggestion_source)
+
     if domain:
         query = query.filter(MappingDecision.domain == domain)
 
-    decisions = query.all()
-
-    # Group by suggestion_source
-    by_source: dict[str, list] = {}
-    for d in decisions:
-        source = d.suggestion_source or "unknown"
-        # Normalize: strip "rollback of #..." entries
-        if source.startswith("rollback"):
-            continue
-        by_source.setdefault(source, []).append(d)
+    rows = query.all()
 
     strategies = []
-    for source, items in sorted(by_source.items()):
-        total = len(items)
-        approved = sum(1 for d in items if d.action == "approved")
-        modified = sum(1 for d in items if d.action == "modified")
-        rejected = sum(1 for d in items if d.action == "rejected")
-
-        confidences = [d.confidence_score for d in items if d.confidence_score is not None]
-        approved_conf = [d.confidence_score for d in items if d.action == "approved" and d.confidence_score is not None]
-        rejected_conf = [d.confidence_score for d in items if d.action == "rejected" and d.confidence_score is not None]
-
+    for r in rows:
+        total = r.total
+        approved = r.approved
+        modified = r.modified
+        rejected = r.rejected
         strategies.append({
-            "strategy": source,
+            "strategy": r.suggestion_source,
             "total_decisions": total,
             "approved": approved,
             "modified": modified,
@@ -230,9 +255,9 @@ def strategy_stats(
             "approval_rate": round(approved / total * 100, 1) if total > 0 else 0,
             "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0,
             "modification_rate": round(modified / total * 100, 1) if total > 0 else 0,
-            "avg_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
-            "avg_confidence_approved": round(sum(approved_conf) / len(approved_conf), 1) if approved_conf else None,
-            "avg_confidence_rejected": round(sum(rejected_conf) / len(rejected_conf), 1) if rejected_conf else None,
+            "avg_confidence": round(float(r.avg_confidence), 1) if r.avg_confidence is not None else None,
+            "avg_confidence_approved": round(float(r.avg_confidence_approved), 1) if r.avg_confidence_approved is not None else None,
+            "avg_confidence_rejected": round(float(r.avg_confidence_rejected), 1) if r.avg_confidence_rejected is not None else None,
         })
 
     # Sort by approval rate descending
@@ -268,11 +293,12 @@ def list_unmapped(
 
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[domain]
-    full_table = f"{schema}.{cfg['table']}"
-    sv_col = cfg["source_value"]
-    concept_col = cfg["concept_id"]
-    sn_col = cfg.get("source_name")
+    cfg = get_domain_config(conn, schema, domain)
+    table = safe_identifier(cfg["table"])
+    sv_col = safe_identifier(cfg["source_value"])
+    concept_col = safe_identifier(cfg["concept_id"])
+    sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+    full_table = f"{schema}.{table}"
 
     try:
         from psycopg2.extras import DictCursor
@@ -325,7 +351,7 @@ def list_unmapped(
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as e:
         logger.exception("Unmapped listing failed")
-        raise HTTPException(status_code=500, detail=f"Query error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred while listing unmapped terms")
     finally:
         conn.close()
 
@@ -351,11 +377,12 @@ def export_unmapped(
 
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[domain]
-    full_table = f"{schema}.{cfg['table']}"
-    sv_col = cfg["source_value"]
-    concept_col = cfg["concept_id"]
-    sn_col = cfg.get("source_name")
+    cfg = get_domain_config(conn, schema, domain)
+    table = safe_identifier(cfg["table"])
+    sv_col = safe_identifier(cfg["source_value"])
+    concept_col = safe_identifier(cfg["concept_id"])
+    sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+    full_table = f"{schema}.{table}"
 
     try:
         from psycopg2.extras import DictCursor
@@ -382,7 +409,8 @@ def export_unmapped(
             cur.execute(sql, params)
             rows = cur.fetchall()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Export error: {e}")
+        logger.exception("Export of unmapped terms failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred during export")
     finally:
         conn.close()
 
@@ -394,9 +422,9 @@ def export_unmapped(
     header.extend(["n_records", "n_persons"])
     writer.writerow(header)
     for r in rows:
-        row = [r["source_value"]]
+        row = [csv_safe(r["source_value"])]
         if sn_col:
-            row.append(r.get("source_name", ""))
+            row.append(csv_safe(r.get("source_name", "")))
         row.extend([r["n_records"], r["n_persons"]])
         writer.writerow(row)
     output.seek(0)
@@ -432,7 +460,7 @@ def concept_lookup(cdm_name: str, concept_id: int, db: Session = Depends(get_db)
             row = cur.fetchone()
     except Exception as e:
         logger.exception("Concept lookup failed")
-        raise HTTPException(status_code=500, detail=f"Lookup error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during concept lookup")
     finally:
         conn.close()
 
@@ -479,8 +507,10 @@ def _get_sapbert_suggestions(db: Session, source_value: str, domain: str) -> lis
 
 
 @router.post("/suggest")
-def suggest_single(req: SuggestRequest, db: Session = Depends(get_db)):
+def suggest_single(req: SuggestRequest, request: Request, db: Session = Depends(get_db)):
     """Get mapping suggestions for a single source term."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     source_name = req.source_name or ""
 
     # Enrich from reference codebook if no source_name
@@ -504,7 +534,7 @@ def suggest_single(req: SuggestRequest, db: Session = Depends(get_db)):
         )
     except Exception as e:
         logger.exception("Suggestion failed")
-        raise HTTPException(status_code=500, detail=f"Suggestion error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred during suggestion")
     finally:
         conn.close()
 
@@ -522,11 +552,14 @@ def suggest_single(req: SuggestRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/suggest/batch")
+@limiter.limit("3/minute")
 def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Session = Depends(get_db)):
     """
     Launch mapping suggestions in a background thread.
     Returns immediately with a task_id. Poll /suggest/status/{task_id} for results.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     import threading
     import uuid as _uuid
 
@@ -536,7 +569,7 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     # Gather all data needed by the worker while we still have the DB session
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[req.domain]
+    cfg = get_domain_config(conn, schema, req.domain)
     approved_svs = [
         r[0] for r in
         db.query(MappingDecision.source_value)
@@ -547,25 +580,9 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
         ).all()
     ]
 
-    # Pre-fetch SapBERT mappings
-    sapbert_rows = (
-        db.query(SapbertMapping)
-        .filter(SapbertMapping.domain == req.domain)
-        .order_by(SapbertMapping.source_code, SapbertMapping.rank)
-        .all()
-    )
-    sapbert_all: dict[str, list[dict]] = {}
-    for r in sapbert_rows:
-        sapbert_all.setdefault(r.source_code, []).append({
-            "concept_id": r.target_concept_id,
-            "concept_name": r.target_concept_name,
-            "concept_code": r.target_concept_code,
-            "vocabulary_id": r.target_vocabulary_id,
-            "domain_id": req.domain,
-            "standard_concept": "S",
-            "confidence": int(r.similarity * 100),
-            "source": "sapbert",
-        })
+    # SapBERT mappings are now fetched lazily in the worker after we know
+    # which terms to process (P46 fix: avoid loading 100K+ rows upfront).
+    sapbert_domain = req.domain
 
     # Pre-fetch reference codebooks
     ref_rows = db.query(ReferenceCodebook.code, ReferenceCodebook.description).filter(
@@ -573,11 +590,15 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     ).all()
     ref_map = {r.code: r.description for r in ref_rows}
 
+    import time as _time
     task_id = str(_uuid.uuid4())[:8]
-    _active_suggestions[task_id] = {
-        "status": "running", "cdm_name": req.cdm_name, "domain": req.domain,
-        "results": None, "error": None, "cancelled": False,
-    }
+    with _suggestions_lock:
+        _cleanup_stale_suggestions()
+        _active_suggestions[task_id] = {
+            "status": "running", "cdm_name": req.cdm_name, "domain": req.domain,
+            "results": None, "error": None, "cancelled": False,
+            "created_at": _time.time(),
+        }
 
     # Capture request params for worker
     domain = req.domain
@@ -590,10 +611,11 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     def _worker():
         try:
             from psycopg2.extras import DictCursor
-            full_table = f"{schema}.{cfg['table']}"
-            sv_col = cfg["source_value"]
-            concept_col = cfg["concept_id"]
-            sn_col = cfg.get("source_name")
+            _table = safe_identifier(cfg["table"])
+            full_table = f"{schema}.{_table}"
+            sv_col = safe_identifier(cfg["source_value"])
+            concept_col = safe_identifier(cfg["concept_id"])
+            sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
 
             with conn.cursor(cursor_factory=DictCursor) as cur:
                 select_cols = [f"t.{sv_col} AS source_value"]
@@ -624,16 +646,39 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 if not t.get("source_name") and t["source_value"] in ref_map:
                     t["source_name"] = ref_map[t["source_value"]]
 
-            if _active_suggestions.get(task_id, {}).get("cancelled"):
-                return
+            with _suggestions_lock:
+                if _active_suggestions.get(task_id, {}).get("cancelled"):
+                    return
 
-            # Filter SapBERT map for fetched terms
+            # P46 fix: fetch SapBERT only for the terms we need (not all domain)
             all_svs = [t["source_value"] for t in terms]
             sapbert_map: dict[str, list[dict]] = {}
-            if enable_sapbert:
-                for sv in all_svs:
-                    if sv in sapbert_all:
-                        sapbert_map[sv] = sapbert_all[sv]
+            if enable_sapbert and all_svs:
+                from db.app_db import SessionLocal
+                _db = SessionLocal()
+                try:
+                    sapbert_rows = (
+                        _db.query(SapbertMapping)
+                        .filter(
+                            SapbertMapping.domain == sapbert_domain,
+                            SapbertMapping.source_code.in_(all_svs),
+                        )
+                        .order_by(SapbertMapping.source_code, SapbertMapping.rank)
+                        .all()
+                    )
+                    for r in sapbert_rows:
+                        sapbert_map.setdefault(r.source_code, []).append({
+                            "concept_id": r.target_concept_id,
+                            "concept_name": r.target_concept_name,
+                            "concept_code": r.target_concept_code,
+                            "vocabulary_id": r.target_vocabulary_id,
+                            "domain_id": sapbert_domain,
+                            "standard_concept": "S",
+                            "confidence": int(r.similarity * 100),
+                            "source": "sapbert",
+                        })
+                finally:
+                    _db.close()
 
             terms_without_sapbert = [t for t in terms if t["source_value"] not in sapbert_map]
 
@@ -647,8 +692,9 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                         "suggestions": list(sapbert_map[sv]),
                     })
 
-            if _active_suggestions.get(task_id, {}).get("cancelled"):
-                return
+            with _suggestions_lock:
+                if _active_suggestions.get(task_id, {}).get("cancelled"):
+                    return
 
             results_slow = []
             if terms_without_sapbert:
@@ -662,60 +708,83 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 result_map[r["source_value"]] = r
             results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
 
-            if task_id in _active_suggestions:
-                _active_suggestions[task_id]["status"] = "done"
-                _active_suggestions[task_id]["results"] = results
+            # Build warnings about limited strategies
+            warnings = []
+            if not sn_col:
+                warnings.append("source_name_missing")
+            if not ref_map:
+                warnings.append("no_reference_codebook")
+            if enable_sapbert and not sapbert_map:
+                warnings.append("no_sapbert_embeddings")
+            has_source_names = any(t.get("source_name") for t in terms)
+            if sn_col and not has_source_names and not ref_map:
+                warnings.append("source_names_empty")
+
+            with _suggestions_lock:
+                if task_id in _active_suggestions:
+                    _active_suggestions[task_id]["status"] = "done"
+                    _active_suggestions[task_id]["results"] = results
+                    _active_suggestions[task_id]["warnings"] = warnings
 
         except Exception as e:
             logger.exception("Background batch suggestion failed")
-            if task_id in _active_suggestions:
-                _active_suggestions[task_id]["status"] = "error"
-                _active_suggestions[task_id]["error"] = str(e)
+            with _suggestions_lock:
+                if task_id in _active_suggestions:
+                    _active_suggestions[task_id]["status"] = "error"
+                    _active_suggestions[task_id]["error"] = "An internal error occurred during batch suggestion"
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    from utils.thread_pool import submit_task
+    submit_task(_worker)
     return {"task_id": task_id, "status": "running"}
 
 
 @router.get("/suggest/status/{task_id}")
 def suggest_status(task_id: str):
     """Check status of a background suggestion task."""
-    entry = _active_suggestions.get(task_id)
+    with _suggestions_lock:
+        entry = _active_suggestions.get(task_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Task not found")
     resp: dict = {"task_id": task_id, "status": entry["status"], "domain": entry["domain"]}
     if entry["status"] == "done":
         resp["results"] = entry["results"]
+        resp["warnings"] = entry.get("warnings", [])
         # Clean up after delivering results
-        _active_suggestions.pop(task_id, None)
+        with _suggestions_lock:
+            _active_suggestions.pop(task_id, None)
     elif entry["status"] == "error":
         resp["error"] = entry["error"]
-        _active_suggestions.pop(task_id, None)
+        with _suggestions_lock:
+            _active_suggestions.pop(task_id, None)
     return resp
 
 
 @router.post("/suggest/cancel/{task_id}")
 def suggest_cancel(task_id: str):
     """Cancel a running suggestion task."""
-    entry = _active_suggestions.get(task_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Task not found")
-    entry["cancelled"] = True
-    _active_suggestions.pop(task_id, None)
+    with _suggestions_lock:
+        entry = _active_suggestions.get(task_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Task not found")
+        entry["cancelled"] = True
+        _active_suggestions.pop(task_id, None)
     return {"cancelled": True, "task_id": task_id}
 
 
 @router.get("/suggest/active")
 def suggest_active():
     """List running suggestion tasks."""
+    with _suggestions_lock:
+        items = list(_active_suggestions.items())
     return {
         "active": [
             {"task_id": tid, "cdm_name": info["cdm_name"], "domain": info["domain"], "status": info["status"]}
-            for tid, info in _active_suggestions.items()
+            for tid, info in items
         ]
     }
 
@@ -723,10 +792,15 @@ def suggest_active():
 # ──── 5.4 Validation Workflow ────
 
 @router.post("/decide")
-def record_decision(req: DecisionRequest, db: Session = Depends(get_db)):
+def record_decision(req: DecisionRequest, request: Request, db: Session = Depends(get_db)):
     """Record a mapping decision (approve, modify, reject)."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     if req.action not in ("approved", "modified", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
 
     decision = MappingDecision(
         cdm_name=req.cdm_name,
@@ -742,6 +816,15 @@ def record_decision(req: DecisionRequest, db: Session = Depends(get_db)):
         reason=req.reason,
     )
     db.add(decision)
+
+    notify(
+        db, username, "mapping_review",
+        title=f"Décision mapping : {req.action}",
+        message=f"{username} a {req.action} « {req.source_value} » dans {req.domain} ({req.cdm_name}).",
+        link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
+        item_id=f"{req.cdm_name}:{req.domain}",
+    )
+
     db.commit()
     db.refresh(decision)
 
@@ -749,38 +832,43 @@ def record_decision(req: DecisionRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/decide/bulk")
-def bulk_decision(req: BulkDecisionRequest, db: Session = Depends(get_db)):
+def bulk_decision(req: BulkDecisionRequest, request: Request, db: Session = Depends(get_db)):
     """
     Bulk approve or reject suggestions above a confidence threshold.
     Either uses source_values list or processes all pending terms.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     if req.action not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action for bulk")
 
-    # Get already-decided source values
-    existing = set(
-        r[0] for r in
-        db.query(MappingDecision.source_value)
-        .filter(
-            MappingDecision.cdm_name == req.cdm_name,
-            MappingDecision.domain == req.domain,
-        ).all()
-    )
-
-    count = 0
     if req.source_values:
-        for sv in req.source_values:
-            if sv not in existing:
-                decision = MappingDecision(
+        # Get existing source values in one query, filtered to only the requested values
+        existing = set(
+            r[0] for r in
+            db.query(MappingDecision.source_value)
+            .filter(
+                MappingDecision.cdm_name == req.cdm_name,
+                MappingDecision.domain == req.domain,
+                MappingDecision.source_value.in_(req.source_values),
+            ).all()
+        )
+        new_values = [sv for sv in req.source_values if sv not in existing]
+        if new_values:
+            db.bulk_save_objects([
+                MappingDecision(
                     cdm_name=req.cdm_name,
                     domain=req.domain,
                     source_value=sv,
                     action=req.action,
                     suggestion_source="bulk",
                 )
-                db.add(decision)
-                count += 1
-    db.commit()
+                for sv in new_values
+            ])
+            db.commit()
+        count = len(new_values)
+    else:
+        count = 0
 
     return {"action": req.action, "count": count}
 
@@ -793,6 +881,8 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
     Generate source_to_concept_map entries from approved decisions.
     Optionally writes directly to the CDM's source_to_concept_map table.
     """
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     # Get all approved/modified decisions
     decisions = (
         db.query(MappingDecision)
@@ -822,54 +912,70 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
             "invalid_reason": None,
         })
 
+    # ── CDM write disabled — CDM connections are strictly read-only ──
+    # To re-enable, remove the guard below and uncomment the write block.
     if req.write_to_cdm:
-        cdm, conn = _get_cdm_conn(db, req.cdm_name)
-        schema = _get_schema(db, cdm)
-        try:
-            with conn.cursor() as cur:
-                for row in stcm_rows:
-                    cur.execute(f"""
-                        INSERT INTO {schema}.source_to_concept_map
-                            (source_code, source_concept_id, source_vocabulary_id,
-                             source_code_description, target_concept_id, target_vocabulary_id,
-                             valid_start_date, valid_end_date, invalid_reason)
-                        VALUES (%(source_code)s, %(source_concept_id)s, %(source_vocabulary_id)s,
-                                %(source_code_description)s, %(target_concept_id)s, %(target_vocabulary_id)s,
-                                %(valid_start_date)s, %(valid_end_date)s, %(invalid_reason)s)
-                        ON CONFLICT (source_code, source_vocabulary_id, target_concept_id) DO UPDATE
-                        SET source_code_description = EXCLUDED.source_code_description,
-                            target_vocabulary_id = EXCLUDED.target_vocabulary_id
-                    """, row)
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Write error: {e}")
-        finally:
-            conn.close()
-
-    # Notify: mapping applied
-    user = getattr(request.state, "user", {})
-    username = user.get("preferred_username", "")
-    if username and req.write_to_cdm:
-        notify(
-            db, username, "mapping_review",
-            title=f"Mapping appliqué : {req.domain}",
-            message=f"{len(stcm_rows)} mapping(s) écrits dans {req.cdm_name}.source_to_concept_map.",
-            link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
-            item_id=req.domain,
+        raise HTTPException(
+            status_code=403,
+            detail="L'écriture dans le CDM est désactivée. Utilisez l'export CSV pour appliquer le mapping manuellement.",
         )
-        db.commit()
+
+    # --- Write block (disabled) ---
+    # if req.write_to_cdm:
+    #     cdm, conn = _get_cdm_conn(db, req.cdm_name)
+    #     schema = _get_schema(db, cdm)
+    #     try:
+    #         from psycopg2.extras import execute_values
+    #         with conn.cursor() as cur:
+    #             sql = f"""
+    #                 INSERT INTO {schema}.source_to_concept_map
+    #                     (source_code, source_concept_id, source_vocabulary_id,
+    #                      source_code_description, target_concept_id, target_vocabulary_id,
+    #                      valid_start_date, valid_end_date, invalid_reason)
+    #                 VALUES %s
+    #                 ON CONFLICT (source_code, source_vocabulary_id, target_concept_id) DO UPDATE
+    #                 SET source_code_description = EXCLUDED.source_code_description,
+    #                     target_vocabulary_id = EXCLUDED.target_vocabulary_id
+    #             """
+    #             values = [
+    #                 (row["source_code"], row["source_concept_id"], row["source_vocabulary_id"],
+    #                  row["source_code_description"], row["target_concept_id"], row["target_vocabulary_id"],
+    #                  row["valid_start_date"], row["valid_end_date"], row["invalid_reason"])
+    #                 for row in stcm_rows
+    #             ]
+    #             execute_values(cur, sql, values)
+    #             conn.commit()
+    #     except Exception as e:
+    #         conn.rollback()
+    #         raise HTTPException(status_code=500, detail=f"Write error: {e}")
+    #     finally:
+    #         conn.close()
+    # --- End write block ---
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "system")
+    notify(
+        db, username, "mapping_applied",
+        title=f"Mapping exporté : {req.domain}",
+        message=f"{len(stcm_rows)} mappings générés pour {req.domain} ({req.cdm_name}).",
+        link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
+        target_role="data-manager",
+        item_id=f"{req.cdm_name}:{req.domain}",
+    )
+    db.commit()
 
     return {
         "count": len(stcm_rows),
-        "written_to_cdm": req.write_to_cdm,
+        "written_to_cdm": False,
         "rows": stcm_rows,
     }
 
 
 @router.post("/apply/preview")
-def apply_preview(req: ApplyMappingRequest, db: Session = Depends(get_db)):
+def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
     """Preview impact of applying approved mappings."""
+    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    check_cdm_access(request, req.cdm_name)
     decisions = (
         db.query(MappingDecision)
         .filter(
@@ -886,9 +992,10 @@ def apply_preview(req: ApplyMappingRequest, db: Session = Depends(get_db)):
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
-    cfg = DOMAIN_CONFIG[req.domain]
-    full_table = f"{schema}.{cfg['table']}"
-    sv_col = cfg["source_value"]
+    cfg = get_domain_config(conn, schema, req.domain)
+    table = safe_identifier(cfg["table"])
+    full_table = f"{schema}.{table}"
+    sv_col = safe_identifier(cfg["source_value"])
 
     source_values = [d.source_value for d in decisions]
 
@@ -902,7 +1009,8 @@ def apply_preview(req: ApplyMappingRequest, db: Session = Depends(get_db)):
             """, {"svs": source_values})
             row = cur.fetchone()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Preview error: {e}")
+        logger.exception("Mapping preview query failed")
+        raise HTTPException(status_code=500, detail="An internal error occurred during preview")
     finally:
         conn.close()
 
@@ -936,9 +1044,9 @@ def export_stcm(cdm_name: str, domain: str, db: Session = Depends(get_db)):
     ])
     for d in decisions:
         writer.writerow([
-            d.source_value, 0, f"OPAL_{domain}",
-            d.source_name or d.source_value,
-            d.target_concept_id, d.target_vocabulary_id or "SNOMED",
+            csv_safe(d.source_value), 0, f"OPAL_{domain}",
+            csv_safe(d.source_name or d.source_value),
+            d.target_concept_id, csv_safe(d.target_vocabulary_id or "SNOMED"),
             "1970-01-01", "2099-12-31", "",
         ])
     output.seek(0)
@@ -1046,10 +1154,10 @@ def export_history(cdm_name: str, domain: str | None = None, db: Session = Depen
     ])
     for d in decisions:
         writer.writerow([
-            d.id, d.domain, d.source_value, d.source_name, d.action,
-            d.target_concept_id, d.target_concept_name, d.target_vocabulary_id,
-            d.previous_concept_id, d.suggestion_source, d.confidence_score,
-            d.user, d.created_at.isoformat() if d.created_at else "",
+            d.id, csv_safe(d.domain), csv_safe(d.source_value), csv_safe(d.source_name), csv_safe(d.action),
+            d.target_concept_id, csv_safe(d.target_concept_name), csv_safe(d.target_vocabulary_id),
+            d.previous_concept_id, csv_safe(d.suggestion_source), d.confidence_score,
+            csv_safe(d.user), d.created_at.isoformat() if d.created_at else "",
         ])
     output.seek(0)
 
@@ -1111,7 +1219,7 @@ async def upload_reference(
     db.flush()
 
     # Insert new entries (deduplicate by code)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     seen_codes = set()
     count = 0
     for row in reader:
@@ -1130,9 +1238,13 @@ async def upload_reference(
 
 
 @router.get("/reference")
-def list_references(db: Session = Depends(get_db)):
+def list_references(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
     """List all loaded reference codebooks."""
-    results = (
+    base_q = (
         db.query(
             ReferenceCodebook.name,
             ReferenceCodebook.domain,
@@ -1140,8 +1252,9 @@ def list_references(db: Session = Depends(get_db)):
             func.max(ReferenceCodebook.uploaded_at).label("uploaded_at"),
         )
         .group_by(ReferenceCodebook.name, ReferenceCodebook.domain)
-        .all()
     )
+    total = base_q.count()
+    results = base_q.offset(offset).limit(limit).all()
     return {
         "references": [
             {
@@ -1150,7 +1263,10 @@ def list_references(db: Session = Depends(get_db)):
                 "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             }
             for r in results
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -1189,7 +1305,7 @@ async def upload_sapbert(
     db.query(SapbertMapping).filter(SapbertMapping.domain == domain).delete()
     db.flush()
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     count = 0
     for row in reader:
         source_code = (row.get("source_code") or "").strip()
@@ -1219,9 +1335,13 @@ async def upload_sapbert(
 
 
 @router.get("/sapbert")
-def list_sapbert(db: Session = Depends(get_db)):
+def list_sapbert(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
     """List loaded SapBERT mapping sets."""
-    results = (
+    base_q = (
         db.query(
             SapbertMapping.domain,
             func.count(SapbertMapping.id).label("count"),
@@ -1229,8 +1349,9 @@ def list_sapbert(db: Session = Depends(get_db)):
             func.max(SapbertMapping.uploaded_at).label("uploaded_at"),
         )
         .group_by(SapbertMapping.domain)
-        .all()
     )
+    total = base_q.count()
+    results = base_q.offset(offset).limit(limit).all()
     return {
         "sapbert_sets": [
             {
@@ -1240,7 +1361,10 @@ def list_sapbert(db: Session = Depends(get_db)):
                 "uploaded_at": r.uploaded_at.isoformat() if r.uploaded_at else None,
             }
             for r in results
-        ]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 

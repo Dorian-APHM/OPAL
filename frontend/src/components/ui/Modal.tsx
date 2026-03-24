@@ -44,6 +44,7 @@ export function Modal({ open, onClose, title, children, footer, width = 'max-w-l
                     <DialogTitle className="text-base font-semibold text-text-bright">{title}</DialogTitle>
                     <button
                       onClick={onClose}
+                      aria-label="Close"
                       className="text-text-dim hover:text-text-muted transition-colors cursor-pointer bg-transparent border-none"
                     >
                       <X className="h-5 w-5" />

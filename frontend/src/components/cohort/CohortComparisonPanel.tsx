@@ -10,6 +10,7 @@ import {
   Tooltip as RechartsTooltip, ResponsiveContainer, Cell,
 } from 'recharts';
 import { useTranslation } from 'react-i18next';
+import { useChartTheme } from '../../hooks/useChartTheme';
 import { cohortApi } from '../../api/client';
 import type { CohortSummary, CohortComparisonResult, CohortComparisonVariable } from '../../types';
 
@@ -45,6 +46,7 @@ function SmdTag({ smd }: { smd: number | null }) {
 
 export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
   const { t } = useTranslation();
+  const ct = useChartTheme();
   const [cohortIdA, setCohortIdA] = useSessionState<string | undefined>('cohort:cmp:idA', undefined);
   const [cohortIdB, setCohortIdB] = useSessionState<string | undefined>('cohort:cmp:idB', undefined);
   const [loading, setLoading] = useState(false);
@@ -200,7 +202,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                 title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /><span className="font-semibold">{result.cohort_a_name}</span></div>}
                 value={result.cohort_a_size}
                 suffix="patients"
-                valueStyle={{ color: '#1890ff', fontSize: 22 }}
+                valueStyle={{ color: ct.blue, fontSize: 22 }}
               />
             </Card>
             <Card size="small">
@@ -208,7 +210,7 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                 title={<div className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /><span className="font-semibold">{result.cohort_b_name}</span></div>}
                 value={result.cohort_b_size}
                 suffix="patients"
-                valueStyle={{ color: '#722ed1', fontSize: 22 }}
+                valueStyle={{ color: ct.purple, fontSize: 22 }}
               />
             </Card>
           </div>
@@ -431,19 +433,21 @@ export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
                   data={lovePlotData}
                   margin={{ left: 10, right: 30, top: 5, bottom: 5 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" domain={[0, 'auto']} tick={{ fontSize: 10 }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                  <XAxis type="number" domain={[0, 'auto']} tick={{ fontSize: 10, fill: ct.axis }} stroke={ct.axis} />
                   <YAxis
                     type="category"
                     dataKey="variable"
                     width={200}
-                    tick={{ fontSize: 9 }}
+                    tick={{ fontSize: 9, fill: ct.axis }}
+                    stroke={ct.axis}
                   />
                   <RechartsTooltip
                     formatter={(value: number) => value.toFixed(3)}
                     labelFormatter={(label: string) => label}
+                    contentStyle={ct.tooltipStyle}
                   />
-                  <ReferenceLine x={0.1} stroke="#faad14" strokeDasharray="5 5" label={{ value: '0.1', fontSize: 10 }} />
+                  <ReferenceLine x={0.1} stroke={ct.yellow} strokeDasharray="5 5" label={{ value: '0.1', fontSize: 10, fill: ct.label }} />
                   <Bar dataKey="absSmd" name="|SMD|" radius={[0, 2, 2, 0]}>
                     {lovePlotData.map((entry, i) => (
                       <Cell key={i} fill={smdColor(entry.smd)} />

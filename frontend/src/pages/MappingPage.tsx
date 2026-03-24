@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSessionState } from '../hooks/useSessionState';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, TextArea, NumberInput,
-  Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, useToast,
+  Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, Alert, useToast,
 } from '../components/ui';
 import type { TabItem, Column } from '../components/ui';
 import {
@@ -15,6 +16,7 @@ import {
   ResponsiveContainer, LineChart, Line, Legend,
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
+import { useChartTheme } from '../hooks/useChartTheme';
 import { useAuth } from '../auth/KeycloakContext';
 import { useNotifDots } from '../hooks/useNotifDots';
 import type {
@@ -91,6 +93,8 @@ export default function MappingPage({ selectedCdm }: Props) {
 
 function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   const { t } = useTranslation();
+  const toast = useToast();
+  const ct = useChartTheme();
   const [data, setData] = useState<MappingDomainStat[]>([]);
   const [decisions, setDecisions] = useState<Record<string, number>>({});
   const [evolution, setEvolution] = useState<MappingEvolutionPoint[]>([]);
@@ -103,7 +107,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
     setLoading(true);
     mappingApi.dashboard(cdmName)
       .then(r => { setData(r.data.domains); setDecisions(r.data.decisions_summary); })
-      .catch(() => {})
+      .catch(() => toast.error(t('mapping.load_failed', 'Failed to load mapping dashboard')))
       .finally(() => setLoading(false));
   }, [cdmName]);
 
@@ -119,7 +123,12 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       .catch(() => setStrategyData([]));
   }, [cdmName, strategyDomain]);
 
-  if (loading) return <Spinner />;
+  if (loading) return (
+    <div className="text-center py-16">
+      <Spinner size="large" />
+      <p className="text-sm text-text-muted mt-4">{t('mapping.loading', 'Loading mapping dashboard...')}</p>
+    </div>
+  );
 
   const totalTerms = data.reduce((s, d) => s + d.total_terms, 0);
   const mappedTerms = data.reduce((s, d) => s + d.mapped_terms, 0);
@@ -144,7 +153,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   return (
     <div>
       {/* Summary */}
-      <div className="grid grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         <Card><Statistic title={t('mapping.overall_rate', 'Overall Mapping Rate')} value={pctOverall.toFixed(1)} suffix="%" /></Card>
         <Card><Statistic title={t('mapping.total_terms', 'Total Terms')} value={totalTerms.toLocaleString()} /></Card>
         <Card><Statistic title={t('mapping.mapped', 'Mapped')} value={mappedTerms.toLocaleString()} valueStyle={{ color: '#10B981' }} /></Card>
@@ -155,13 +164,13 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       <Card title={t('mapping.rates_by_domain', 'Mapping Rates by Domain')} className="mb-4">
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="domain" stroke="#64748b" />
-            <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke="#64748b" />
-            <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+            <XAxis dataKey="domain" stroke={ct.axis} />
+            <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+            <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
             <Legend />
-            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill="#3B82F6" />
-            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill="#10B981" />
+            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill={ct.blue} />
+            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill={ct.emerald} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -170,11 +179,11 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       <Card title={t('mapping.unmapped_volume', 'Unmapped Volume (by records)')} className="mb-4">
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="domain" stroke="#64748b" />
-            <YAxis stroke="#64748b" />
-            <RechartsTooltip formatter={(v: number) => v.toLocaleString()} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
-            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill="#ef4444" />
+            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+            <XAxis dataKey="domain" stroke={ct.axis} />
+            <YAxis stroke={ct.axis} />
+            <RechartsTooltip formatter={(v: number) => v.toLocaleString()} contentStyle={ct.tooltipStyle} />
+            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill={ct.red} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -188,7 +197,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             value={evoDomain}
             onChange={setEvoDomain}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
         }
         className="mb-4"
@@ -196,13 +205,13 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
         {evolution.length > 0 ? (
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={evolution}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="version" label={{ value: 'Version', position: 'insideBottom', offset: -5 }} stroke="#64748b" />
-              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke="#64748b" />
-              <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+              <XAxis dataKey="version" label={{ value: 'Version', position: 'insideBottom', offset: -5 }} stroke={ct.axis} />
+              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+              <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
               <Legend />
-              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke="#3B82F6" strokeWidth={2} />
-              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke="#10B981" strokeWidth={2} />
+              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke={ct.blue} strokeWidth={2} />
+              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke={ct.emerald} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
@@ -219,7 +228,7 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             value={strategyDomain ?? ''}
             onChange={(v) => setStrategyDomain(v || undefined)}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
             allowClear
             placeholder={t('mapping.all_domains', 'All domains')}
           />
@@ -229,14 +238,14 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
           <>
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={strategyData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} stroke="#64748b" />
-                <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} stroke="#64748b" />
-                <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={{ backgroundColor: '#0f1629', border: '1px solid #1e293b', borderRadius: 8 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+                <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} stroke={ct.axis} />
+                <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
                 <Legend />
-                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill="#10B981" stackId="a" />
-                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill="#f59e0b" stackId="a" />
-                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill="#ef4444" stackId="a" />
+                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill={ct.emerald} stackId="a" />
+                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill={ct.orange} stackId="a" />
+                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill={ct.red} stackId="a" />
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3">
@@ -291,19 +300,19 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
   return (
     <div>
       <Card size="small" className="mb-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Select
             value={domain}
             onChange={v => { setDomain(v); setPage(1); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
           <Input
             prefix={<Search className="h-4 w-4" />}
             placeholder={t('mapping.search_unmapped', 'Filter...')}
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
-            className="w-[250px]"
+            className="w-full sm:w-[250px]"
           />
           <Button
             icon={<Download className="h-4 w-4" />}
@@ -334,6 +343,8 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const toast = useToast();
   const [domain, setDomain] = useSessionState('mapping:suggest:domain', 'Condition');
   const [results, setResults] = useSessionState<SuggestionResult[]>('mapping:suggest:results', []);
+  const [suggestWarnings, setSuggestWarnings] = useSessionState<string[]>('mapping:suggest:warnings', []);
+  const [hasRun, setHasRun] = useSessionState('mapping:suggest:hasRun', false);
   const [loading, setLoading] = useSessionState('mapping:suggest:loading', false);
   const [taskId, setTaskId] = useSessionState<string | null>('mapping:suggest:taskId', null);
   const [limit, setLimit] = useSessionState('mapping:suggest:limit', 20);
@@ -353,12 +364,29 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         .then(res => {
           if (!mountedRef.current) return;
           if (res.data.status === 'done') {
-            setResults(res.data.results || []);
+            const r = res.data.results || [];
+            const w: string[] = (res.data as any).warnings || [];
+            setResults(r);
+            setSuggestWarnings(w);
             setLoading(false);
             setTaskId(null);
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
-            toast.success(t('common.success'));
+            if (r.length > 0) {
+              toast.success(t('mapping.suggestions_found', '{{count}} terms with suggestions', { count: r.length }));
+            } else {
+              toast.info(t('mapping.no_unmapped_found', 'No unmapped terms found for this domain'));
+            }
+            // Show warnings about limited strategies
+            if (w.includes('source_name_missing')) {
+              toast.warning(t('mapping.warn_no_source_name', 'No source_name column — relationship/ingredient/keyword strategies disabled'));
+            }
+            if (w.includes('no_reference_codebook')) {
+              toast.warning(t('mapping.warn_no_ref', 'No reference codebook uploaded — code descriptions unavailable'));
+            }
+            if (w.includes('no_sapbert_embeddings')) {
+              toast.warning(t('mapping.warn_no_sapbert', 'No SapBERT embeddings — semantic matching disabled'));
+            }
           } else if (res.data.status === 'error') {
             toast.error(res.data.error || t('common.error'));
             setLoading(false);
@@ -404,7 +432,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
             startPolling(active.task_id);
           }
         })
-        .catch(() => {});
+        .catch(() => toast.error(t('mapping.load_failed', 'Failed to check suggestion status')));
     }
 
     return () => {
@@ -431,6 +459,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const runBatch = () => {
     setLoading(true);
     setResults([]);
+    setHasRun(true);
     mappingApi.suggestBatch(cdmName, domain, limit, {
       enable_fuzzy: enableFuzzy,
       enable_keyword: enableKeyword,
@@ -496,6 +525,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         reason: reasonText,
       });
       toast.success(`${action}: ${sv}`);
+      window.dispatchEvent(new Event('opal:badges-refresh'));
       setResults(prev => prev.filter(r => r.source_value !== sv));
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Decision failed');
@@ -524,6 +554,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
       } catch { /* continue */ }
     }
     toast.success(`Approved ${count} mappings`);
+    if (count > 0) window.dispatchEvent(new Event('opal:badges-refresh'));
     setResults(prev => prev.filter(r =>
       !(r.suggestions.length > 0 && r.suggestions[0].confidence >= minConfidence)
     ));
@@ -538,12 +569,12 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   return (
     <div>
       <Card size="small" className="mb-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Select
             value={domain}
             onChange={setDomain}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
           <NumberInput
             min={5}
@@ -591,8 +622,39 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
         </div>
       </Card>
 
-      {loading ? <Spinner /> : results.length === 0 ? (
-        <Empty description={t('mapping.no_suggestions', 'Click Generate to get mapping suggestions')} />
+      {suggestWarnings.length > 0 && !loading && (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          onClose={() => setSuggestWarnings([])}
+          className="mb-3"
+          message={
+            <div className="space-y-1">
+              {suggestWarnings.includes('source_name_missing') && (
+                <div>{t('mapping.warn_no_source_name', 'No source_name column found — relationship, ingredient, and keyword strategies are disabled. Only exact match and fuzzy search are available.')}</div>
+              )}
+              {suggestWarnings.includes('no_reference_codebook') && (
+                <div>{t('mapping.warn_no_ref', 'No reference codebook uploaded for this domain — code descriptions are unavailable. Upload one in the Reference tab to improve suggestions.')}</div>
+              )}
+              {suggestWarnings.includes('no_sapbert_embeddings') && (
+                <div>{t('mapping.warn_no_sapbert', 'No SapBERT embeddings available — semantic matching is disabled.')}</div>
+              )}
+            </div>
+          }
+        />
+      )}
+
+      {loading ? (
+        <div className="text-center py-10">
+          <Spinner size="large" />
+          <p className="text-sm text-text-muted mt-4">{t('mapping.loading_suggestions', 'Generating suggestions...')}</p>
+        </div>
+      ) : results.length === 0 ? (
+        <Empty description={hasRun
+          ? t('mapping.all_mapped', 'No unmapped terms found — all source values in this domain are already mapped.')
+          : t('mapping.no_suggestions', 'Click Generate to get mapping suggestions')
+        } />
       ) : (
         <div className="flex flex-col gap-2">
           {results.map(r => (
@@ -720,7 +782,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     setConceptError('');
     mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
       .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
-      .catch(() => { setSearchResults([]); setSearchTotal(0); })
+      .catch(() => { setSearchResults([]); setSearchTotal(0); toast.error(t('common.error', 'An error occurred')); })
       .finally(() => setSearchLoading(false));
   }, [cdmName, domain, search]);
 
@@ -757,6 +819,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
         reason: reason || '',
       });
       toast.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${conceptInfo.concept_name}`);
+      window.dispatchEvent(new Event('opal:badges-refresh'));
       // Reset form
       setSelectedSource(null);
       setConceptInfo(null);
@@ -767,7 +830,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       if (search.trim()) {
         mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
           .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
-          .catch(() => {});
+          .catch(() => toast.error(t('mapping.refresh_failed', 'Failed to refresh results')));
       }
     } catch (e: any) {
       toast.error(e.response?.data?.detail || t('mapping.decision_failed', 'Decision failed'));
@@ -799,7 +862,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
             value={domain}
             onChange={v => { setDomain(v); setSearchResults([]); setSelectedSource(null); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[150px]"
+            className="w-full sm:w-[150px]"
           />
           <Input
             prefix={<Search className="h-4 w-4" />}
@@ -807,7 +870,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleSearch(); }}
-            className="w-[300px]"
+            className="w-full sm:w-[300px]"
           />
           <Button variant="primary" onClick={handleSearch} loading={searchLoading}>
             {t('mapping.search', 'Search')}
@@ -846,20 +909,20 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
         >
           {/* Selected source summary */}
           <div className="bg-blue-500/8 border border-blue-500/25 rounded-lg px-4 py-2.5 mb-4">
-            <div className="grid grid-cols-12 gap-6">
-              <div className="col-span-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.source_value', 'Source Value')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.source_value}</div>
               </div>
-              <div className="col-span-4">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.source_name', 'Source Name')}</span>
                 <div className="text-sm text-text-bright">{selectedSource.source_name || '—'}</div>
               </div>
-              <div className="col-span-2">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.n_records', 'Records')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.n_records.toLocaleString()}</div>
               </div>
-              <div className="col-span-2">
+              <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.n_persons', 'Persons')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.n_persons.toLocaleString()}</div>
               </div>
@@ -868,9 +931,9 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
 
           {/* Concept ID input */}
           <div className="flex items-center gap-3 mb-3">
-            <span className="text-text-bright text-sm">{t('mapping.enter_concept_id', 'Concept ID')} :</span>
+            <span className="text-text-bright text-sm">{t('mapping.enter_concept_id', 'Concept ID')} <span className="text-red-400">*</span> :</span>
             <NumberInput
-              className="w-[180px]"
+              className="w-full sm:w-[180px]"
               placeholder="e.g. 4329847"
               value={conceptIdInput ?? undefined}
               onChange={v => { setConceptIdInput(v); setConceptInfo(null); setConceptError(''); }}
@@ -892,24 +955,24 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           {/* Concept info display */}
           {conceptInfo && (
             <div className="bg-emerald-500/8 border border-emerald-500/25 rounded-lg px-4 py-2.5 mb-4">
-              <div className="grid grid-cols-12 gap-4">
-                <div className="col-span-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div>
                   <span className="text-text-dim text-[11px]">Concept ID</span>
                   <div className="font-semibold text-text-bright">{conceptInfo.concept_id}</div>
                 </div>
-                <div className="col-span-4">
+                <div>
                   <span className="text-text-dim text-[11px]">Concept Name</span>
                   <div className="font-semibold text-text-bright">{conceptInfo.concept_name}</div>
                 </div>
-                <div className="col-span-2">
+                <div>
                   <span className="text-text-dim text-[11px]">Vocabulary</span>
                   <div><Tag>{conceptInfo.vocabulary_id}</Tag></div>
                 </div>
-                <div className="col-span-1.5">
+                <div>
                   <span className="text-text-dim text-[11px]">Domain</span>
                   <div><Tag>{conceptInfo.domain_id}</Tag></div>
                 </div>
-                <div className="col-span-1.5">
+                <div>
                   <span className="text-text-dim text-[11px]">Standard</span>
                   <div>
                     {conceptInfo.standard_concept === 'S'
@@ -959,6 +1022,65 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           description={t('mapping.manual_description', 'Search for a local code, then enter a target concept ID to create a manual mapping.')}
           className="mt-12"
         />
+      )}
+    </div>
+  );
+}
+
+// ============ REASON CELL WITH CARD HOVER ============
+
+function ReasonCell({ value }: { value: string }) {
+  const [hovered, setHovered] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number; height: number; width: number } | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const handleMouseEnter = () => {
+    if (ref.current) {
+      const cellRect = ref.current.getBoundingClientRect();
+      const tr = ref.current.closest('tr');
+      const trRect = tr?.getBoundingClientRect();
+      setPos({
+        top: trRect ? trRect.bottom : cellRect.bottom,
+        left: cellRect.left,
+        height: trRect?.height ?? cellRect.height,
+        width: trRect ? trRect.right - cellRect.left : 300,
+      });
+    }
+    setHovered(true);
+  };
+
+  return (
+    <div ref={ref} onMouseEnter={handleMouseEnter} onMouseLeave={() => setHovered(false)}>
+      <span className="truncate block max-w-[140px] cursor-default">{value}</span>
+      {pos && createPortal(
+        <div style={{
+          position: 'fixed',
+          top: pos.top,
+          left: pos.left,
+          width: 'fit-content',
+          maxWidth: pos.width,
+          zIndex: 9999,
+          pointerEvents: 'none',
+          filter: 'drop-shadow(-2px 2px 8px rgba(50,50,0,0.3))',
+          clipPath: hovered ? 'inset(0 0 0 0)' : 'inset(0 100% 0 0)',
+          transition: '0.5s ease',
+        }}>
+          <div style={{
+            padding: '14px 16px', backgroundColor: 'var(--color-surface)',
+            border: '1px solid var(--color-glass-border)',
+            transition: '0.5s ease', fontSize: '0.85rem', color: 'var(--color-text-bright)',
+            wordBreak: 'break-word', lineHeight: 1.5,
+          }}>
+            <span style={{
+              display: 'block',
+              opacity: hovered ? 1 : 0,
+              transition: '0.5s ease',
+            }}>
+              {value}
+            </span>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1045,7 +1167,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
 
   const columns: Column<MappingDecisionEntry>[] = [
     { title: t('mapping.domain', 'Domain'), dataIndex: 'domain', key: 'd', width: 100 },
-    { title: t('mapping.source_value', 'Source'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
+    { title: t('mapping.source_value', 'Source'), dataIndex: 'source_value', key: 'sv', width: 160, ellipsis: true },
     { title: t('mapping.action', 'Action'), dataIndex: 'action', key: 'a', width: 100,
       render: (a: string) => <Tag color={actionColor(a)}>{a}</Tag> },
     { title: t('mapping.target', 'Target'), key: 'target', width: 200,
@@ -1055,7 +1177,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
     { title: t('mapping.confidence', 'Confidence'), dataIndex: 'confidence_score', key: 'c', width: 80,
       render: (v: number | null) => v != null ? <Tag>{v}%</Tag> : '—' },
     { title: t('mapping.reason', 'Reason'), dataIndex: 'reason', key: 'reason', width: 150, ellipsis: true,
-      render: (v: string) => v || <span className="text-text-dim">—</span> },
+      render: (v: string) => v
+        ? <ReasonCell value={v} />
+        : <span className="text-text-dim">—</span> },
     { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 120,
       render: (v: string) => v?.substring(0, 16).replace('T', ' ') },
     { title: '', key: 'actions', width: 50,
@@ -1087,7 +1211,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             value={filterDomain}
             onChange={v => { setFilterDomain(v); setPage(1); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-[130px]"
+            className="w-full sm:w-[130px]"
             allowClear
             placeholder="All domains"
           />
@@ -1095,7 +1219,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             value={filterAction}
             onChange={v => { setFilterAction(v); setPage(1); }}
             options={actionOptions}
-            className="w-[120px]"
+            className="w-full sm:w-[120px]"
             allowClear
             placeholder="All actions"
           />
@@ -1112,7 +1236,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               value={applyDomain}
               onChange={setApplyDomain}
               options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-              className="w-[120px]"
+              className="w-full sm:w-[120px]"
             />
             <Button size="small" onClick={handleApplyPreview}>Preview</Button>
             <Button size="small" icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
@@ -1128,11 +1252,11 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-red-400" />
               <span className="font-semibold text-red-400">
-                {t('mapping.write_warning', 'Cette action va modifier directement la table source_to_concept_map du CDM. Cette opération est difficilement réversible.')}
+                {t('mapping.write_warning', 'This action will directly modify the source_to_concept_map table of the CDM. This operation is difficult to reverse.')}
               </span>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Statistic title={t('mapping.approved_decisions', 'Approved Decisions')} value={applyPreview.total_decisions} />
             <Statistic title={t('mapping.impacted_rows', 'Impacted Rows')} value={applyPreview.impacted_rows.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
             <Statistic title={t('mapping.impacted_persons', 'Impacted Persons')} value={applyPreview.impacted_persons.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
@@ -1144,7 +1268,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               </Button>
             )}
             <Button size="small" icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
-              {t('mapping.export_stcm_instead', 'Exporter en CSV (recommandé)')}
+              {t('mapping.export_stcm_instead', 'Export as CSV (recommended)')}
             </Button>
             <Button size="small" onClick={() => { setApplyPreview(null); setWriteConfirmOpen(false); setWriteConfirmText(''); }}>
               {t('common.close', 'Close')}
@@ -1157,13 +1281,13 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             title={
               <span className="flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-red-400" />
-                <span className="font-semibold text-red-400">Confirmation requise</span>
+                <span className="font-semibold text-red-400">{t('mapping.write_confirm_title')}</span>
               </span>
             }
             footer={
               <>
                 <Button onClick={() => { setWriteConfirmOpen(false); setWriteConfirmText(''); }}>
-                  Annuler
+                  {t('mapping.write_confirm_cancel')}
                 </Button>
                 <Button
                   variant="danger"
@@ -1171,25 +1295,25 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
                   disabled={writeConfirmText !== cdmName}
                   onClick={() => handleApply(true)}
                 >
-                  Confirmer l&apos;écriture
+                  {t('mapping.write_confirm_submit')}
                 </Button>
               </>
             }
           >
             <div className="mb-4">
-              <span className="text-text-bright">Vous allez écrire <strong>{applyPreview.total_decisions} mappings</strong> dans la table <span className="font-mono text-sm bg-surface-light px-1.5 py-0.5 rounded">source_to_concept_map</span> du CDM <strong className="text-red-400">{cdmName}</strong>.</span>
+              <span className="text-text-bright">{t('mapping.write_confirm_message_pre', 'You will write')} <strong>{applyPreview.total_decisions} {t('mapping.write_confirm_message_mappings', 'mappings')}</strong> {t('mapping.write_confirm_message_mid', 'to the')} <code>source_to_concept_map</code> {t('mapping.write_confirm_message_post', 'table of CDM')} <strong>{cdmName}</strong>.</span>
             </div>
             <div className="mb-4">
-              <span className="text-text-bright">Cela impactera <strong className="text-red-400">{applyPreview.impacted_rows.toLocaleString()} lignes</strong> et <strong className="text-red-400">{applyPreview.impacted_persons.toLocaleString()} patients</strong>.</span>
+              <span className="text-text-bright">{t('mapping.write_confirm_impact_pre', 'This will impact')} <strong>{applyPreview.impacted_rows.toLocaleString()} {t('mapping.write_confirm_impact_rows', 'rows')}</strong> {t('mapping.write_confirm_impact_mid', 'and')} <strong>{applyPreview.impacted_persons.toLocaleString()} {t('mapping.write_confirm_impact_patients', 'patients')}</strong>.</span>
             </div>
             <div className="bg-yellow-500/10 border border-yellow-500/25 rounded px-3 py-2 mb-4">
-              <span className="text-yellow-400 text-xs">Pour confirmer, tapez le nom exact du CDM ci-dessous :</span>
+              <span className="text-yellow-400 text-xs">{t('mapping.write_confirm_type_cdm')}</span>
             </div>
             <Input
               placeholder={cdmName}
               value={writeConfirmText}
               onChange={e => setWriteConfirmText(e.target.value)}
-              error={writeConfirmText && writeConfirmText !== cdmName ? 'CDM name does not match' : undefined}
+              error={writeConfirmText && writeConfirmText !== cdmName ? t('mapping.write_confirm_mismatch') : undefined}
             />
           </Modal>
         </Card>

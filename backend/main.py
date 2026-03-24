@@ -7,16 +7,21 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Query, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import psycopg2
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
-from config import CORS_ORIGINS, AUTH_ENABLED, KEYCLOAK_URL, KEYCLOAK_REALM
+from config import CORS_ORIGINS, AUTH_ENABLED
+from utils.crypto import DecryptionError
+from utils.rate_limit import limiter
 from audit.logger import AUDIT_LOG_DIR
 from db.app_db import engine, get_db
 from db.models import Base
+from db.omop_connector import close_all_pools, evict_idle_pools
 
 # Configure logging
 logging.basicConfig(
@@ -31,11 +36,195 @@ app = FastAPI(
     description="OMOP Platform for Analytics & Lineage",
     version="1.0.0",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# ---------------------------------------------------------------------------
+# OMOP connection pool lifecycle
+# ---------------------------------------------------------------------------
+import threading as _threading
+
+
+def _pool_evictor():
+    """Background thread that evicts idle OMOP connection pools every 60s."""
+    while not _evictor_stop.is_set():
+        _evictor_stop.wait(60)
+        if not _evictor_stop.is_set():
+            evict_idle_pools()
+
+
+_evictor_stop = _threading.Event()
+_evictor_thread: _threading.Thread | None = None
+
+
+@app.on_event("startup")
+def _start_pool_evictor():
+    global _evictor_thread
+    _evictor_thread = _threading.Thread(target=_pool_evictor, daemon=True, name="pool-evictor")
+    _evictor_thread.start()
+    logger.info("OMOP pool evictor started")
+
+
+# ---------------------------------------------------------------------------
+# WebSocket manager — capture the main event loop at startup
+# ---------------------------------------------------------------------------
+import asyncio as _asyncio
+from utils.ws_manager import manager as _ws_manager, set_main_loop as _set_main_loop
+
+
+@app.on_event("startup")
+def _capture_event_loop():
+    try:
+        loop = _asyncio.get_running_loop()
+        _set_main_loop(loop)
+        logger.info("WebSocket manager bound to main event loop")
+    except RuntimeError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Notification cleanup — purge old read notifications every 6 hours
+# ---------------------------------------------------------------------------
+def _notification_cleaner():
+    """Background thread that deletes read notifications older than 30 days."""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy.orm import Session as _Session
+    from db.app_db import SessionLocal
+    from db.models import Notification as _Notif
+
+    while not _evictor_stop.is_set():
+        _evictor_stop.wait(21600)  # 6 hours
+        if _evictor_stop.is_set():
+            break
+        try:
+            db: _Session = SessionLocal()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            deleted = db.query(_Notif).filter(
+                _Notif.read == 1,
+                _Notif.created_at < cutoff,
+            ).delete(synchronize_session=False)
+            db.commit()
+            db.close()
+            if deleted:
+                logger.info("Notification cleanup: deleted %d old read notifications", deleted)
+        except Exception as e:
+            logger.error("Notification cleanup error: %s", e)
+
+
+_cleaner_thread: _threading.Thread | None = None
+
+
+@app.on_event("startup")
+def _start_notification_cleaner():
+    global _cleaner_thread
+    _cleaner_thread = _threading.Thread(target=_notification_cleaner, daemon=True, name="notif-cleaner")
+    _cleaner_thread.start()
+    logger.info("Notification cleaner started (purges read notifications >30d)")
+
+
+# ---------------------------------------------------------------------------
+# In-memory dict cleanup — evict stale/completed entries every 5 min
+# ---------------------------------------------------------------------------
+_TASK_TTL_SECONDS = 1800  # 30 minutes — auto-evict completed/abandoned tasks
+
+
+def _inmemory_cleanup():
+    """Background thread that cleans up stale entries in all in-memory task dicts."""
+    import time
+    import os
+
+    while not _evictor_stop.is_set():
+        _evictor_stop.wait(300)  # every 5 min
+        if _evictor_stop.is_set():
+            break
+        try:
+            # 1. Mapping suggestions
+            from modules.mapping.router import _active_suggestions, _suggestions_lock, _cleanup_stale_suggestions
+            with _suggestions_lock:
+                _cleanup_stale_suggestions()
+
+            # 2. Data extraction tasks — evict completed tasks older than TTL, clean up temp files
+            from modules.datamanagement.router import _active_extractions, _extractions_lock
+            now = time.time()
+            with _extractions_lock:
+                stale_ids = [
+                    tid for tid, t in _active_extractions.items()
+                    if t["status"] in ("completed", "error")
+                    and t.get("completed_at") and now - t["completed_at"] > _TASK_TTL_SECONDS
+                ]
+                for tid in stale_ids:
+                    task = _active_extractions.pop(tid)
+                    csv_path = task.get("csv_path")
+                    if csv_path:
+                        try:
+                            os.unlink(csv_path)
+                        except OSError:
+                            pass
+                if stale_ids:
+                    logger.info("Cleaned up %d stale extraction tasks", len(stale_ids))
+
+            # 3. OHDSI tasks — evict finished tasks older than TTL
+            from modules.ohdsi.router import _tasks, _lock as _ohdsi_lock
+            with _ohdsi_lock:
+                stale_ohdsi = [
+                    tid for tid, t in _tasks.items()
+                    if t.get("status") in ("completed", "error", "failed")
+                    and t.get("finished_at") and now - t["finished_at"] > _TASK_TTL_SECONDS
+                ]
+                for tid in stale_ohdsi:
+                    _tasks.pop(tid, None)
+                if stale_ohdsi:
+                    logger.info("Cleaned up %d stale OHDSI tasks", len(stale_ohdsi))
+
+        except Exception as e:
+            logger.error("In-memory cleanup error: %s", e)
+
+
+_cleanup_thread: _threading.Thread | None = None
+
+
+@app.on_event("startup")
+def _start_inmemory_cleanup():
+    global _cleanup_thread
+    _cleanup_thread = _threading.Thread(target=_inmemory_cleanup, daemon=True, name="inmemory-cleanup")
+    _cleanup_thread.start()
+    logger.info("In-memory task cleanup started (evicts stale tasks every 5 min)")
+
+
+# ---------------------------------------------------------------------------
+# OHDSI output dirs — ensure per-CDM folders exist for all registered CDMs
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+def _ensure_ohdsi_dirs():
+    """Create OHDSI output sub-folders for every registered CDM at startup."""
+    from db.app_db import SessionLocal
+    from db.models import CdmConfig as _CdmConfig
+    from modules.ohdsi.router import ensure_cdm_output_dirs
+    try:
+        db = SessionLocal()
+        cdm_names = [c.name for c in db.query(_CdmConfig.name).all()]
+        db.close()
+        for name in cdm_names:
+            ensure_cdm_output_dirs(name)
+        if cdm_names:
+            logger.info("OHDSI output dirs ensured for %d CDMs", len(cdm_names))
+    except Exception:
+        logger.warning("Could not create OHDSI output dirs at startup", exc_info=True)
+
+
+@app.on_event("shutdown")
+def _shutdown_pools():
+    _evictor_stop.set()
+    if _evictor_thread:
+        _evictor_thread.join(timeout=5)
+    close_all_pools()
 
 # Global exception handlers
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
-    return JSONResponse(status_code=400, content={"detail": str(exc)})
+    logger.warning("ValueError on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=400, content={"detail": "Invalid input"})
 
 
 @app.exception_handler(psycopg2.OperationalError)
@@ -50,14 +239,30 @@ async def query_timeout_handler(request: Request, exc):
     return JSONResponse(status_code=504, content={"detail": "Query timed out. Try a simpler query or smaller dataset."})
 
 
+@app.exception_handler(ConnectionError)
+async def connection_error_handler(request: Request, exc: ConnectionError):
+    logger.error("Connection pool exhausted: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": "Service temporarily unavailable. Please try again shortly."})
+
+
+@app.exception_handler(DecryptionError)
+async def decryption_error_handler(request: Request, exc: DecryptionError):
+    logger.error("Decryption failed: %s", exc)
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Accept-Language"],
 )
+
+# GZip compression for large responses
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Audit logging (must be added before auth so it wraps the full request)
 from audit.logger import AuditMiddleware
@@ -109,6 +314,7 @@ from modules.cohort_templates_router import router as cohort_templates_router
 from modules.search_router import router as search_router
 from modules.cohort_sharing_router import router as cohort_sharing_router
 from modules.groups_router import router as groups_router
+from modules.admin_router import router as admin_router
 
 app.include_router(cdm_router)
 app.include_router(quality_router)
@@ -128,20 +334,26 @@ app.include_router(cohort_templates_router)
 app.include_router(search_router)
 app.include_router(cohort_sharing_router)
 app.include_router(groups_router)
+app.include_router(admin_router)
 
 
 # i18n endpoint
 I18N_DIR = Path(__file__).parent / "i18n"
 
 
+# P28 fix: cache translations at startup (only changes on deploy)
+_i18n_cache: dict[str, dict] = {}
+for _lang_file in I18N_DIR.glob("*.json"):
+    with open(_lang_file, "r", encoding="utf-8") as _f:
+        _i18n_cache[_lang_file.stem] = json.load(_f)
+
+
 @app.get("/api/i18n/{lang}")
 def get_translations(lang: str):
     """Return translation strings for a given language."""
-    filepath = I18N_DIR / f"{lang}.json"
-    if not filepath.exists():
+    if lang not in _i18n_cache:
         return JSONResponse(status_code=404, content={"detail": f"Language '{lang}' not found"})
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return _i18n_cache[lang]
 
 
 @app.get("/api/auth/me")
@@ -157,6 +369,18 @@ def auth_me(request: Request):
     }
 
 
+@app.post("/api/auth/sse-ticket")
+@limiter.limit("10/minute")
+def create_sse_ticket_endpoint(request: Request):
+    """Create a one-time-use ticket for SSE connections (replaces ?token= in URL)."""
+    from auth.keycloak import create_sse_ticket
+    user = getattr(request.state, "user", None)
+    if not user or user.get("sub") in ("anonymous", "dev-user"):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    ticket = create_sse_ticket(user)
+    return {"ticket": ticket}
+
+
 @app.get("/api/auth/permissions")
 def auth_permissions(request: Request):
     """Return the resolved permissions for the current user based on their roles.
@@ -170,6 +394,10 @@ def auth_permissions(request: Request):
     return build_frontend_permissions(roles)
 
 
+# _require_admin is imported from admin_router for use by audit endpoints
+from modules.admin_router import _require_admin
+
+
 @app.get("/api/audit/logs")
 def get_audit_logs(
     request: Request,
@@ -179,7 +407,8 @@ def get_audit_logs(
     user: str | None = None,
     action: str | None = None,
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = Query(default=50, ge=1, le=500),
+    admin_user=Depends(_require_admin),
 ):
     """Return audit log entries with filtering and pagination (admin only)."""
     from audit.logger import AUDIT_LOG_DIR
@@ -198,29 +427,66 @@ def get_audit_logs(
             dates.append(d.isoformat())
             d -= timedelta(days=1)
 
-    entries = []
+    import heapq as _heapq
+
+    # Two-pass approach: first count total matching entries, then collect only the page
+    # This avoids loading all entries into memory at once.
+    total = 0
     for dt_str in dates:
         log_file = AUDIT_LOG_DIR / f"{dt_str}.jsonl"
         if not log_file.exists():
             continue
-        for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-            if not line:
-                continue
-            try:
-                entry = _json.loads(line)
-                if user and entry.get("user") != user:
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
                     continue
-                if action and not entry.get("action", "").startswith(action):
+                try:
+                    entry = _json.loads(line)
+                    if user and entry.get("user") != user:
+                        continue
+                    if action and not entry.get("action", "").startswith(action):
+                        continue
+                    total += 1
+                except _json.JSONDecodeError:
                     continue
-                entries.append(entry)
-            except _json.JSONDecodeError:
-                continue
 
-    entries.sort(key=lambda e: e.get("ts", ""), reverse=True)
-    total = len(entries)
+    # Second pass: collect only the entries needed for the requested page
+    # Use a heap to get top-N entries sorted by timestamp (descending)
     start = (page - 1) * page_size
+    need = start + page_size  # We need the top `need` entries by timestamp
+    # Use a min-heap of size `need` — keep the `need` most recent entries
+    # Tuple: (timestamp, counter, entry) — counter avoids comparing dicts
+    heap: list[tuple[str, int, dict]] = []
+    counter = 0
+    for dt_str in dates:
+        log_file = AUDIT_LOG_DIR / f"{dt_str}.jsonl"
+        if not log_file.exists():
+            continue
+        with open(log_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                    if user and entry.get("user") != user:
+                        continue
+                    if action and not entry.get("action", "").startswith(action):
+                        continue
+                    ts = entry.get("ts", "")
+                    counter += 1
+                    if len(heap) < need:
+                        _heapq.heappush(heap, (ts, counter, entry))
+                    elif ts > heap[0][0]:
+                        _heapq.heapreplace(heap, (ts, counter, entry))
+                except _json.JSONDecodeError:
+                    continue
+
+    # Sort the heap entries descending and slice for the page
+    sorted_entries = [e for _, _, e in sorted(heap, key=lambda x: x[0], reverse=True)]
     return {
-        "entries": entries[start:start + page_size],
+        "entries": sorted_entries[start:start + page_size],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -229,7 +495,7 @@ def get_audit_logs(
 
 
 @app.get("/api/audit/stats")
-def get_audit_stats(request: Request, date_from: str | None = None, date_to: str | None = None):
+def get_audit_stats(request: Request, date_from: str | None = None, date_to: str | None = None, admin_user=Depends(_require_admin)):
     """Return audit log summary stats for a date range."""
     from audit.logger import AUDIT_LOG_DIR
     import json as _json
@@ -247,16 +513,18 @@ def get_audit_stats(request: Request, date_from: str | None = None, date_to: str
     while d <= d_to:
         log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
         if log_file.exists():
-            for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-                if not line:
-                    continue
-                try:
-                    entry = _json.loads(line)
-                    user_counts[entry.get("user", "unknown")] += 1
-                    action_counts[entry.get("action", "unknown")] += 1
-                    total += 1
-                except _json.JSONDecodeError:
-                    continue
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = _json.loads(line)
+                        user_counts[entry.get("user", "unknown")] += 1
+                        action_counts[entry.get("action", "unknown")] += 1
+                        total += 1
+                    except _json.JSONDecodeError:
+                        continue
         d += timedelta(days=1)
 
     return {
@@ -267,7 +535,7 @@ def get_audit_stats(request: Request, date_from: str | None = None, date_to: str
 
 
 @app.get("/api/audit/dates")
-def get_audit_dates(request: Request):
+def get_audit_dates(request: Request, admin_user=Depends(_require_admin)):
     """Return list of dates that have audit log files."""
     from audit.logger import AUDIT_LOG_DIR
     dates = sorted(
@@ -284,521 +552,100 @@ def export_audit_csv(
     date_to: str | None = None,
     user: str | None = None,
     action: str | None = None,
+    admin_user=Depends(_require_admin),
 ):
     """Export audit logs as CSV."""
     import csv
     import io
     import json as _json
     from datetime import date as _dt, timedelta
+    from audit.logger import AUDIT_LOG_DIR
 
     d_from = _dt.fromisoformat(date_from) if date_from else _dt.today()
     d_to = _dt.fromisoformat(date_to) if date_to else d_from
 
-    entries = []
-    d = d_from
-    while d <= d_to:
-        log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
-        if log_file.exists():
-            for line in log_file.read_text(encoding="utf-8").strip().split("\n"):
-                if not line:
-                    continue
-                try:
-                    entry = _json.loads(line)
-                    if user and entry.get("user") != user:
-                        continue
-                    if action and not entry.get("action", "").startswith(action):
-                        continue
-                    entries.append(entry)
-                except _json.JSONDecodeError:
-                    continue
-        d += timedelta(days=1)
+    from utils.csv_safety import csv_safe
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
-    for e in entries:
-        writer.writerow([
-            e.get("ts", ""), e.get("user", ""), ",".join(e.get("roles", [])),
-            e.get("action", ""), e.get("method", ""), e.get("path", ""),
-            e.get("status", ""), e.get("duration_ms", ""), e.get("ip", ""),
-        ])
-    output.seek(0)
+    def _generate_csv():
+        """Stream CSV line by line to avoid loading all entries in memory."""
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["timestamp", "user", "roles", "action", "method", "path", "status", "duration_ms", "ip"])
+        yield buf.getvalue()
+
+        d = d_from
+        while d <= d_to:
+            log_file = AUDIT_LOG_DIR / f"{d.isoformat()}.jsonl"
+            if log_file.exists():
+                with open(log_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = _json.loads(line)
+                            if user and entry.get("user") != user:
+                                continue
+                            if action and not entry.get("action", "").startswith(action):
+                                continue
+                            row_buf = io.StringIO()
+                            row_writer = csv.writer(row_buf)
+                            row_writer.writerow([
+                                csv_safe(entry.get("ts", "")),
+                                csv_safe(entry.get("user", "")),
+                                csv_safe(",".join(entry.get("roles", []))),
+                                csv_safe(entry.get("action", "")),
+                                csv_safe(entry.get("method", "")),
+                                csv_safe(entry.get("path", "")),
+                                entry.get("status", ""),
+                                entry.get("duration_ms", ""),
+                                csv_safe(entry.get("ip", "")),
+                            ])
+                            yield row_buf.getvalue()
+                        except _json.JSONDecodeError:
+                            continue
+            d += timedelta(days=1)
 
     return StreamingResponse(
-        iter([output.getvalue()]),
+        _generate_csv(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=audit_logs.csv"},
     )
 
 
-# ──── Admin: User Management (Keycloak proxy) ────
-
-@app.get("/api/admin/users")
-def list_users(request: Request):
-    """List Keycloak users with their roles (admin only)."""
-    import requests as http_requests
-    token = _get_keycloak_admin_token()
-    if not token:
-        return {"users": [], "error": "Keycloak admin unavailable"}
-
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}"}
-
-    # Collect users by OPAL role (avoids listing all LDAP users)
-    opal_roles = ["admin", "data-manager", "chercheur", "medecin"]
-    user_map = {}
-
-    try:
-        for role_name in opal_roles:
-            resp = http_requests.get(
-                f"{base}/roles/{role_name}/users?max=200", headers=headers, timeout=10
-            )
-            if not resp.ok:
-                continue
-            for u in resp.json():
-                uid = u["id"]
-                if uid not in user_map:
-                    user_map[uid] = {
-                        "id": uid,
-                        "username": u.get("username", ""),
-                        "email": u.get("email", ""),
-                        "first_name": u.get("firstName", ""),
-                        "last_name": u.get("lastName", ""),
-                        "enabled": u.get("enabled", False),
-                        "created_at": u.get("createdTimestamp"),
-                        "roles": [],
-                    }
-                user_map[uid]["roles"].append(role_name)
-    except Exception as e:
-        logger.warning("Failed to fetch Keycloak users: %s", e)
-        return {"users": [], "error": str(e)}
-
-    return {"users": list(user_map.values())}
-
-
-@app.post("/api/admin/users/{user_id}/roles")
-def assign_role(user_id: str, request: Request, body: dict):
-    """Assign a role to a Keycloak user."""
-    import requests as http_requests
-    role_name = body.get("role")
-    if not role_name:
-        return JSONResponse(status_code=400, content={"detail": "role is required"})
-
-    token = _get_keycloak_admin_token()
-    if not token:
-        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
-
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    # Get role representation
-    try:
-        role_resp = http_requests.get(f"{base}/roles/{role_name}", headers=headers, timeout=5)
-        role_resp.raise_for_status()
-        role_obj = role_resp.json()
-    except Exception:
-        return JSONResponse(status_code=404, content={"detail": f"Role '{role_name}' not found"})
-
-    # Assign role
-    try:
-        resp = http_requests.post(
-            f"{base}/users/{user_id}/role-mappings/realm",
-            headers=headers, json=[role_obj], timeout=5,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"Failed to assign role: {e}"})
-
-    return {"status": "ok", "user_id": user_id, "role": role_name, "action": "assigned"}
-
-
-@app.delete("/api/admin/users/{user_id}/roles/{role_name}")
-def remove_role(user_id: str, role_name: str, request: Request):
-    """Remove a role from a Keycloak user."""
-    import requests as http_requests
-    token = _get_keycloak_admin_token()
-    if not token:
-        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
-
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    try:
-        role_resp = http_requests.get(f"{base}/roles/{role_name}", headers=headers, timeout=5)
-        role_resp.raise_for_status()
-        role_obj = role_resp.json()
-    except Exception:
-        return JSONResponse(status_code=404, content={"detail": f"Role '{role_name}' not found"})
-
-    try:
-        resp = http_requests.delete(
-            f"{base}/users/{user_id}/role-mappings/realm",
-            headers=headers, json=[role_obj], timeout=5,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"Failed to remove role: {e}"})
-
-    return {"status": "ok", "user_id": user_id, "role": role_name, "action": "removed"}
-
-
-@app.put("/api/admin/users/{user_id}/toggle")
-def toggle_user(user_id: str, request: Request, body: dict):
-    """Enable or disable a Keycloak user."""
-    import requests as http_requests
-    enabled = body.get("enabled", True)
-    token = _get_keycloak_admin_token()
-    if not token:
-        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
-
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    try:
-        resp = http_requests.put(
-            f"{base}/users/{user_id}", headers=headers, json={"enabled": enabled}, timeout=5,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"Failed to update user: {e}"})
-
-    return {"status": "ok", "user_id": user_id, "enabled": enabled}
-
-
-def _get_keycloak_admin_token() -> str | None:
-    """Get a Keycloak admin token using client credentials or admin password."""
-    import requests as http_requests
-    import os
-
-    admin_user = os.getenv("KEYCLOAK_ADMIN", "admin")
-    admin_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "admin")
-
-    try:
-        resp = http_requests.post(
-            f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",
-            data={
-                "grant_type": "password",
-                "client_id": "admin-cli",
-                "username": admin_user,
-                "password": admin_pass,
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("access_token")
-    except Exception as e:
-        logger.warning("Failed to get Keycloak admin token: %s", e)
-        return None
-
-
-# ──── Access Requests (self-service sign-up) ────
-
-@app.post("/api/access-requests")
-def submit_access_request(request: Request, body: dict, db=Depends(get_db)):
-    """Submit a new access request (public, no auth required)."""
-    from db.models import AccessRequest
-
-    required = ["username", "requested_role"]
-    for field in required:
-        if not body.get(field, "").strip():
-            return JSONResponse(status_code=400, content={"detail": f"{field} is required"})
-
-    role = body["requested_role"]
-    if role not in ("admin", "data-manager", "chercheur", "medecin"):
-        return JSONResponse(status_code=400, content={"detail": f"Invalid role: {role}"})
-
-    existing = db.query(AccessRequest).filter(
-        AccessRequest.username == body["username"],
-        AccessRequest.status == "pending",
-    ).first()
-    if existing:
-        return JSONResponse(status_code=409, content={"detail": "Une demande est deja en cours pour ce matricule"})
-
-    req = AccessRequest(
-        username=body["username"].strip(),
-        email=body.get("email", "").strip(),
-        first_name=body.get("first_name", "").strip(),
-        last_name=body.get("last_name", "").strip(),
-        requested_role=role,
-    )
-    db.add(req)
-    db.flush()
-
-    # Notify all admins about the new access request (role-targeted)
-    from utils.notifications import notify
-    notify(
-        db, body["username"], "access_request",
-        title=f"Nouvelle demande d'accès : {body['username']}",
-        message=f"{body['username']} demande le rôle « {role} ».",
-        link="/users",
-        target_role="admin",
-        item_id=str(req.id),
-    )
-
-    db.commit()
-    return {"status": "ok", "id": req.id}
-
-
-@app.get("/api/admin/access-requests")
-def list_access_requests(request: Request, status_filter: str = "pending", db=Depends(get_db)):
-    """List access requests (admin only)."""
-    from db.models import AccessRequest
-
-    q = db.query(AccessRequest)
-    if status_filter != "all":
-        q = q.filter(AccessRequest.status == status_filter)
-    requests_list = q.order_by(AccessRequest.created_at.desc()).all()
-    return {
-        "requests": [
-            {
-                "id": r.id,
-                "username": r.username,
-                "email": r.email,
-                "first_name": r.first_name,
-                "last_name": r.last_name,
-                "requested_role": r.requested_role,
-                "status": r.status,
-                "reviewed_by": r.reviewed_by,
-                "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in requests_list
-        ]
-    }
-
-
-@app.post("/api/admin/access-requests/{request_id}/approve")
-def approve_access_request(request_id: int, request: Request, db=Depends(get_db)):
-    """Approve an access request: create Keycloak user with temporary password."""
-    import requests as http_requests
-    from datetime import datetime, timezone
-    from db.models import AccessRequest
-
-    ar = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
-    if not ar:
-        return JSONResponse(status_code=404, content={"detail": "Request not found"})
-    if ar.status != "pending":
-        return JSONResponse(status_code=400, content={"detail": f"Request already {ar.status}"})
-
-    # Create Keycloak user
-    token = _get_keycloak_admin_token()
-    if not token:
-        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
-
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    # Find or create Keycloak user
-    use_ldap = os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
-    kc_user_id = None
-
-    # First, check if user already exists (LDAP or local)
-    try:
-        search_resp = http_requests.get(
-            f"{base}/users?username={ar.username}&exact=true", headers=headers, timeout=10
-        )
-        existing = [u for u in search_resp.json() if u.get("username", "").lower() == ar.username.lower()] if search_resp.ok else []
-        if existing:
-            kc_user_id = existing[0]["id"]
-    except Exception:
-        pass
-
-    # If user doesn't exist, create locally
-    if not kc_user_id:
-        user_payload = {
-            "username": ar.username,
-            "email": ar.email,
-            "firstName": ar.first_name,
-            "lastName": ar.last_name,
-            "enabled": True,
-        }
-        if not use_ldap:
-            user_payload["credentials"] = [{
-                "type": "password",
-                "value": ar.username,
-                "temporary": True,
-            }]
-        try:
-            resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
-            resp.raise_for_status()
-            location = resp.headers.get("Location", "")
-            kc_user_id = location.rsplit("/", 1)[-1] if location else None
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"detail": f"Failed to create Keycloak user: {e}"})
-
-    # Assign the requested role
-    if kc_user_id and ar.requested_role:
-        try:
-            role_resp = http_requests.get(
-                f"{base}/roles/{ar.requested_role}", headers=headers, timeout=5
-            )
-            if role_resp.ok:
-                role_obj = role_resp.json()
-                http_requests.post(
-                    f"{base}/users/{kc_user_id}/role-mappings/realm",
-                    headers=headers, json=[role_obj], timeout=5,
-                )
-        except Exception:
-            logger.warning("Failed to assign role %s to new user %s", ar.requested_role, ar.username)
-
-    # Update request status
-    user_info = getattr(request.state, "user", {})
-    ar.status = "approved"
-    ar.reviewed_by = user_info.get("preferred_username", "admin")
-    ar.reviewed_at = datetime.now(timezone.utc)
-
-    # Notify the requester
-    from utils.notifications import notify
-    notify(
-        db, ar.username, "access_request",
-        title="Demande d'accès approuvée",
-        message=f"Votre demande d'accès avec le rôle « {ar.requested_role} » a été approuvée.",
-        item_id=str(ar.id),
-    )
-
-    db.commit()
-
-    result = {
-        "status": "ok",
-        "username": ar.username,
-        "keycloak_user_id": kc_user_id,
-    }
-    if not use_ldap:
-        result["temporary_password"] = ar.username
-    else:
-        result["auth_method"] = "ldap"
-    return result
-
-
-@app.post("/api/admin/users/add")
-async def add_user_direct(request: Request):
-    """Admin adds a user directly by matricule + role (no access request needed)."""
-    import requests as http_requests
-
-    body = await request.json()
-    username = body.get("username", "").strip()
-    role = body.get("role", "").strip()
-
-    if not username:
-        return JSONResponse(status_code=400, content={"detail": "Matricule requis"})
-    if role not in ("admin", "data-manager", "chercheur", "medecin"):
-        return JSONResponse(status_code=400, content={"detail": f"Role invalide: {role}"})
-
-    token = _get_keycloak_admin_token()
-    if not token:
-        return JSONResponse(status_code=503, content={"detail": "Keycloak admin unavailable"})
-
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    use_ldap = os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
-    kc_user_id = None
-
-    # Find existing user (LDAP or local)
-    try:
-        search_resp = http_requests.get(
-            f"{base}/users?username={username}&exact=true", headers=headers, timeout=10
-        )
-        existing = [u for u in search_resp.json() if u.get("username", "").lower() == username.lower()] if search_resp.ok else []
-        if existing:
-            kc_user_id = existing[0]["id"]
-    except Exception:
-        pass
-
-    # Create if not found
-    if not kc_user_id:
-        user_payload = {"username": username, "enabled": True}
-        if not use_ldap:
-            user_payload["credentials"] = [{"type": "password", "value": username, "temporary": True}]
-        try:
-            resp = http_requests.post(f"{base}/users", headers=headers, json=user_payload, timeout=10)
-            resp.raise_for_status()
-            location = resp.headers.get("Location", "")
-            kc_user_id = location.rsplit("/", 1)[-1] if location else None
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"detail": f"Impossible de creer l'utilisateur: {e}"})
-
-    if not kc_user_id:
-        return JSONResponse(status_code=500, content={"detail": "Impossible de trouver ou creer l'utilisateur"})
-
-    # Assign role
-    try:
-        role_resp = http_requests.get(f"{base}/roles/{role}", headers=headers, timeout=5)
-        if role_resp.ok:
-            role_obj = role_resp.json()
-            assign_resp = http_requests.post(
-                f"{base}/users/{kc_user_id}/role-mappings/realm",
-                headers=headers, json=[role_obj], timeout=5,
-            )
-            assign_resp.raise_for_status()
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"Utilisateur cree mais echec assignation role: {e}"})
-
-    return {"status": "ok", "username": username, "role": role, "keycloak_user_id": kc_user_id}
-
-
-@app.post("/api/admin/access-requests/{request_id}/reject")
-def reject_access_request(request_id: int, request: Request, db=Depends(get_db)):
-    """Reject an access request."""
-    from datetime import datetime, timezone
-    from db.models import AccessRequest
-
-    ar = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
-    if not ar:
-        return JSONResponse(status_code=404, content={"detail": "Request not found"})
-    if ar.status != "pending":
-        return JSONResponse(status_code=400, content={"detail": f"Request already {ar.status}"})
-
-    user_info = getattr(request.state, "user", {})
-    ar.status = "rejected"
-    ar.reviewed_by = user_info.get("preferred_username", "admin")
-    ar.reviewed_at = datetime.now(timezone.utc)
-
-    from utils.notifications import notify
-    notify(
-        db, ar.username, "access_request",
-        title="Demande d'accès refusée",
-        message=f"Votre demande d'accès avec le rôle « {ar.requested_role} » a été refusée.",
-        item_id=str(ar.id),
-    )
-
-    db.commit()
-
-    return {"status": "ok", "id": ar.id}
-
-
-@app.get("/api/users/list")
-def list_opal_users(request: Request):
-    """List usernames of all users who have an OPAL role.
-
-    Available to any authenticated user (for sharing dropdowns).
-    Returns only usernames — no admin details.
+# ---------------------------------------------------------------------------
+# WebSocket endpoint for real-time notifications
+# ---------------------------------------------------------------------------
+@app.websocket("/api/ws/notifications")
+async def websocket_notifications(websocket: WebSocket, ticket: str = ""):
+    """WebSocket endpoint for real-time notification push.
+
+    Authentication uses a one-time SSE ticket (same mechanism as SSE streams)
+    passed as ?ticket= query parameter.
     """
-    import requests as http_requests
-    token = _get_keycloak_admin_token()
-    if not token:
-        return {"users": []}
+    from auth.keycloak import _redeem_sse_ticket
 
-    base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {token}"}
-    opal_roles = ["admin", "data-manager", "chercheur", "medecin"]
-    usernames = set()
+    user_info = _redeem_sse_ticket(ticket) if ticket else None
+    if not user_info:
+        await websocket.close(code=4001, reason="Invalid or expired ticket")
+        return
 
+    username = user_info.get("preferred_username", "anonymous")
+    roles = user_info.get("roles", [])
+
+    await _ws_manager.connect(websocket, username, roles)
     try:
-        for role_name in opal_roles:
-            resp = http_requests.get(
-                f"{base}/roles/{role_name}/users?max=500", headers=headers, timeout=10
-            )
-            if not resp.ok:
-                continue
-            for u in resp.json():
-                uname = u.get("username", "")
-                if uname:
-                    usernames.add(uname)
-    except Exception as e:
-        logger.warning("Failed to fetch OPAL users: %s", e)
-        return {"users": []}
-
-    return {"users": sorted(usernames)}
+        while True:
+            # Keep connection alive; client sends pings, we just read and discard
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text('{"type":"pong"}')
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _ws_manager.disconnect(websocket, username)
 
 
 @app.get("/api/health")

@@ -169,7 +169,7 @@ export default function AuditPage() {
     <div>
       {/* Stats row */}
       {stats && (
-        <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
           <Card size="small">
             <Statistic
               title={t('audit.total_events', 'Total Events')}
