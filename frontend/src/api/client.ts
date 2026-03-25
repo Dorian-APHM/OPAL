@@ -763,6 +763,23 @@ export const searchApi = {
     ),
 };
 
+export const lineageApi = {
+  get: (cdmName: string) =>
+    api.get<any>(`/lineage/${encodeURIComponent(cdmName)}`),
+  getSummary: (cdmName: string) =>
+    api.get<any>(`/lineage/${encodeURIComponent(cdmName)}/summary`),
+  getOmopChains: (cdmName: string, table?: string) =>
+    api.get<any>(`/lineage/${encodeURIComponent(cdmName)}/omop-chains`, { params: table ? { table } : {} }),
+  upload: (cdmName: string, file: File) => {
+    const fd = new FormData();
+    fd.append('cdm_name', cdmName);
+    fd.append('file', file);
+    return api.post<any>('/lineage/upload', fd);
+  },
+  delete: (cdmName: string) =>
+    api.delete(`/lineage/${encodeURIComponent(cdmName)}`),
+};
+
 // Quality Conformity endpoints (background thread + persist)
 export const conformityApi = {
   run: (cdmName: string) =>
