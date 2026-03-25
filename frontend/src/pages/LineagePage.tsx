@@ -72,8 +72,6 @@ export default function LineagePage({ selectedCdm }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
 
-  console.log('[LineagePage] RENDER, selectedCdm=', selectedCdm);
-
   const [lineage, setLineage] = useState<LineageData | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -92,14 +90,11 @@ export default function LineagePage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     setLoading(true);
     try {
-      console.log('[Lineage] Fetching for CDM:', selectedCdm);
       const res = await lineageApi.get(selectedCdm);
       const data = res.data.lineage;
-      console.log('[Lineage] Got data:', Object.keys(data.nodes || {}).length, 'nodes,', (data.edges || []).length, 'edges');
       setLineage(data);
       setHasDoc(true);
     } catch (e: any) {
-      console.error('[Lineage] Fetch error:', e?.response?.status, e?.message);
       if (e?.response?.status === 404) {
         setHasDoc(false);
       } else {
@@ -122,8 +117,7 @@ export default function LineagePage({ selectedCdm }: Props) {
     if (!file || !selectedCdm) return;
     setUploading(true);
     try {
-      const res = await lineageApi.upload(selectedCdm, file);
-      console.log('Upload response:', res.data);
+      await lineageApi.upload(selectedCdm, file);
       toast.success('Lineage uploaded');
       // Reset state fully before reloading
       setLineage(null);
@@ -132,7 +126,6 @@ export default function LineagePage({ selectedCdm }: Props) {
       // Small delay to let state clear, then fetch
       setTimeout(() => fetchLineage(), 100);
     } catch (err: any) {
-      console.error('Lineage upload error:', err?.response?.status, err?.response?.data, err?.message);
       toast.error(`Upload failed: ${err?.response?.data?.detail || err?.message || 'unknown error'}`);
     } finally {
       setUploading(false);
