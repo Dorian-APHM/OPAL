@@ -25,13 +25,8 @@ def _parse_html_bytes(content: bytes, filename: str) -> dict:
         tmp.write(content)
         tmp_path = tmp.name
     try:
-        logger.info("Parsing ETL doc: %s (%d bytes)", tmp_path, len(content))
-        # Keep a debug copy for troubleshooting
-        debug_path = "/tmp/lineage_debug_upload.html"
-        import shutil
-        shutil.copy2(tmp_path, debug_path)
         result = build_lineage(tmp_path)
-        logger.info("Parsed: %d nodes, %d edges", result["metadata"]["total_nodes"], result["metadata"]["total_edges"])
+        logger.info("Parsed ETL doc: %d nodes, %d edges", result["metadata"]["total_nodes"], result["metadata"]["total_edges"])
         return result
     finally:
         os.unlink(tmp_path)
@@ -52,8 +47,6 @@ async def upload_lineage_doc(
         raise HTTPException(status_code=400, detail="Only HTML ETL docs are supported")
 
     content = await file.read()
-    logger.info("Upload received: filename=%s, content_type=%s, size=%d bytes, first_100=%r",
-                file.filename, file.content_type, len(content), content[:100])
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 20MB)")
 
