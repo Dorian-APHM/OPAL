@@ -58,7 +58,6 @@ const LAYER_COLORS: Record<string, { bg: string; border: string; text: string; l
   source:    { bg: '#1e3a5f', border: '#3b82f6', text: '#60a5fa', label: 'Sources' },
   staging:   { bg: '#1a3a2a', border: '#22c55e', text: '#4ade80', label: 'Staging' },
   omop:      { bg: '#3b1f4a', border: '#a855f7', text: '#c084fc', label: 'OMOP CDM' },
-  reference: { bg: '#3a2f1a', border: '#f59e0b', text: '#fbbf24', label: 'Reference' },
 };
 
 const LAYER_HEADERS: Record<string, string> = {
@@ -73,13 +72,15 @@ export default function LineagePage({ selectedCdm }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
 
+  console.log('[LineagePage] RENDER, selectedCdm=', selectedCdm);
+
   const [lineage, setLineage] = useState<LineageData | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [hasDoc, setHasDoc] = useState<boolean | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [visibleLayers, setVisibleLayers] = useState(new Set(['source', 'staging', 'omop', 'reference']));
+  const [visibleLayers, setVisibleLayers] = useState(new Set(['source', 'staging', 'omop']));
   const [viewMode, setViewMode] = useState<'omop' | 'full'>('omop');
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -91,10 +92,14 @@ export default function LineagePage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     setLoading(true);
     try {
+      console.log('[Lineage] Fetching for CDM:', selectedCdm);
       const res = await lineageApi.get(selectedCdm);
-      setLineage(res.data.lineage);
+      const data = res.data.lineage;
+      console.log('[Lineage] Got data:', Object.keys(data.nodes || {}).length, 'nodes,', (data.edges || []).length, 'edges');
+      setLineage(data);
       setHasDoc(true);
     } catch (e: any) {
+      console.error('[Lineage] Fetch error:', e?.response?.status, e?.message);
       if (e?.response?.status === 404) {
         setHasDoc(false);
       } else {
@@ -117,11 +122,18 @@ export default function LineagePage({ selectedCdm }: Props) {
     if (!file || !selectedCdm) return;
     setUploading(true);
     try {
-      await lineageApi.upload(selectedCdm, file);
+      const res = await lineageApi.upload(selectedCdm, file);
+      console.log('Upload response:', res.data);
       toast.success('Lineage uploaded');
-      await fetchLineage();
-    } catch {
-      toast.error('Upload failed');
+      // Reset state fully before reloading
+      setLineage(null);
+      setHasDoc(null);
+      setSelectedNode(null);
+      // Small delay to let state clear, then fetch
+      setTimeout(() => fetchLineage(), 100);
+    } catch (err: any) {
+      console.error('Lineage upload error:', err?.response?.status, err?.response?.data, err?.message);
+      toast.error(`Upload failed: ${err?.response?.data?.detail || err?.message || 'unknown error'}`);
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -216,23 +228,22 @@ export default function LineagePage({ selectedCdm }: Props) {
     return { positions, colX };
   }, [filteredNodes, filteredEdges]);
 
-  // Auto-fit on layout change
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg || !Object.keys(layout.positions).length) return;
-    fitView();
-  }, [layout]);
-
+  // Auto-fit on layout change (with retry if SVG not yet laid out)
   const fitView = useCallback(() => {
     const svg = svgRef.current;
     if (!svg || !Object.keys(layout.positions).length) return;
+    const sw = svg.clientWidth, sh = svg.clientHeight;
+    if (sw === 0 || sh === 0) {
+      // SVG not yet laid out — retry after next frame
+      requestAnimationFrame(() => fitView());
+      return;
+    }
     const allPos = Object.values(layout.positions);
     const minX = Math.min(...allPos.map(p => p.x)) - 40;
     const minY = Math.min(...allPos.map(p => p.y)) - 40;
     const maxX = Math.max(...allPos.map(p => p.x + p.w)) + 40;
     const maxY = Math.max(...allPos.map(p => p.y + p.h)) + 40;
     const bw = maxX - minX, bh = maxY - minY;
-    const sw = svg.clientWidth, sh = svg.clientHeight;
     const scale = Math.min(sw / bw, sh / bh, 1.2) * 0.9;
     setTransform({
       x: (sw - bw * scale) / 2 - minX * scale,
@@ -240,6 +251,13 @@ export default function LineagePage({ selectedCdm }: Props) {
       scale,
     });
   }, [layout]);
+
+  useEffect(() => {
+    if (!Object.keys(layout.positions).length) return;
+    // Small delay to ensure SVG is mounted and has dimensions
+    const id = requestAnimationFrame(() => fitView());
+    return () => cancelAnimationFrame(id);
+  }, [layout, fitView]);
 
   // Wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -321,7 +339,9 @@ export default function LineagePage({ selectedCdm }: Props) {
     );
   }
 
-  if (!lineage) return null;
+  if (!lineage) {
+    return <div className="flex items-center justify-center h-64"><Spinner size="large" tip="Loading lineage data..." /></div>;
+  }
 
   return (
     <div className="h-[calc(100vh-80px)] flex flex-col">

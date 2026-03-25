@@ -15,9 +15,19 @@ logger = logging.getLogger(__name__)
 # HTML section splitting
 # ---------------------------------------------------------------------------
 
+def _clean_browser_saved_html(html: str) -> str:
+    """Strip artifacts added by browser 'Save As' (extra attributes, comments)."""
+    # Remove "saved from url" comments
+    html = re.sub(r'<!-- saved from url=\([^)]*\)[^ ]* -->', '', html)
+    # Remove data-* attributes added by browser extensions
+    html = re.sub(r'\s+data-[\w-]+="[^"]*"', '', html)
+    return html
+
+
 def split_repertoires(html: str) -> dict[str, str]:
     """Split the full HTML into named repertoire sections."""
-    pattern = r"<h1[^>]*>\d+/\d+\)\s+Repertoire\s+'(\w+)'</h1>"
+    html = _clean_browser_saved_html(html)
+    pattern = r"<h1[^>]*>\s*\d+/\d+\)\s+Repertoire\s+'(\w+)'\s*</h1>"
     matches = list(re.finditer(pattern, html))
     sections = {}
     for i, m in enumerate(matches):
@@ -60,7 +70,8 @@ def parse_transformation_block(block_html: str) -> dict:
     """Parse a single <h2>...<h2> transformation block."""
     result = {}
 
-    h2_match = re.search(r"<h2[^>]*>\d+/\d+\)\s+Fichier\s+'([^']+)'</h2>", block_html)
+    block_html = _clean_browser_saved_html(block_html)
+    h2_match = re.search(r"<h2[^>]*>\s*\d+/\d+\)\s+Fichier\s+'([^']+)'\s*</h2>", block_html)
     if h2_match:
         result["file"] = h2_match.group(1)
 
@@ -72,7 +83,7 @@ def parse_transformation_block(block_html: str) -> dict:
 
     # Source and destination from table header
     header_match = re.search(
-        r"<th><em>Source</em><br/>(.*?)</th>\s*<th><em>Destination</em><br/>(.*?)</th>",
+        r"<th><em>Source</em><br\s*/?>(.*?)</th>\s*<th><em>Destination</em><br\s*/?>(.*?)</th>",
         block_html, re.DOTALL
     )
     if header_match:
@@ -164,8 +175,10 @@ LAYER_MAP = {
     "pharma_archives": "source",
     "cdm_source": "staging",
     "omop_cdm": "omop",
-    "structure": "reference",
 }
+
+# Repertoires to skip entirely (technical metadata, not data lineage)
+SKIP_REPERTOIRES = {"structure"}
 
 SOURCE_SYSTEMS = {
     "axigate": {"name": "Axigate", "type": "Oracle",
@@ -318,6 +331,8 @@ def build_lineage(html_path: str) -> dict:
     edges: list = []
 
     for rep_name, rep_html in repertoires.items():
+        if rep_name in SKIP_REPERTOIRES:
+            continue
         layer = LAYER_MAP.get(rep_name, "unknown")
         blocks = split_transformations(rep_html)
 
