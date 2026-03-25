@@ -21,6 +21,7 @@ const OhdsiPage = lazy(() => import('./pages/OhdsiPage'));
 const AuditPage = lazy(() => import('./pages/AuditPage'));
 const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
+const LineagePage = lazy(() => import('./pages/LineagePage'));
 
 // Error Boundary with rich error state
 interface ErrorBoundaryState { hasError: boolean; error?: Error; }
@@ -104,7 +105,7 @@ function ProtectedRoute({ path, children }: { path: string; children: React.Reac
   return hasPageAccess(path) ? <>{children}</> : <ForbiddenPage />;
 }
 
-const ALL_PAGES = ['/', '/quality', '/cohorts', '/data-management', '/mapping', '/concepts', '/ohdsi', '/cdm', '/settings', '/audit', '/users'];
+const ALL_PAGES = ['/', '/quality', '/cohorts', '/data-management', '/mapping', '/concepts', '/ohdsi', '/lineage', '/cdm', '/settings', '/audit', '/users'];
 
 function DefaultRedirect() {
   const { hasPageAccess } = useAuth();
@@ -172,6 +173,7 @@ export default function App() {
           <Route path="/ohdsi" element={<ProtectedRoute path="/ohdsi"><PageSuspense><OhdsiPage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="/audit" element={<ProtectedRoute path="/audit"><PageSuspense><AuditPage /></PageSuspense></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute path="/users"><PageSuspense><UserManagementPage /></PageSuspense></ProtectedRoute>} />
+          <Route path="/lineage" element={<ProtectedRoute path="/lineage"><PageSuspense><LineagePage selectedCdm={selectedCdm} /></PageSuspense></ProtectedRoute>} />
           <Route path="*" element={<ForbiddenPage />} />
         </Routes>
       </main>

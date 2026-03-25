@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Home, LayoutDashboard, Users, GitCompareArrows, BookOpen, FlaskConical,
   Database, Settings, Globe, LogOut, Shield, ClipboardList, HardDrive,
-  Menu, X, ChevronDown, Bell, Sun, Moon, Search,
+  Menu, X, ChevronDown, Bell, Sun, Moon, Search, GitBranch,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, cdmAccessApi, notificationsApi } from '../../api/client';
@@ -32,6 +32,7 @@ const mainNav = [
   { key: '/mapping', icon: GitCompareArrows, labelKey: 'app.mapping', short: 'Mapping' },
   { key: '/concepts', icon: BookOpen, labelKey: 'app.concepts', short: 'Concepts' },
   { key: '/ohdsi', icon: FlaskConical, labelKey: 'app.ohdsi', labelDefault: 'OHDSI', short: 'OHDSI' },
+  { key: '/lineage', icon: GitBranch, labelKey: 'app.lineage', labelDefault: 'Lineage', short: 'Lineage' },
 ];
 
 /* Admin nav: shown inside the user dropdown */
