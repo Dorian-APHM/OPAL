@@ -372,3 +372,15 @@ class AccessRequest(Base):
     reviewed_by = Column(String(255), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
+
+
+class LineageDoc(Base):
+    """Parsed ETL lineage documentation per CDM."""
+    __tablename__ = "lineage_docs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, unique=True, index=True)
+    filename = Column(String(500), nullable=False)
+    lineage_json = Column(JSON, nullable=False)
+    uploaded_by = Column(String(255), default="system")
+    uploaded_at = Column(DateTime, default=_utcnow)

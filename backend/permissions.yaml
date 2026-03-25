@@ -28,6 +28,7 @@ roles:
       - /mapping
       - /concepts
       - /ohdsi
+      - /lineage
       - /cdm
       - /settings
     api:
@@ -49,6 +50,7 @@ roles:
       - /api/health
       - /api/incidence
       - /api/estimation
+      - /api/lineage
     cdm_visibility: all
     can_manage_access: true
     can_clear_all_grants: false
@@ -59,6 +61,7 @@ roles:
       - /
       - /cohorts
       - /concepts
+      - /lineage
     api:
       - /api/cohorts
       - /api/concepts
@@ -71,6 +74,7 @@ roles:
       - /api/groups
       - /api/i18n
       - /api/health
+      - /api/lineage
     cdm_visibility: acl_only      # only sees CDMs with explicit grant (user or group)
     can_manage_access: false
     can_clear_all_grants: false
@@ -81,6 +85,7 @@ roles:
       - /
       - /mapping
       - /concepts
+      - /lineage
     api:
       - /api/mapping
       - /api/concepts
@@ -92,6 +97,7 @@ roles:
       - /api/groups
       - /api/i18n
       - /api/health
+      - /api/lineage
     cdm_visibility: acl_only
     can_manage_access: false
     can_clear_all_grants: false
