@@ -332,6 +332,10 @@ export const cohortApi = {
     }>(`/cohorts/pathways/status/${taskId}`),
   pathwaysCancel: (taskId: string) =>
     api.post(`/cohorts/pathways/cancel/${taskId}`),
+  savePathways: (cohortId: number, pathways: PathwaysResult) =>
+    api.put(`/cohorts/${cohortId}/pathways-result`, { pathways }),
+  getPathways: (cohortId: number) =>
+    api.get<{ pathways: PathwaysResult | null; pathways_at: string | null; version: number }>(`/cohorts/${cohortId}/pathways-result`),
 };
 
 // Mapping endpoints

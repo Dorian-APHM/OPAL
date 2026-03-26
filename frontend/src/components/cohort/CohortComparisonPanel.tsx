@@ -27,6 +27,7 @@ const DOMAIN_TAG_COLORS: Record<string, 'red' | 'blue' | 'green' | 'orange' | 'p
 interface Props {
   cdmName: string;
   cohorts: CohortSummary[];
+  cohortKey?: string;
 }
 
 function smdColor(smd: number | null): string {
@@ -44,15 +45,16 @@ function SmdTag({ smd }: { smd: number | null }) {
   return <Tag color={color}>{smd.toFixed(3)}</Tag>;
 }
 
-export default function CohortComparisonPanel({ cdmName, cohorts }: Props) {
+export default function CohortComparisonPanel({ cdmName, cohorts, cohortKey = 'draft' }: Props) {
   const { t } = useTranslation();
   const ct = useChartTheme();
-  const [cohortIdA, setCohortIdA] = useSessionState<string | undefined>('cohort:cmp:idA', undefined);
-  const [cohortIdB, setCohortIdB] = useSessionState<string | undefined>('cohort:cmp:idB', undefined);
+  const ck = cohortKey;
+  const [cohortIdA, setCohortIdA] = useSessionState<string | undefined>(`cohort:cmp:idA:${ck}`, undefined);
+  const [cohortIdB, setCohortIdB] = useSessionState<string | undefined>(`cohort:cmp:idB:${ck}`, undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useSessionState<CohortComparisonResult | null>('cohort:cmp:result', null);
-  const [visitLevel, setVisitLevel] = useSessionState('cohort:cmp:visitLevel', false);
+  const [result, setResult] = useSessionState<CohortComparisonResult | null>(`cohort:cmp:result:${ck}`, null);
+  const [visitLevel, setVisitLevel] = useSessionState(`cohort:cmp:visitLevel:${ck}`, false);
 
   const runCompare = async () => {
     if (!cdmName || !cohortIdA || !cohortIdB) return;

@@ -14,15 +14,17 @@ interface Props {
   cdmName: string;
   criteria: CohortCriteria;
   savedCohortId?: number;
+  cohortKey?: string;
 }
 
-export default function ResultsPanel({ cdmName, criteria, savedCohortId }: Props) {
+export default function ResultsPanel({ cdmName, criteria, savedCohortId, cohortKey = 'draft' }: Props) {
   const { t } = useTranslation();
-  const [patientCount, setPatientCount] = useSessionState<number | null>('cohort:results:count', null);
+  const ck = cohortKey;
+  const [patientCount, setPatientCount] = useSessionState<number | null>(`cohort:results:count:${ck}`, null);
   const [countLoading, setCountLoading] = useState(false);
-  const [attrition, setAttrition] = useSessionState<AttritionStep[]>('cohort:results:attrition', []);
+  const [attrition, setAttrition] = useSessionState<AttritionStep[]>(`cohort:results:attrition:${ck}`, []);
   const [attritionLoading, setAttritionLoading] = useState(false);
-  const [generatedSql, setGeneratedSql] = useSessionState<string>('cohort:results:sql', '');
+  const [generatedSql, setGeneratedSql] = useSessionState<string>(`cohort:results:sql:${ck}`, '');
   const [error, setError] = useState<string>('');
   const abortRef = useRef<AbortController | null>(null);
 
