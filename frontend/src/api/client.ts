@@ -441,6 +441,16 @@ export const conceptApi = {
   ),
   exportSourceValueUrl: (cdmName: string, q: string, domain?: string) =>
     `/api/concepts/search-source-value/export?cdm_name=${encodeURIComponent(cdmName)}&q=${encodeURIComponent(q)}${domain ? `&domain=${encodeURIComponent(domain)}` : ''}`,
+  sourceValueCacheStatus: (cdmName: string) =>
+    api.get<{ populating: boolean; domains: { domain: string; status: string; row_count: number; started_at: string | null; completed_at: string | null; error_message: string | null }[] }>(
+      '/concepts/source-value-cache/status', { params: { cdm_name: cdmName } }
+    ),
+  clearSourceValueCache: (cdmName: string, domain?: string) =>
+    api.delete('/concepts/source-value-cache', { params: { cdm_name: cdmName, domain } }),
+  populateSourceValueCacheUrl_post: (cdmName: string) =>
+    api.post('/concepts/source-value-cache/populate', null, { params: { cdm_name: cdmName } }),
+  cancelSourceValueCachePopulate: (cdmName: string) =>
+    api.post('/concepts/source-value-cache/cancel', null, { params: { cdm_name: cdmName } }),
   counts: (cdmName: string, conceptIds: number[]) =>
     api.post<{ counts: Record<number, { n_records: number; n_persons: number }> }>(
       `/concepts/counts?cdm_name=${encodeURIComponent(cdmName)}`,

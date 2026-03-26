@@ -65,7 +65,7 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost
 OMOP_POOL_MIN_CONN = int(os.getenv("OMOP_POOL_MIN_CONN", "2"))
 OMOP_POOL_MAX_CONN = int(os.getenv("OMOP_POOL_MAX_CONN", "20"))
 OMOP_POOL_IDLE_TIMEOUT = int(os.getenv("OMOP_POOL_IDLE_TIMEOUT", "1800"))
-OMOP_STATEMENT_TIMEOUT_MS = int(os.getenv("OMOP_STATEMENT_TIMEOUT_MS", "300000"))
+OMOP_STATEMENT_TIMEOUT_MS = int(os.getenv("OMOP_STATEMENT_TIMEOUT_MS", "1800000"))
 
 # Bounded thread pool for background tasks (quality, mapping, extraction)
 MAX_WORKER_THREADS = int(os.getenv("MAX_WORKER_THREADS", "16"))

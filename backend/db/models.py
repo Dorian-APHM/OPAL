@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 def _utcnow():
     return datetime.now(timezone.utc)
 
-from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
+from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, String, Text, DateTime, Float, JSON, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -356,6 +356,44 @@ class UserGroupMember(Base):
     username = Column(String(255), nullable=False, index=True)
     added_by = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+
+
+class SourceValueCache(Base):
+    """Cached distinct source values with counts, stored in app DB for fast search."""
+    __tablename__ = "source_value_cache"
+    __table_args__ = (
+        Index("ix_svc_cdm_domain", "cdm_name", "domain"),
+        Index("ix_svc_search", "cdm_name", "domain", "source_value"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False)
+    domain = Column(String(100), nullable=False)
+    source_value = Column(String(1000), nullable=False)
+    source_name = Column(String(1000), nullable=True, default="")
+    n_records = Column(Integer, nullable=False, default=0)
+    n_persons = Column(Integer, nullable=False, default=0)
+    mapped_concept_id = Column(Integer, nullable=True)
+    mapped_concept_name = Column(String(500), nullable=True, default="")
+    mapped_vocabulary_id = Column(String(100), nullable=True, default="")
+    mapped_standard_concept = Column(String(1), nullable=True)
+
+
+class SourceValueCacheStatus(Base):
+    """Tracks cache population status per CDM/domain."""
+    __tablename__ = "source_value_cache_status"
+    __table_args__ = (
+        UniqueConstraint("cdm_name", "domain", name="uq_svc_status_cdm_domain"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    domain = Column(String(100), nullable=False)
+    row_count = Column(Integer, default=0)
+    status = Column(String(50), nullable=False, default="pending")
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
 
 
 class AccessRequest(Base):

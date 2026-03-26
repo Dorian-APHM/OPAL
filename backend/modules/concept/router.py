@@ -365,10 +365,49 @@ def search_source_value(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    """Search clinical tables by source_value and return mapped standard concepts."""
+    """Search clinical tables by source_value and return mapped standard concepts.
+    Uses the app DB cache when available, falls back to direct CDM query."""
     if not q:
         return {"results": [], "total": 0, "limit": limit, "offset": offset}
 
+    # ── Try cache first ──
+    from db.models import SourceValueCache
+    from sqlalchemy import or_, func
+
+    cache_exists = db.query(SourceValueCache.id).filter(
+        SourceValueCache.cdm_name == cdm_name,
+    ).first()
+
+    if cache_exists:
+        query = db.query(SourceValueCache).filter(
+            SourceValueCache.cdm_name == cdm_name,
+            or_(
+                SourceValueCache.source_value.ilike(f"{q}%"),
+                SourceValueCache.source_name.ilike(f"{q}%"),
+            ),
+        )
+        if domain:
+            query = query.filter(SourceValueCache.domain == domain)
+
+        total = query.count()
+        rows = query.order_by(SourceValueCache.n_records.desc()).offset(offset).limit(limit).all()
+        results = [
+            {
+                "domain": r.domain,
+                "source_value": r.source_value,
+                "source_name": r.source_name,
+                "n_records": r.n_records,
+                "n_persons": r.n_persons,
+                "mapped_concept_id": r.mapped_concept_id,
+                "mapped_concept_name": r.mapped_concept_name,
+                "mapped_vocabulary_id": r.mapped_vocabulary_id,
+                "mapped_standard_concept": r.mapped_standard_concept,
+            }
+            for r in rows
+        ]
+        return {"results": results, "total": total, "limit": limit, "offset": offset, "cached": True}
+
+    # ── Fallback: direct CDM query ──
     from config import DOMAIN_CONFIG
 
     conn, schema = _get_conn(db, cdm_name)
@@ -467,6 +506,36 @@ def search_source_value_fast(
     Designed for cohort builder autocomplete where speed matters more than stats."""
     if not q or len(q) < 2:
         return {"results": []}
+
+    # ── Try cache first ──
+    from db.models import SourceValueCache
+    from sqlalchemy import or_
+
+    cache_exists = db.query(SourceValueCache.id).filter(
+        SourceValueCache.cdm_name == cdm_name,
+    ).first()
+
+    if cache_exists:
+        query = db.query(
+            SourceValueCache.domain,
+            SourceValueCache.source_value,
+            SourceValueCache.source_name,
+        ).filter(
+            SourceValueCache.cdm_name == cdm_name,
+            or_(
+                SourceValueCache.source_value.ilike(f"{q}%"),
+                SourceValueCache.source_name.ilike(f"{q}%"),
+            ),
+        ).distinct()
+        if domain:
+            query = query.filter(SourceValueCache.domain == domain)
+        rows = query.limit(limit).all()
+        return {"results": [
+            {"domain": r.domain, "source_value": r.source_value, "source_name": r.source_name}
+            for r in rows
+        ]}
+
+    # ── Fallback: direct CDM query ──
 
     from config import DOMAIN_CONFIG
 
@@ -814,3 +883,124 @@ def list_vocabularies(
             return {"vocabularies": [dict(r) for r in cur.fetchall()]}
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────────────────────
+# Source Value Cache endpoints
+# ─────────────────────────────────────────────────────────
+
+@router.get("/source-value-cache/status")
+def source_value_cache_status(cdm_name: str, db: Session = Depends(get_db)):
+    """Get cache population status for all domains of a CDM."""
+    from db.models import SourceValueCacheStatus
+    rows = db.query(SourceValueCacheStatus).filter(
+        SourceValueCacheStatus.cdm_name == cdm_name,
+    ).all()
+    with _cache_populate_lock:
+        populating = cdm_name in _active_cache_populates
+    return {
+        "populating": populating,
+        "domains": [
+            {
+                "domain": r.domain,
+                "status": r.status,
+                "row_count": r.row_count,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "error_message": r.error_message,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.delete("/source-value-cache")
+def clear_source_value_cache(cdm_name: str, domain: str | None = None, db: Session = Depends(get_db)):
+    """Clear cached source values for a CDM (optionally a single domain)."""
+    from db.models import SourceValueCache, SourceValueCacheStatus
+    q = db.query(SourceValueCache).filter(SourceValueCache.cdm_name == cdm_name)
+    qs = db.query(SourceValueCacheStatus).filter(SourceValueCacheStatus.cdm_name == cdm_name)
+    if domain:
+        q = q.filter(SourceValueCache.domain == domain)
+        qs = qs.filter(SourceValueCacheStatus.domain == domain)
+    deleted = q.delete(synchronize_session=False)
+    qs.delete(synchronize_session=False)
+    db.commit()
+    return {"deleted": deleted}
+
+
+_active_cache_populates: dict[str, dict] = {}
+_cache_populate_lock = threading.Lock()
+
+
+@router.post("/source-value-cache/populate")
+def populate_source_value_cache(
+    cdm_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Launch async cache population for a CDM. Poll /status for progress."""
+    from utils.thread_pool import submit_task
+    from modules.concept.source_value_cache import populate_all_domains
+
+    # Check not already running
+    with _cache_populate_lock:
+        if cdm_name in _active_cache_populates:
+            return {"status": "already_running"}
+
+    cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
+    if not cdm:
+        raise HTTPException(status_code=404, detail="CDM not found")
+    password = decrypt_password(cdm.db_password_encrypted)
+    schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+
+    _cancelled = {"v": False}
+    with _cache_populate_lock:
+        _active_cache_populates[cdm_name] = {"cancelled": _cancelled, "conn": None}
+
+    def _worker():
+        try:
+            conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+            with _cache_populate_lock:
+                if cdm_name in _active_cache_populates:
+                    _active_cache_populates[cdm_name]["conn"] = conn
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 0")
+        except Exception as e:
+            logger.exception("Cache populate: cannot connect to CDM '%s'", cdm_name)
+            with _cache_populate_lock:
+                _active_cache_populates.pop(cdm_name, None)
+            return
+
+        try:
+            populate_all_domains(
+                cdm_name, conn, schema,
+                cancelled_check=lambda: _cancelled["v"],
+            )
+        except Exception:
+            logger.exception("Cache populate failed for CDM '%s'", cdm_name)
+        finally:
+            conn.close()
+            with _cache_populate_lock:
+                _active_cache_populates.pop(cdm_name, None)
+
+    submit_task(_worker)
+    return {"status": "started"}
+
+
+@router.post("/source-value-cache/cancel")
+def cancel_source_value_cache_populate(cdm_name: str):
+    """Cancel a running cache population for a CDM."""
+    with _cache_populate_lock:
+        task = _active_cache_populates.get(cdm_name)
+    if not task:
+        raise HTTPException(status_code=404, detail="No active cache population for this CDM")
+    task["cancelled"]["v"] = True
+    # Try to cancel the running PostgreSQL query
+    conn = task.get("conn")
+    if conn:
+        try:
+            conn.cancel()
+        except Exception:
+            pass
+    return {"status": "cancelling"}
