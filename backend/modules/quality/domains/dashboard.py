@@ -42,6 +42,9 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             cfg = get_domain_config(conn, schema, domain_name)
             if not cfg:
                 continue
+            # Skip domains without source_value (e.g. Note)
+            if not cfg.get("source_value"):
+                continue
             # Check table exists before including in UNION ALL
             table_name = cfg["table"]
             cur.execute(

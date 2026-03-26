@@ -595,6 +595,7 @@ export interface PathwaysEventCohort {
   domain: string;
   concept_ids: number[];
   include_descendants: boolean;
+  source_codes: string[];
 }
 
 // ──── Phase 3: Mapping types ────

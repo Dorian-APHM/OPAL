@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Cohort module API endpoints.
 
@@ -16,7 +14,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.cdm_helper import check_cdm_access
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -1102,8 +1100,15 @@ def characterize_active():
 class PathwaysEventCohort(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     domain: str = Field(..., min_length=1, max_length=100)
-    concept_ids: list[int] = Field(..., min_length=1)
+    concept_ids: list[int] = Field(default_factory=list)
     include_descendants: bool = False
+    source_codes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_concepts_or_sources(self):
+        if not self.concept_ids and not self.source_codes:
+            raise ValueError("At least one of concept_ids or source_codes is required")
+        return self
 
 
 class PathwaysRequest(BaseModel):
@@ -1350,6 +1355,57 @@ def get_characterization(cohort_id: int, db: Session = Depends(get_db)):
     return {
         "characterization": latest.characterization_json,
         "characterized_at": latest.characterized_at.isoformat() if latest.characterized_at else None,
+        "version": latest.version,
+    }
+
+
+@router.put("/{cohort_id}/pathways-result")
+def save_pathways_result(cohort_id: int, payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Save pathways analysis results to the latest version of a cohort."""
+    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
+    if not cohort:
+        raise HTTPException(status_code=404, detail="Cohort not found")
+
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    user_roles = user.get("roles", [])
+    if not _can_access_cohort(db, cohort, username, user_roles):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
+
+    latest = (
+        db.query(CohortVersion)
+        .filter(CohortVersion.cohort_id == cohort_id)
+        .order_by(CohortVersion.version.desc())
+        .first()
+    )
+    if not latest:
+        raise HTTPException(status_code=404, detail="No version found")
+
+    latest.pathways_json = payload.get("pathways")
+    latest.pathways_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "saved", "cohort_id": cohort_id, "version": latest.version}
+
+
+@router.get("/{cohort_id}/pathways-result")
+def get_pathways_result(cohort_id: int, db: Session = Depends(get_db)):
+    """Get saved pathways analysis results from the latest version of a cohort."""
+    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
+    if not cohort:
+        raise HTTPException(status_code=404, detail="Cohort not found")
+
+    latest = (
+        db.query(CohortVersion)
+        .filter(CohortVersion.cohort_id == cohort_id)
+        .order_by(CohortVersion.version.desc())
+        .first()
+    )
+    if not latest:
+        raise HTTPException(status_code=404, detail="No version found")
+
+    return {
+        "pathways": latest.pathways_json,
+        "pathways_at": latest.pathways_at.isoformat() if latest.pathways_at else None,
         "version": latest.version,
     }
 

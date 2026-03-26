@@ -214,12 +214,15 @@ class TestRunClinicalDomainAnalysis:
         with pytest.raises(ValueError, match="Unknown clinical domain"):
             run_clinical_domain_analysis(conn, "FakeDomain", "omop_cdm")
 
-    def test_all_configured_domains(self):
+    @patch("utils.cdm_helper._column_exists", return_value=True)
+    def test_all_configured_domains(self, mock_col_exists):
         """Verify all DOMAIN_CONFIG entries can be passed to run_clinical_domain_analysis."""
         from modules.quality.domains.clinical import run_clinical_domain_analysis
         from config import DOMAIN_CONFIG
 
-        for domain_name in DOMAIN_CONFIG:
+        for domain_name, dcfg in DOMAIN_CONFIG.items():
+            if not dcfg.get("source_value"):
+                continue  # skip domains without source_value (e.g. Note)
             responses = [
                 {"total_rows": 10, "distinct_persons": 5},
                 [], [], [],

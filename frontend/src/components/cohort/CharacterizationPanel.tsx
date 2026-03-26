@@ -43,21 +43,23 @@ interface Props {
   cdmName: string;
   criteria: CohortCriteria;
   cohortId?: number;
+  cohortKey?: string;
 }
 
-export default function CharacterizationPanel({ cdmName, criteria, cohortId }: Props) {
+export default function CharacterizationPanel({ cdmName, criteria, cohortId, cohortKey = 'draft' }: Props) {
   const { t } = useTranslation();
   const ct = useChartTheme();
   const toast = useToast();
-  const [result, setResult] = useSessionState<CharacterizationResult | null>('cohort:char:result', null);
-  const [loading, setLoading] = useSessionState('cohort:char:loading', false);
-  const [taskId, setTaskId] = useSessionState<string | null>('cohort:char:taskId', null);
-  const [progressCompleted, setProgressCompleted] = useSessionState('cohort:char:progDone', 0);
-  const [progressTotal, setProgressTotal] = useSessionState('cohort:char:progTotal', 0);
-  const [currentStep, setCurrentStep] = useSessionState('cohort:char:step', '');
+  const ck = cohortKey;
+  const [result, setResult] = useSessionState<CharacterizationResult | null>(`cohort:char:result:${ck}`, null);
+  const [loading, setLoading] = useSessionState(`cohort:char:loading:${ck}`, false);
+  const [taskId, setTaskId] = useSessionState<string | null>(`cohort:char:taskId:${ck}`, null);
+  const [progressCompleted, setProgressCompleted] = useSessionState(`cohort:char:progDone:${ck}`, 0);
+  const [progressTotal, setProgressTotal] = useSessionState(`cohort:char:progTotal:${ck}`, 0);
+  const [currentStep, setCurrentStep] = useSessionState(`cohort:char:step:${ck}`, '');
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [error, setError] = useState('');
-  const [characterizedAt, setCharacterizedAt] = useSessionState<string | null>('cohort:char:at', null);
+  const [characterizedAt, setCharacterizedAt] = useSessionState<string | null>(`cohort:char:at:${ck}`, null);
   const [visitLevel, setVisitLevel] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 

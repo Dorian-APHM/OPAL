@@ -18,6 +18,8 @@ import logging
 from collections import Counter, defaultdict
 from typing import Any
 
+from psycopg2.extensions import adapt as _pg_adapt
+
 from config import DOMAIN_CONFIG
 from modules.cohort.sql_builder import build_cohort_sql
 from utils.sql_safety import safe_identifier
@@ -121,10 +123,11 @@ def run_pathways_analysis(
             name = ec["name"]
             domain = ec["domain"]
             concept_ids = ec.get("concept_ids", [])
+            source_codes = ec.get("source_codes", [])
             include_desc = ec.get("include_descendants", False)
 
             cfg = DOMAIN_CONFIG.get(domain)
-            if not cfg or not concept_ids:
+            if not cfg:
                 _report(f"Skipped {name}")
                 continue
 
@@ -135,13 +138,16 @@ def run_pathways_analysis(
                 if cid_int <= 0:
                     continue
                 validated_ids.append(cid_int)
-            if not validated_ids:
-                _report(f"Skipped {name} (no valid concept_ids)")
+
+            if not validated_ids and not source_codes:
+                _report(f"Skipped {name} (no concept_ids or source_codes)")
                 continue
 
             table = cfg["table"]
             cid_col = cfg["concept_id"]
             date_col = cfg["date_col"]
+            source_value_col = cfg.get("source_value")
+            source_name_col = cfg.get("source_name")
             # End date column (if available)
             end_date_map = {
                 "Condition": "condition_end_date",
@@ -152,22 +158,46 @@ def run_pathways_analysis(
             end_col = end_date_map.get(domain)
             end_expr = f"COALESCE(t.{end_col}, t.{date_col})" if end_col else f"t.{date_col}"
 
-            ids_str = ",".join(str(cid) for cid in validated_ids)
+            # Build concept filter
+            concept_filter = None
+            if validated_ids:
+                ids_str = ",".join(str(cid) for cid in validated_ids)
+                if include_desc:
+                    concept_filter = f"""
+                        t.{cid_col} IN (
+                            SELECT v FROM (
+                                SELECT unnest(ARRAY[{ids_str}]) AS v
+                                UNION
+                                SELECT descendant_concept_id
+                                FROM {omop_schema}.concept_ancestor
+                                WHERE ancestor_concept_id IN ({ids_str})
+                            ) _exp
+                        )
+                    """
+                else:
+                    concept_filter = f"t.{cid_col} IN ({ids_str})"
 
-            if include_desc:
-                concept_filter = f"""
-                    t.{cid_col} IN (
-                        SELECT v FROM (
-                            SELECT unnest(ARRAY[{ids_str}]) AS v
-                            UNION
-                            SELECT descendant_concept_id
-                            FROM {omop_schema}.concept_ancestor
-                            WHERE ancestor_concept_id IN ({ids_str})
-                        ) _exp
-                    )
-                """
+            # Build source code filter
+            source_filter = None
+            if source_codes and source_value_col:
+                quoted = ", ".join(
+                    _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
+                )
+                source_parts = [f"t.{source_value_col} IN ({quoted})"]
+                if source_name_col:
+                    source_parts.append(f"t.{source_name_col} IN ({quoted})")
+                source_filter = f"({' OR '.join(source_parts)})"
+
+            # Combine filters with OR
+            if concept_filter and source_filter:
+                where_filter = f"({concept_filter} OR {source_filter})"
+            elif concept_filter:
+                where_filter = concept_filter
+            elif source_filter:
+                where_filter = source_filter
             else:
-                concept_filter = f"t.{cid_col} IN ({ids_str})"
+                _report(f"Skipped {name} (no valid filters)")
+                continue
 
             cur.execute(f"""
                 INSERT INTO _pw_events (person_id, event_name, event_start, event_end)
@@ -179,7 +209,7 @@ def run_pathways_analysis(
                 JOIN {omop_schema}.{table} t
                   ON tgt.person_id = t.person_id
                  AND t.{date_col} BETWEEN tgt.cohort_start AND tgt.cohort_end
-                WHERE {concept_filter}
+                WHERE {where_filter}
             """, {"ename": name})
             _report(f"Events: {name}")
 
