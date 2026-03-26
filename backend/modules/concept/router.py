@@ -306,7 +306,7 @@ def get_concept_source_values(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             for domain_name in DOMAIN_CONFIG:
                 cfg = get_domain_config(conn, schema, domain_name)
-                if not cfg:
+                if not cfg or not cfg.get("source_value"):
                     continue
                 table = safe_identifier(cfg["table"])
                 concept_col = safe_identifier(cfg["concept_id"])

@@ -57,6 +57,10 @@ export default function CohortPage({ selectedCdm }: Props) {
   const [criteria, setCriteria] = useSessionState<CohortCriteria>('cohort:criteria', emptyCriteria());
   const [savedCohortId, setSavedCohortId] = useSessionState<number | undefined>('cohort:savedId', undefined as number | undefined);
 
+  // Stable key for scoping panel session state per cohort
+  // Uses savedCohortId for persisted cohorts, 'draft' for unsaved
+  const cohortKey = savedCohortId ? String(savedCohortId) : 'draft';
+
   // Saved cohorts list
   const [cohorts, setCohorts] = useState<CohortSummary[]>([]);
   const [showList, setShowList] = useSessionState('cohort:showList', false);
@@ -541,6 +545,7 @@ export default function CohortPage({ selectedCdm }: Props) {
                     cdmName={selectedCdm || ''}
                     criteria={toBackendCriteria(criteria)}
                     cohortId={savedCohortId}
+                    cohortKey={cohortKey}
                   />
                 ),
               },
@@ -556,6 +561,7 @@ export default function CohortPage({ selectedCdm }: Props) {
                   <CohortComparisonPanel
                     cdmName={selectedCdm || ''}
                     cohorts={cohorts}
+                    cohortKey={cohortKey}
                   />
                 ),
               },
@@ -571,6 +577,8 @@ export default function CohortPage({ selectedCdm }: Props) {
                   <PathwaysPanel
                     cdmName={selectedCdm || ''}
                     criteria={toBackendCriteria(criteria)}
+                    cohortKey={cohortKey}
+                    cohortId={savedCohortId}
                   />
                 ),
               },
@@ -626,6 +634,7 @@ export default function CohortPage({ selectedCdm }: Props) {
             cdmName={selectedCdm}
             criteria={toBackendCriteria(criteria)}
             savedCohortId={savedCohortId}
+            cohortKey={cohortKey}
           />
         </div>
       </div>

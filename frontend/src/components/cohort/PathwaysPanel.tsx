@@ -8,7 +8,7 @@ import {
   Play, Plus, Trash2, Download, GitBranch, Settings2, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { cohortApi } from '../../api/client';
+import { cohortApi, conceptApi } from '../../api/client';
 import type {
   CohortCriteria, PathwaysResult, PathwaysEventCohort,
   PathwaysSunburstNode, OmopConcept,
@@ -17,6 +17,8 @@ import type {
 interface Props {
   cdmName: string;
   criteria: CohortCriteria;
+  cohortKey?: string;
+  cohortId?: number;
 }
 
 // ──── Sunburst SVG Component ────
@@ -217,6 +219,35 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
   const [includeDescendants, setIncludeDescendants] = useState(true);
   const [showForm, setShowForm] = useState(false);
 
+  // Source code search state
+  const [sourceSearchQuery, setSourceSearchQuery] = useState('');
+  const [sourceSearchResults, setSourceSearchResults] = useState<{ source_value: string; source_name?: string; domain: string; n_records: number; n_persons: number }[]>([]);
+  const [sourceSearchLoading, setSourceSearchLoading] = useState(false);
+  const [selectedSourceCodes, setSelectedSourceCodes] = useState<string[]>([]);
+
+  // Source code keyword search (debounced)
+  useEffect(() => {
+    if (!sourceSearchQuery || sourceSearchQuery.length < 2 || !cdmName) {
+      setSourceSearchResults([]);
+      return;
+    }
+    const abort = new AbortController();
+    const timer = setTimeout(() => {
+      setSourceSearchLoading(true);
+      conceptApi.searchSourceValue(cdmName, { q: sourceSearchQuery, domain: newDomain, limit: 20 })
+        .then(r => { if (!abort.signal.aborted) setSourceSearchResults(r.data.results); })
+        .catch(() => { if (!abort.signal.aborted) setSourceSearchResults([]); })
+        .finally(() => { if (!abort.signal.aborted) setSourceSearchLoading(false); });
+    }, 300);
+    return () => { clearTimeout(timer); abort.abort(); };
+  }, [sourceSearchQuery, newDomain, cdmName]);
+
+  const toggleSourceCode = (code: string) => {
+    setSelectedSourceCodes(prev =>
+      prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]
+    );
+  };
+
   const doSearch = useCallback(async () => {
     if (!searchQuery.trim() || !cdmName) return;
     setSearching(true);
@@ -241,12 +272,13 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
   };
 
   const saveEventCohort = () => {
-    if (!newName.trim() || selectedConcepts.length === 0) return;
+    if (!newName.trim() || (selectedConcepts.length === 0 && selectedSourceCodes.length === 0)) return;
     const ec: PathwaysEventCohort = {
       name: newName.trim(),
       domain: newDomain,
       concept_ids: selectedConcepts.map(c => c.concept_id),
       include_descendants: includeDescendants,
+      source_codes: selectedSourceCodes,
     };
     if (editingIndex !== null) {
       const updated = [...eventCohorts];
@@ -266,6 +298,9 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
     setIncludeDescendants(true);
     setSearchQuery('');
     setSearchResults([]);
+    setSourceSearchQuery('');
+    setSourceSearchResults([]);
+    setSelectedSourceCodes([]);
     setShowForm(false);
     setEditingIndex(null);
   };
@@ -286,6 +321,7 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
       concept_class_id: '',
       standard_concept: 'S',
     })));
+    setSelectedSourceCodes(ec.source_codes || []);
     setEditingIndex(idx);
     setShowForm(true);
   };
@@ -307,8 +343,9 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
               <div className="flex-1 min-w-0">
                 <span className="text-sm font-medium text-text-bright">{ec.name}</span>
                 <span className="text-xs text-text-muted ml-2">
-                  {ec.domain} · {ec.concept_ids.length} concept{ec.concept_ids.length > 1 ? 's' : ''}
-                  {ec.include_descendants ? ' + desc.' : ''}
+                  {ec.domain}
+                  {ec.concept_ids.length > 0 && <> · {ec.concept_ids.length} concept{ec.concept_ids.length > 1 ? 's' : ''}{ec.include_descendants ? ' + desc.' : ''}</>}
+                  {ec.source_codes?.length > 0 && <> · {ec.source_codes.length} source code{ec.source_codes.length > 1 ? 's' : ''}</>}
                 </span>
               </div>
               <button
@@ -413,13 +450,62 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
               {t('pathways.include_descendants', 'Include descendant concepts')}
             </label>
 
+            {/* Source code search */}
+            <div className="border-t border-border-subtle pt-3">
+              <div className="text-xs font-medium text-text-muted mb-1.5">
+                {t('pathways.source_codes', 'Source Codes')}
+              </div>
+              <input
+                className="w-full bg-surface-dark border border-border-subtle rounded px-2 py-1.5 text-sm text-text-bright placeholder-text-dim"
+                placeholder={t('pathways.search_source_codes', 'Search by source code or keyword...')}
+                value={sourceSearchQuery}
+                onChange={e => setSourceSearchQuery(e.target.value)}
+              />
+
+              {/* Selected source codes */}
+              {selectedSourceCodes.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {selectedSourceCodes.map(code => (
+                    <Tag key={code} color="green" closable onClose={() => toggleSourceCode(code)}>
+                      {code}
+                    </Tag>
+                  ))}
+                </div>
+              )}
+
+              {/* Source search results */}
+              {sourceSearchLoading ? (
+                <div className="text-xs text-text-dim text-center py-2">{t('common.searching', 'Searching...')}</div>
+              ) : sourceSearchResults.length > 0 ? (
+                <div className="max-h-36 overflow-y-auto border border-border-subtle rounded bg-surface-darker mt-1.5">
+                  {sourceSearchResults.map(r => {
+                    const isSelected = selectedSourceCodes.includes(r.source_value);
+                    return (
+                      <button
+                        key={r.source_value}
+                        className={`w-full text-left px-2 py-1.5 text-xs border-b border-border-subtle last:border-0 flex items-center justify-between gap-2 ${isSelected ? 'bg-emerald-500/10' : 'hover:bg-surface-dark'}`}
+                        onClick={() => toggleSourceCode(r.source_value)}
+                      >
+                        <span className="truncate text-text-bright">
+                          {r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}
+                        </span>
+                        <span className="shrink-0 text-text-dim">{r.n_records.toLocaleString()} rec</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : sourceSearchQuery.length >= 2 ? (
+                <div className="text-xs text-text-dim text-center py-1.5">{t('pathways.no_source_codes', 'No source codes found')}</div>
+              ) : null}
+            </div>
+
             {/* Save / Cancel */}
             <div className="flex gap-2">
               <Button
                 size="small"
                 variant="primary"
                 onClick={saveEventCohort}
-                disabled={!newName.trim() || selectedConcepts.length === 0}
+                disabled={!newName.trim() || (selectedConcepts.length === 0 && selectedSourceCodes.length === 0)}
               >
                 {editingIndex !== null ? t('common.update', 'Update') : t('common.add', 'Add')}
               </Button>
@@ -436,18 +522,19 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
 
 // ──── Main PathwaysPanel ────
 
-export default function PathwaysPanel({ cdmName, criteria }: Props) {
+export default function PathwaysPanel({ cdmName, criteria, cohortKey = 'draft', cohortId }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
 
-  // State
-  const [eventCohorts, setEventCohorts] = useSessionState<PathwaysEventCohort[]>('cohort:pw:events', []);
-  const [result, setResult] = useSessionState<PathwaysResult | null>('cohort:pw:result', null);
-  const [loading, setLoading] = useSessionState('cohort:pw:loading', false);
-  const [taskId, setTaskId] = useSessionState<string | null>('cohort:pw:taskId', null);
-  const [progressCompleted, setProgressCompleted] = useSessionState('cohort:pw:progDone', 0);
-  const [progressTotal, setProgressTotal] = useSessionState('cohort:pw:progTotal', 0);
-  const [currentStep, setCurrentStep] = useSessionState('cohort:pw:step', '');
+  // State — scoped by cohortKey so each cohort keeps its own results
+  const ck = cohortKey;
+  const [eventCohorts, setEventCohorts] = useSessionState<PathwaysEventCohort[]>(`cohort:pw:events:${ck}`, []);
+  const [result, setResult] = useSessionState<PathwaysResult | null>(`cohort:pw:result:${ck}`, null);
+  const [loading, setLoading] = useSessionState(`cohort:pw:loading:${ck}`, false);
+  const [taskId, setTaskId] = useSessionState<string | null>(`cohort:pw:taskId:${ck}`, null);
+  const [progressCompleted, setProgressCompleted] = useSessionState(`cohort:pw:progDone:${ck}`, 0);
+  const [progressTotal, setProgressTotal] = useSessionState(`cohort:pw:progTotal:${ck}`, 0);
+  const [currentStep, setCurrentStep] = useSessionState(`cohort:pw:step:${ck}`, '');
   const [error, setError] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [maxDepth, setMaxDepth] = useState(5);
@@ -485,6 +572,11 @@ export default function PathwaysPanel({ cdmName, criteria }: Props) {
           setLoading(false);
           setTaskId(null);
           stopPolling();
+
+          // Auto-save to DB if cohort is saved
+          if (cohortId) {
+            try { await cohortApi.savePathways(cohortId, data.result); } catch { /* non-blocking */ }
+          }
         } else if (data.status === 'error') {
           setError(data.error || 'Analysis failed');
           setLoading(false);
@@ -495,7 +587,24 @@ export default function PathwaysPanel({ cdmName, criteria }: Props) {
         // Network error — keep polling
       }
     }, 2000);
-  }, [stopPolling]);
+  }, [stopPolling, cohortId]);
+
+  // Load saved pathways from DB on mount (if cohort is saved and no result in memory)
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  useEffect(() => {
+    if (!cohortId || result || loading) return;
+    let cancelled = false;
+    setLoadingSaved(true);
+    cohortApi.getPathways(cohortId).then(resp => {
+      if (cancelled) return;
+      if (resp.data.pathways) {
+        setResult(resp.data.pathways);
+      }
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setLoadingSaved(false);
+    });
+    return () => { cancelled = true; };
+  }, [cohortId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resume polling on remount
   useEffect(() => {

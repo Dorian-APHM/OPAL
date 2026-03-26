@@ -8,6 +8,7 @@ Uses X-Test-Roles header (supported by conftest._FakeAuthMiddleware)
 to simulate different user roles.
 """
 import pytest
+from unittest.mock import patch
 
 ADMIN = {"X-Test-Roles": "admin"}
 CHERCHEUR = {"X-Test-Roles": "chercheur"}
@@ -43,8 +44,9 @@ class TestAdminEndpoints:
     def test_admin_access_requests_forbidden_for_chercheur(self, client):
         assert client.get("/api/admin/access-requests", headers=CHERCHEUR).status_code == 403
 
-    def test_audit_logs_allowed_for_admin(self, client):
-        resp = client.get("/api/audit/logs", headers=ADMIN)
+    def test_audit_logs_allowed_for_admin(self, client, tmp_path):
+        with patch("audit.logger.AUDIT_LOG_DIR", tmp_path):
+            resp = client.get("/api/audit/logs", headers=ADMIN)
         assert resp.status_code != 403
 
     def test_admin_forbidden_for_data_manager(self, client):
