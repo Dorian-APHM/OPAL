@@ -332,7 +332,7 @@ def build_detailed_sample_sql(
                     f"SELECT descendant_concept_id FROM {omop_schema}.concept_ancestor "
                     f"WHERE ancestor_concept_id IN ({concept_list})"
                 )
-                concept_filter = f"t.{concept_col} IN ({ancestor_subq})"
+                concept_filter = f"t.{concept_col} IN (SELECT v FROM (SELECT unnest(ARRAY[{concept_list}]) AS v UNION {ancestor_subq}) _exp)"
             else:
                 concept_filter = f"t.{concept_col} IN ({concept_list})"
 
@@ -710,7 +710,7 @@ def _build_criterion_cte(
                 f"SELECT descendant_concept_id FROM {omop_schema}.concept_ancestor "
                 f"WHERE ancestor_concept_id IN ({concept_list})"
             )
-            concept_filter = f"t.{concept_col} IN ({ancestor_subq})"
+            concept_filter = f"t.{concept_col} IN (SELECT v FROM (SELECT unnest(ARRAY[{concept_list}]) AS v UNION {ancestor_subq}) _exp)"
         else:
             concept_list = ", ".join(
                 str(int(c["concept_id"] if isinstance(c, dict) else c)) for c in concepts
