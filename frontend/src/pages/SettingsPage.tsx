@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cdmApi } from '../api/client';
-import { Card, Button, Input, NumberInput, Alert, useToast } from '../components/ui';
+import { cdmApi, conceptApi } from '../api/client';
+import { Card, Button, Input, NumberInput, Alert, Tag, useToast } from '../components/ui';
+import { Database, RefreshCw, Trash2, Check, X, Loader } from 'lucide-react';
 
 interface Props {
   selectedCdm: string | null;
@@ -99,6 +100,177 @@ export default function SettingsPage({ selectedCdm }: Props) {
           </Button>
         </div>
       </Card>
+
+      {/* Source Value Cache */}
+      <SourceValueCacheCard cdmName={selectedCdm} />
     </div>
+  );
+}
+
+
+// ──── Source Value Cache Management ────
+
+interface CacheDomainStatus {
+  domain: string;
+  status: string;
+  row_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+function SourceValueCacheCard({ cdmName }: { cdmName: string }) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [domains, setDomains] = useState<CacheDomainStatus[]>([]);
+  const [populating, setPopulating] = useState(false);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const resp = await conceptApi.sourceValueCacheStatus(cdmName);
+      setDomains(resp.data.domains);
+      const isPopulating = resp.data.populating;
+      setPopulating(isPopulating);
+      return isPopulating;
+    } catch {
+      return false;
+    }
+  }, [cdmName]);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollingRef.current = setInterval(async () => {
+      const stillRunning = await loadStatus();
+      if (!stillRunning) {
+        stopPolling();
+        toast.success(t('settings.cache_populated', 'Source value cache populated'));
+      }
+    }, 3000);
+  }, [loadStatus, stopPolling, toast, t]);
+
+  // Load on mount + auto-start polling if already running
+  useEffect(() => {
+    loadStatus().then(isPopulating => {
+      if (isPopulating) startPolling();
+    });
+    return stopPolling;
+  }, [loadStatus, startPolling, stopPolling]);
+
+  const handlePopulate = async () => {
+    try {
+      await conceptApi.populateSourceValueCacheUrl_post(cdmName);
+      setPopulating(true);
+      startPolling();
+    } catch {
+      toast.error('Failed to start cache population');
+    }
+  };
+
+  const handleCancel = async () => {
+    try {
+      await conceptApi.cancelSourceValueCachePopulate(cdmName);
+      toast.info(t('settings.cache_cancelling', 'Cancelling...'));
+    } catch { /* ignore */ }
+  };
+
+  const handleClear = async () => {
+    try {
+      await conceptApi.clearSourceValueCache(cdmName);
+      toast.success(t('settings.cache_cleared', 'Cache cleared'));
+      loadStatus();
+    } catch {
+      toast.error('Failed to clear cache');
+    }
+  };
+
+  const totalRows = domains.reduce((s, d) => s + d.row_count, 0);
+  const doneDomains = domains.filter(d => d.status === 'done').length;
+  const runningDomain = domains.find(d => d.status === 'running');
+
+  return (
+    <Card className="max-w-lg mt-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-emerald-accent" />
+          <span className="font-semibold text-text-bright text-sm">
+            {t('settings.source_value_cache', 'Source Value Cache')}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {domains.length > 0 && !populating && (
+            <Button size="small" onClick={handleClear}>
+              <Trash2 className="h-3 w-3 mr-1" />
+              {t('common.clear', 'Clear')}
+            </Button>
+          )}
+          {populating ? (
+            <Button size="small" variant="danger" onClick={handleCancel}>
+              <X className="h-3 w-3 mr-1" />
+              {t('common.cancel', 'Cancel')}
+            </Button>
+          ) : (
+            <Button size="small" variant="primary" onClick={handlePopulate}>
+              <RefreshCw className="h-3 w-3 mr-1" />
+              {domains.length > 0
+                ? t('settings.refresh_cache', 'Refresh')
+                : t('settings.build_cache', 'Build Cache')
+              }
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {populating && (
+        <div className="mb-3">
+          <div className="flex justify-between text-xs text-text-muted mb-1">
+            <span>{runningDomain ? runningDomain.domain : t('common.starting', 'Starting...')}</span>
+            <span>{doneDomains}/{domains.length || '?'}</span>
+          </div>
+          <div className="w-full bg-surface-dark rounded-full h-1.5">
+            <div
+              className="bg-emerald-accent h-1.5 rounded-full transition-all"
+              style={{ width: domains.length ? `${(doneDomains / domains.length) * 100}%` : '0%' }}
+            />
+          </div>
+        </div>
+      )}
+
+      {domains.length === 0 && !populating ? (
+        <p className="text-xs text-text-muted">
+          {t('settings.no_cache', 'No cache built yet. Build the cache to speed up source value searches.')}
+        </p>
+      ) : domains.length > 0 ? (
+        <div>
+          <div className="text-xs text-text-muted mb-2">
+            {doneDomains}/{domains.length} domains · {totalRows.toLocaleString()} rows cached
+          </div>
+          <div className="space-y-1 max-h-48 overflow-auto">
+            {domains.map(d => (
+              <div key={d.domain} className="flex items-center justify-between text-xs px-2 py-1 bg-surface-dark rounded">
+                <span className="text-text-bright">{d.domain}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-text-dim">{d.row_count.toLocaleString()}</span>
+                  {d.status === 'done' ? (
+                    <Check className="h-3 w-3 text-green-400" />
+                  ) : d.status === 'error' ? (
+                    <X className="h-3 w-3 text-red-400" title={d.error_message || ''} />
+                  ) : d.status === 'running' ? (
+                    <Loader className="h-3 w-3 text-blue-400 animate-spin" />
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </Card>
   );
 }
