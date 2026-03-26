@@ -316,6 +316,7 @@ from modules.cohort_sharing_router import router as cohort_sharing_router
 from modules.groups_router import router as groups_router
 from modules.admin_router import router as admin_router
 from modules.lineage.router import router as lineage_router
+from modules.recent_router import router as recent_router
 
 app.include_router(cdm_router)
 app.include_router(quality_router)
@@ -337,6 +338,7 @@ app.include_router(cohort_sharing_router)
 app.include_router(groups_router)
 app.include_router(admin_router)
 app.include_router(lineage_router)
+app.include_router(recent_router)
 
 
 # i18n endpoint

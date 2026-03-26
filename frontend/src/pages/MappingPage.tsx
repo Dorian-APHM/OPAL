@@ -13,7 +13,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, LineChart, Line, Legend,
+  ResponsiveContainer, LineChart, Line, Legend, Rectangle,
 } from 'recharts';
 import { mappingApi, authDownload } from '../api/client';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -167,10 +167,10 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
             <XAxis dataKey="domain" stroke={ct.axis} />
             <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
-            <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
+            <RechartsTooltip cursor={false} formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
             <Legend />
-            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill={ct.blue} />
-            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill={ct.emerald} />
+            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill={ct.blue} activeBar={(p: any) => <Rectangle {...p} x={p.x - 3} width={p.width + 6} />} />
+            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill={ct.emerald} activeBar={(p: any) => <Rectangle {...p} x={p.x - 3} width={p.width + 6} />} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -182,8 +182,8 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
             <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
             <XAxis dataKey="domain" stroke={ct.axis} />
             <YAxis stroke={ct.axis} />
-            <RechartsTooltip formatter={(v: number) => v.toLocaleString()} contentStyle={ct.tooltipStyle} />
-            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill={ct.red} />
+            <RechartsTooltip cursor={false} formatter={(v: number) => v.toLocaleString()} contentStyle={ct.tooltipStyle} />
+            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill={ct.red} activeBar={(p: any) => <Rectangle {...p} x={p.x - 3} width={p.width + 6} />} />
           </BarChart>
         </ResponsiveContainer>
       </Card>
@@ -241,11 +241,11 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
                 <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                 <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
                 <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} stroke={ct.axis} />
-                <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
+                <RechartsTooltip cursor={false} formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
                 <Legend />
-                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill={ct.emerald} stackId="a" />
-                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill={ct.orange} stackId="a" />
-                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill={ct.red} stackId="a" />
+                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill={ct.emerald} stackId="a" activeBar={(p: any) => <Rectangle {...p} y={p.y - 5} height={p.height + 10} />} />
+                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill={ct.orange} stackId="a" activeBar={(p: any) => <Rectangle {...p} y={p.y - 5} height={p.height + 10} />} />
+                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill={ct.red} stackId="a" activeBar={(p: any) => <Rectangle {...p} y={p.y - 5} height={p.height + 10} />} />
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3">
