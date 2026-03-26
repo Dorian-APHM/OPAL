@@ -99,7 +99,7 @@ def test_update_wrong_user(client, concept_set_id):
     resp = client.put(
         f"/api/concept-sets/{concept_set_id}",
         json={"name": "Hacked"},
-        headers={"X-Test-Username": "other_user"},
+        headers={"X-Test-Username": "other_user", "X-Test-Roles": "chercheur"},
     )
     assert resp.status_code == 403
 
@@ -121,7 +121,7 @@ def test_delete_nonexistent(client):
 def test_delete_wrong_user(client, concept_set_id):
     resp = client.delete(
         f"/api/concept-sets/{concept_set_id}",
-        headers={"X-Test-Username": "other_user"},
+        headers={"X-Test-Username": "other_user", "X-Test-Roles": "chercheur"},
     )
     assert resp.status_code == 403
 

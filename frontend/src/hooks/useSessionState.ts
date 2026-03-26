@@ -13,14 +13,26 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 const store = new Map<string, unknown>();
 
 export function useSessionState<T>(key: string, initialValue: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const prevKeyRef = useRef(key);
+  const initialValueRef = useRef(initialValue);
+
   const [state, setState] = useState<T>(() =>
     store.has(key) ? (store.get(key) as T) : initialValue
   );
 
+  // When the key changes, save current state under old key, then load new key's value
+  if (prevKeyRef.current !== key) {
+    // Persist current state under the OLD key before switching
+    store.set(prevKeyRef.current, state);
+    prevKeyRef.current = key;
+    initialValueRef.current = initialValue;
+    // Read value for the NEW key
+    const newValue = store.has(key) ? (store.get(key) as T) : initialValue;
+    setState(newValue);
+  }
+
   // Keep store in sync
-  const stateRef = useRef(state);
   useEffect(() => {
-    stateRef.current = state;
     store.set(key, state);
   }, [key, state]);
 

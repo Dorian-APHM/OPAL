@@ -96,6 +96,8 @@ class CohortVersion(Base):
     patient_count = Column(Integer, nullable=True)
     characterization_json = Column(JSON, nullable=True)
     characterized_at = Column(DateTime, nullable=True)
+    pathways_json = Column(JSON, nullable=True)
+    pathways_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
 
