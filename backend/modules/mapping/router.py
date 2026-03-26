@@ -291,6 +291,51 @@ def list_unmapped(
     if domain not in DOMAIN_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown domain: {domain}")
 
+    # ── Try cache first ──
+    from db.models import SourceValueCache
+    from sqlalchemy import or_, func as sa_func
+
+    cache_exists = db.query(SourceValueCache.id).filter(
+        SourceValueCache.cdm_name == cdm_name,
+        SourceValueCache.domain == domain,
+    ).first()
+
+    if cache_exists:
+        query = db.query(
+            SourceValueCache.source_value,
+            SourceValueCache.source_name,
+            sa_func.sum(SourceValueCache.n_records).label("n_records"),
+            sa_func.sum(SourceValueCache.n_persons).label("n_persons"),
+        ).filter(
+            SourceValueCache.cdm_name == cdm_name,
+            SourceValueCache.domain == domain,
+        )
+        if not include_mapped:
+            query = query.filter(
+                or_(SourceValueCache.mapped_concept_id == 0, SourceValueCache.mapped_concept_id.is_(None))
+            )
+        if search:
+            query = query.filter(
+                or_(
+                    SourceValueCache.source_value.ilike(f"%{search}%"),
+                    SourceValueCache.source_name.ilike(f"%{search}%"),
+                )
+            )
+        query = query.group_by(SourceValueCache.source_value, SourceValueCache.source_name)
+
+        total_q = query.subquery()
+        total = db.query(sa_func.count()).select_from(total_q).scalar() or 0
+
+        offset = (page - 1) * page_size
+        rows_q = query.order_by(sa_func.sum(SourceValueCache.n_records).desc()).offset(offset).limit(page_size).all()
+        rows = [
+            {"source_value": r.source_value, "source_name": r.source_name or "",
+             "n_records": int(r.n_records), "n_persons": int(r.n_persons)}
+            for r in rows_q
+        ]
+        return {"items": rows, "total": total, "page": page, "page_size": page_size, "cached": True}
+
+    # ── Fallback: direct CDM query ──
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_schema(db, cdm)
     cfg = get_domain_config(conn, schema, domain)
