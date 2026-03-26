@@ -476,6 +476,20 @@ export const ohdsiApi = {
   fileUrl: (path: string) => `/api/ohdsi/files/${path}`,
 };
 
+// Recent activity endpoint
+export const recentApi = {
+  list: (cdmName: string) =>
+    api.get<{
+      items: {
+        type: 'cohort' | 'mapping';
+        label: string;
+        timestamp: string;
+        route: string;
+        nav_state: Record<string, unknown> | null;
+      }[];
+    }>(`/recent/${cdmName}`),
+};
+
 // Audit endpoints (admin only)
 export const auditApi = {
   logs: (params: {
