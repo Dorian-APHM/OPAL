@@ -157,9 +157,13 @@ def run_pathways_analysis(
             if include_desc:
                 concept_filter = f"""
                     t.{cid_col} IN (
-                        SELECT descendant_concept_id
-                        FROM {omop_schema}.concept_ancestor
-                        WHERE ancestor_concept_id IN ({ids_str})
+                        SELECT v FROM (
+                            SELECT unnest(ARRAY[{ids_str}]) AS v
+                            UNION
+                            SELECT descendant_concept_id
+                            FROM {omop_schema}.concept_ancestor
+                            WHERE ancestor_concept_id IN ({ids_str})
+                        ) _exp
                     )
                 """
             else:
