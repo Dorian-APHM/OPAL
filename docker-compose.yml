@@ -1,6 +1,10 @@
 services:
   opal-backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        HTTP_PROXY: http://${HOST_IP:-10.64.32.229}:3128
+        HTTPS_PROXY: http://${HOST_IP:-10.64.32.229}:3128
     container_name: opal-backend
     ports:
       - "8000:8000"
@@ -50,7 +54,11 @@ services:
     restart: unless-stopped
 
   opal-frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        HTTP_PROXY: http://${HOST_IP:-10.64.32.229}:3128
+        HTTPS_PROXY: http://${HOST_IP:-10.64.32.229}:3128
     container_name: opal-frontend
     ports:
       - "3000:80"
