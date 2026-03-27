@@ -4,9 +4,9 @@ import { useTranslation } from 'react-i18next';
 import {
   Users, Star, Database, Activity, ArrowRight, Trash2,
   LayoutDashboard, Clock, Heart, Code, FolderOpen,
-  BookOpen, GitMerge, FileText, Layers, CheckCircle, XCircle, TrendingUp,
+  BookOpen, GitMerge, FileText, Layers, TrendingUp,
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, Rectangle } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card, Button, Tag, Empty, Tooltip as UiTooltip, FadeIn, CountUp, DashboardSkeleton, useToast } from '../components/ui';
 import { qualityApi, favoritesApi, recentApi } from '../api/client';
 import { useAuth } from '../auth/KeycloakContext';
@@ -52,20 +52,53 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(hrs / 24)}d`;
 }
 
-function barColor(pct: number) {
-  // Vivid gradient: 0% → #FF0040 (red), 50% → #FF9500 (orange), 100% → #007A33 (dark green)
-  if (pct <= 50) {
-    const t = pct / 50;
-    const r = 255;
-    const g = Math.round(t * 149);
-    const b = Math.round(64 - t * 64);
-    return `rgb(${r},${g},${b})`;
+function pctColor(pct: number): [number, number, number] {
+  // Red stays red longer (0-40%), yellow narrow band (40-60%), green from 60%+
+  if (pct <= 40) {
+    // Pure red → slight orange
+    const t = pct / 40;
+    return [
+      239,
+      Math.round(68 + t * 60),   // 68 → 128
+      Math.round(68 - t * 40),   // 68 → 28
+    ];
   }
-  const t = (pct - 50) / 50;
-  const r = Math.round(255 - t * 255);
-  const g = Math.round(149 + t * 51);
-  const b = Math.round(t * 20);
-  return `rgb(${r},${g},${b})`;
+  if (pct <= 60) {
+    // Orange → yellow
+    const t = (pct - 40) / 20;
+    return [
+      Math.round(239 - t * 5),   // 239 → 234
+      Math.round(128 + t * 51),  // 128 → 179
+      Math.round(28 - t * 20),   // 28 → 8
+    ];
+  }
+  // Yellow → green
+  const t = (pct - 60) / 40;
+  return [
+    Math.round(234 - t * 200),   // 234 → 34
+    Math.round(179 + t * 18),    // 179 → 197
+    Math.round(8 + t * 86),      // 8 → 94
+  ];
+}
+
+function BarGradientShape(props: any) {
+  const { x, y, width, height, pct } = props;
+  const c = pctColor(pct);
+  // Opacity scales with pct: low pct = faint, high pct = vivid
+  const opStart = 0.3 + (pct / 100) * 0.3;  // 0.3 → 0.6
+  const opEnd = 0.5 + (pct / 100) * 0.4;    // 0.5 → 0.9
+  const id = `bar-g-${Math.round(x)}-${Math.round(y)}`;
+  return (
+    <g>
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={`rgb(${c[0]},${c[1]},${c[2]})`} stopOpacity={opStart} />
+          <stop offset="100%" stopColor={`rgb(${c[0]},${c[1]},${c[2]})`} stopOpacity={opEnd} />
+        </linearGradient>
+      </defs>
+      <rect x={x} y={y} width={width} height={height} rx={6} ry={6} fill={`url(#${id})`} />
+    </g>
+  );
 }
 
 // ── KPI Card ──
@@ -259,50 +292,67 @@ export default function HomePage({ selectedCdm }: Props) {
                       />
                       <Bar
                         dataKey="pct"
-                        radius={[0, 6, 6, 0]}
                         barSize={18}
+                        shape={(props: any) => <BarGradientShape {...props} pct={props.pct ?? props.payload?.pct ?? 0} />}
                         activeBar={(props: any) => {
                           const grow = 10;
-                          return (
-                            <Rectangle
-                              {...props}
-                              y={props.y - grow / 2}
-                              height={props.height + grow}
-                              radius={[0, 6, 6, 0]}
-                            />
-                          );
+                          return <BarGradientShape {...props} y={props.y - grow / 2} height={props.height + grow} pct={props.pct ?? props.payload?.pct ?? 0} />;
                         }}
-                      >
-                        {mappingChartData.map((entry: any) => (
-                          <Cell key={entry.name} fill={barColor(entry.pct)} />
-                        ))}
-                      </Bar>
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 )}
               </Card>
 
-              {/* Mapping stats */}
-              {kpis && (
-                <div className="flex flex-col gap-3">
-                  <KpiCard
-                    icon={<GitMerge className="h-4 w-4 text-emerald-accent" />}
-                    label={t('dashboard.mapping_rate', 'Mapping Rate')}
-                    value={`${kpis.mappingRate}%`}
-                    sub={t('dashboard.terms_mapped', 'terms mapped')}
-                  />
-                  <KpiCard
-                    icon={<CheckCircle className="h-4 w-4 text-emerald-accent" />}
-                    label={t('dashboard.mapped_terms', 'Mapped Terms')}
-                    value={<CountUp end={kpis.mappedTerms} format={(n: number) => n.toLocaleString()} />}
-                  />
-                  <KpiCard
-                    icon={<XCircle className="h-4 w-4 text-red-400" />}
-                    label={t('dashboard.unmapped_terms', 'Unmapped Terms')}
-                    value={<CountUp end={kpis.unmappedTerms} format={(n: number) => n.toLocaleString()} />}
-                  />
-                </div>
-              )}
+              {/* Domain Overview */}
+              <Card
+                size="small"
+                className="flex flex-col overflow-hidden"
+                bodyClassName="!p-0 flex-1 overflow-auto"
+                title={
+                  <span className="inline-flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-blue-400" />
+                    {t('dashboard.domain_overview', 'Domain Overview')}
+                    <span className="text-[10px] text-text-dim font-normal">{t('dashboard.sorted_by_records', 'Sorted by records desc')}</span>
+                  </span>
+                }
+              >
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border-subtle text-text-muted">
+                      <th className="text-left px-2.5 py-1.5 font-medium">{t('dashboard.domain', 'Domain')}</th>
+                      <th className="text-right px-2.5 py-1.5 font-medium">{t('dashboard.records', 'Records')}</th>
+                      <th className="text-right px-2.5 py-1.5 font-medium">{t('dashboard.persons', 'Persons')}</th>
+                      <th className="text-right px-2.5 py-1.5 font-medium">{t('dashboard.mapped_pct', 'Mapped %')}</th>
+                      <th className="text-center px-2.5 py-1.5 font-medium">{t('dashboard.status', 'Status')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...domains]
+                      .filter((d: any) => d.total_records > 0)
+                      .sort((a: any, b: any) => (b.total_records || 0) - (a.total_records || 0))
+                      .map((d: any) => {
+                        const pct = Math.round(d.pct_terms_mapped ?? 0);
+                        const status = pct >= 80 ? 'OK' : pct >= 50 ? 'WARN' : 'CRIT';
+                        const statusColor = status === 'OK' ? 'text-emerald-400' : status === 'WARN' ? 'text-yellow-400' : 'text-red-400';
+                        const statusBg = status === 'OK' ? 'bg-emerald-400/10' : status === 'WARN' ? 'bg-yellow-400/10' : 'bg-red-400/10';
+                        return (
+                          <tr key={d.domain} className="border-b border-border-subtle/50 hover:bg-surface-dark/50 transition-colors">
+                            <td className="px-2.5 py-1.5 text-text-bright font-medium">{d.domain}</td>
+                            <td className="px-2.5 py-1.5 text-right text-text-muted tabular-nums">{(d.total_records || 0).toLocaleString()}</td>
+                            <td className="px-2.5 py-1.5 text-right text-text-muted tabular-nums">{(d.distinct_persons || 0).toLocaleString()}</td>
+                            <td className="px-2.5 py-1.5 text-right tabular-nums" style={{ color: `rgb(${pctColor(pct).join(',')})` }}>{pct}%</td>
+                            <td className="px-2.5 py-1.5 text-center">
+                              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${statusColor} ${statusBg}`}>
+                                {status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </Card>
             </div>
           </FadeIn>
 
