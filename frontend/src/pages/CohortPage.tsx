@@ -4,17 +4,21 @@ import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
   Star, Share2, Globe, Users, UserPlus, X, GitBranch,
+  Hammer, FlaskConical, ChevronDown, ChevronUp, Play, Filter,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
 import {
   Card, Button, Input, TextArea, Table, Tabs, Tag, Modal, Confirm,
-  Empty, Alert, Spinner, Switch, Select,
+  Empty, Alert, Spinner, Switch, Select, Statistic, Tooltip,
 } from '../components/ui';
 import { useToast } from '../components/ui';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+  ResponsiveContainer, Cell,
+} from 'recharts';
 import CriteriaPanel from '../components/cohort/CriteriaPanel';
 import QueryCanvas from '../components/cohort/QueryCanvas';
-import ResultsPanel from '../components/cohort/ResultsPanel';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
 import PathwaysPanel from '../components/cohort/PathwaysPanel';
@@ -22,13 +26,13 @@ import PatientJourney from '../components/cohort/PatientJourney';
 import ConceptSetPage from './ConceptSetPage';
 import IncidencePage from './IncidencePage';
 import EstimationPage from './EstimationPage';
-import { cohortApi, cohortSharingApi, usersApi, groupApi, favoritesApi } from '../api/client';
+import { cohortApi, cohortSharingApi, usersApi, groupApi, favoritesApi, authDownload } from '../api/client';
 import SqlEditor from '../components/SqlEditor';
 import { useNotifDots } from '../hooks/useNotifDots';
 import { useSessionState } from '../hooks/useSessionState';
 import type {
   CohortCriterion,
-  CohortCriteria, CohortSummary, CohortShareInfo,
+  CohortCriteria, CohortSummary, CohortShareInfo, AttritionStep,
 } from '../types';
 
 function emptyCriteria(): CohortCriteria {
@@ -141,6 +145,7 @@ export default function CohortPage({ selectedCdm }: Props) {
   }, [selectedCdm]);
 
   const [addMode, setAddMode] = useSessionState<'inclusion' | 'exclusion'>('cohort:addMode', 'inclusion');
+  const [criteriaPanelOpen, setCriteriaPanelOpen] = useSessionState('cohort:criteriaPanelOpen', false);
 
   const handleAddCriterion = (criterion: CohortCriterion) => {
     setCriteria(prev => ({
@@ -332,8 +337,23 @@ export default function CohortPage({ selectedCdm }: Props) {
     }
   };
 
-  // Active tab (builder vs characterization)
-  const [activeTab, setActiveTab] = useState<string>('builder');
+  // Main section tab (Cohort Builder vs Analyse)
+  const [mainTab, setMainTab] = useState<string>('cohort-builder');
+  // Sub-tab within each main section
+  const [builderSubTab, setBuilderSubTab] = useState<string>('builder');
+  const [analyseSubTab, setAnalyseSubTab] = useState<string>('comparison');
+
+  // Legacy compatibility: activeTab derived from current state
+  const activeTab = mainTab === 'cohort-builder' ? builderSubTab : analyseSubTab;
+  const setActiveTab = (key: string) => {
+    if (['builder', 'characterization', 'sql', 'concept-sets'].includes(key)) {
+      setMainTab('cohort-builder');
+      setBuilderSubTab(key);
+    } else {
+      setMainTab('analyse');
+      setAnalyseSubTab(key);
+    }
+  };
 
   // Detailed sample state
   const [samplePatients, setSamplePatients] = useState<Record<string, any>[]>([]);
@@ -342,6 +362,51 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   // Patient journey state
   const [journeyPersonId, setJourneyPersonId] = useState<number | null>(null);
+
+  // Results panel state (inlined from ResultsPanel)
+  const [patientCount, setPatientCount] = useSessionState<number | null>(`cohort:results:count:${cohortKey}`, null);
+  const [countLoading, setCountLoading] = useState(false);
+  const [attrition, setAttrition] = useSessionState<AttritionStep[]>(`cohort:results:attrition:${cohortKey}`, []);
+  const [attritionLoading, setAttritionLoading] = useState(false);
+  const [generatedSql, setGeneratedSql] = useSessionState<string>(`cohort:results:sql:${cohortKey}`, '');
+  const [resultsError, setResultsError] = useState('');
+
+  const hasCriteria = criteria.inclusion.criteria.length > 0 || criteria.demographics?.age || criteria.demographics?.gender;
+  const anyResultsLoading = countLoading || attritionLoading;
+
+  const runCount = async () => {
+    if (!selectedCdm || !hasCriteria) return;
+    setCountLoading(true);
+    setResultsError('');
+    try {
+      const resp = await cohortApi.count(selectedCdm, toBackendCriteria(criteria));
+      setPatientCount(resp.data.patient_count);
+      setGeneratedSql(resp.data.sql);
+    } catch (e: any) {
+      setResultsError(e.response?.data?.detail || 'Count failed');
+    } finally {
+      setCountLoading(false);
+    }
+  };
+
+  const runAttrition = async () => {
+    if (!selectedCdm || !hasCriteria) return;
+    setAttritionLoading(true);
+    setResultsError('');
+    try {
+      const resp = await cohortApi.attrition(selectedCdm, toBackendCriteria(criteria));
+      setAttrition(resp.data.steps);
+    } catch (e: any) {
+      setResultsError(e.response?.data?.detail || 'Attrition failed');
+    } finally {
+      setAttritionLoading(false);
+    }
+  };
+
+  const attritionChartData = attrition.map(s => ({
+    ...s,
+    fill: s.label.startsWith('-') ? '#ff4d4f' : '#10B981',
+  }));
 
   const runDetailedSample = async () => {
     if (!selectedCdm) return;
@@ -365,38 +430,31 @@ export default function CohortPage({ selectedCdm }: Props) {
   }
 
   return (
-    <div className="min-h-[calc(100vh-60px)] lg:h-[calc(100vh-60px)] flex flex-col">
-      {/* Header */}
-      <Card size="small" className="mb-2" hoverable={false}>
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="min-h-[calc(100vh-60px)] flex flex-col">
+      {/* ── Top bar: cohort info + actions + export ── */}
+      <div className="flex items-start gap-4 my-4 px-12">
+        {/* Name & Description stacked */}
+        <div className="flex flex-col gap-1.5 w-1/3">
           <Input
-            placeholder={t('cohort.cohort_name_placeholder', 'Cohort name (required)...')}
+            placeholder={t('cohort.cohort_name_placeholder', 'Cohort name...')}
             value={cohortName}
             onChange={e => { setCohortName(e.target.value); setNameError(''); }}
-            className="w-full sm:!w-[250px]"
             required
             error={nameError}
           />
-          <Input
-            placeholder={t('cohort.description', 'Description (optional)')}
+          <TextArea
+            placeholder={t('cohort.description', 'Description')}
             value={cohortDesc}
             onChange={e => setCohortDesc(e.target.value)}
-            className="flex-1 min-w-[150px]"
+            rows={2}
           />
-          <div className="flex items-center gap-2">
-          <Button icon={<Plus className="h-3.5 w-3.5" />} size="small" onClick={handleNew}>
+        </div>
+        {/* Actions stacked */}
+        <div className="flex flex-col gap-1">
+          <Button icon={<Plus className="h-3 w-3" />} size="small" onClick={handleNew} className="w-full hover:-translate-y-0.5">
             {t('cohort.new', 'New')}
           </Button>
-          <Button
-            icon={<Save className="h-3.5 w-3.5" />}
-            variant="primary"
-            size="small"
-            onClick={handleSave}
-            loading={saving}
-          >
-            {t('common.save', 'Save')}
-          </Button>
-          <Button icon={<FolderOpen className="h-3.5 w-3.5" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }}>
+          <Button icon={<FolderOpen className="h-3 w-3" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }} className="w-full hover:-translate-y-0.5">
             <span className="inline-flex items-center gap-1.5">
               {t('cohort.load', 'Load')} ({cohorts.length})
               {cohortNotifCount > 0 && (
@@ -404,239 +462,419 @@ export default function CohortPage({ selectedCdm }: Props) {
               )}
             </span>
           </Button>
+          <Button icon={<Save className="h-3 w-3" />} variant="primary" size="small" onClick={handleSave} loading={saving} className="w-full">
+            {t('common.save', 'Save')}
+          </Button>
+        </div>
+        {/* Export buttons (was in ResultsPanel) */}
+        {savedCohortId && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            <Button
+              size="small"
+              variant="primary"
+              icon={<Download className="h-3 w-3" />}
+              onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
+            >
+              {criteria.inclusion.sameVisit ? 'CSV (Patient + Visit IDs)' : 'CSV (Patient IDs)'}
+            </Button>
+            <Button
+              size="small"
+              icon={<Download className="h-3 w-3" />}
+              onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
+            >
+              SQL
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Navbar: Cohort Builder (hover → sub-tabs) | Analyse (hover → sub-tabs) ── */}
+      <div className="flex items-center border-b border-glass-border mb-2 px-1">
+        {/* Cohort Builder with dropdown */}
+        <div className="relative group">
+          <button
+            onClick={() => { setMainTab('cohort-builder'); setBuilderSubTab('builder'); }}
+            className={`
+              relative flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold transition-colors duration-200
+              bg-transparent border-none cursor-pointer
+              ${mainTab === 'cohort-builder' ? 'text-emerald-accent' : 'text-text-dim hover:text-emerald-accent'}
+            `}
+          >
+            <Hammer className="h-3.5 w-3.5" />
+            {t('cohort.cohort_builder', 'Cohort Builder')}
+            {mainTab === 'cohort-builder' && (
+              <span className="text-xs font-normal text-emerald-accent/70">
+                · {{ builder: t('cohort.query_builder', 'Query Builder'), characterization: 'Table 1', sql: 'SQL', 'concept-sets': t('app.concept_sets', 'Concept Sets') }[builderSubTab]}
+              </span>
+            )}
+            <ChevronDown className="h-3 w-3 opacity-50" />
+            {mainTab === 'cohort-builder' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-accent shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
+            )}
+          </button>
+          {/* Dropdown on hover */}
+          <div className="absolute left-0 top-full z-50 hidden group-hover:flex flex-col min-w-[180px] py-1 rounded-lg border border-glass-border bg-[#1a1f2e] shadow-xl">
+            {[
+              { key: 'builder', label: t('cohort.query_builder', 'Query Builder') },
+              { key: 'characterization', label: 'Table 1', icon: <Table2 className="h-3.5 w-3.5" /> },
+              { key: 'sql', label: 'SQL', icon: <Code className="h-3.5 w-3.5" /> },
+              { key: 'concept-sets', label: t('app.concept_sets', 'Concept Sets'), icon: <AppWindow className="h-3.5 w-3.5" /> },
+            ].map(item => (
+              <button
+                key={item.key}
+                onClick={() => { setMainTab('cohort-builder'); setBuilderSubTab(item.key); }}
+                className={`
+                  flex items-center gap-2 px-4 py-2 text-sm text-left transition-colors
+                  bg-transparent border-none cursor-pointer w-full
+                  ${mainTab === 'cohort-builder' && builderSubTab === item.key
+                    ? 'text-emerald-accent bg-emerald-accent/10'
+                    : 'text-text-muted hover:text-emerald-accent hover:bg-surface-dark'}
+                `}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            ))}
           </div>
         </div>
-      </Card>
 
-      {/* Three-panel layout */}
-      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-2 flex-1">
-        {/* Left: Criteria Panel */}
-        <div className="lg:col-span-2 h-full overflow-auto flex flex-col gap-1">
-          {/* Inclusion / Exclusion toggle */}
-          <div className="flex rounded-lg overflow-hidden border border-glass-border shrink-0">
-            <button
-              className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none cursor-pointer ${
-                addMode === 'inclusion'
-                  ? 'bg-emerald-accent/15 text-emerald-accent'
-                  : 'bg-surface-dark text-text-dim hover:text-text-muted'
-              }`}
-              onClick={() => setAddMode('inclusion')}
-            >
-              + {t('cohort.inclusion', 'Inclusion')}
-            </button>
-            <button
-              className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none border-l border-glass-border cursor-pointer ${
-                addMode === 'exclusion'
-                  ? 'bg-red-500/15 text-red-400'
-                  : 'bg-surface-dark text-text-dim hover:text-text-muted'
-              }`}
-              onClick={() => setAddMode('exclusion')}
-            >
-              - {t('cohort.exclusion', 'Exclusion')}
-            </button>
+        {/* Analyse with dropdown */}
+        <div className="relative group">
+          <button
+            onClick={() => { setMainTab('analyse'); setAnalyseSubTab('comparison'); }}
+            className={`
+              relative flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold transition-colors duration-200
+              bg-transparent border-none cursor-pointer
+              ${mainTab === 'analyse' ? 'text-emerald-accent' : 'text-text-dim hover:text-emerald-accent'}
+            `}
+          >
+            <FlaskConical className="h-3.5 w-3.5" />
+            {t('cohort.analyse', 'Analyse')}
+            {mainTab === 'analyse' && (
+              <span className="text-xs font-normal text-emerald-accent/70">
+                · {{ comparison: t('cohort.compare', 'Compare'), pathways: t('cohort.pathways', 'Pathways'), incidence: t('app.incidence', 'Incidence'), estimation: t('app.estimation', 'Estimation') }[analyseSubTab]}
+              </span>
+            )}
+            <ChevronDown className="h-3 w-3 opacity-50" />
+            {mainTab === 'analyse' && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-accent shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
+            )}
+          </button>
+          {/* Dropdown on hover */}
+          <div className="absolute left-0 top-full z-50 hidden group-hover:flex flex-col min-w-[180px] py-1 rounded-lg border border-glass-border bg-[#1a1f2e] shadow-xl">
+            {[
+              { key: 'comparison', label: t('cohort.compare', 'Compare'), icon: <ArrowLeftRight className="h-3.5 w-3.5" /> },
+              { key: 'pathways', label: t('cohort.pathways', 'Pathways'), icon: <GitBranch className="h-3.5 w-3.5" /> },
+              { key: 'incidence', label: t('app.incidence', 'Incidence'), icon: <BarChart3 className="h-3.5 w-3.5" /> },
+              { key: 'estimation', label: t('app.estimation', 'Estimation'), icon: <LineChart className="h-3.5 w-3.5" /> },
+            ].map(item => (
+              <button
+                key={item.key}
+                onClick={() => { setMainTab('analyse'); setAnalyseSubTab(item.key); }}
+                className={`
+                  flex items-center gap-2 px-4 py-2 text-sm text-left transition-colors
+                  bg-transparent border-none cursor-pointer w-full
+                  ${mainTab === 'analyse' && analyseSubTab === item.key
+                    ? 'text-emerald-accent bg-emerald-accent/10'
+                    : 'text-text-muted hover:text-emerald-accent hover:bg-surface-dark'}
+                `}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            ))}
           </div>
-          <CriteriaPanel
-            cdmName={selectedCdm}
-            onAddCriterion={handleAddCriterion}
-          />
         </div>
+      </div>
 
-        {/* Center: Tabs — Builder / Characterization */}
-        <div className="lg:col-span-8 h-full overflow-auto">
-          <Tabs
-            activeKey={activeTab}
-            onChange={setActiveTab}
-            items={[
-              {
-                key: 'builder',
-                label: t('cohort.query_builder', 'Query Builder'),
-                children: (
-                  <>
-                    <QueryCanvas
-                      inclusion={criteria.inclusion}
-                      exclusion={criteria.exclusion}
-                      demographics={criteria.demographics || {}}
-                      exitCriteria={criteria.exit_criteria}
-                      initialEventId={criteria.initial_event_criterion_id}
-                      cdmName={selectedCdm || ''}
-                      onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
-                      onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
-                      onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
-                      onUpdateExitCriteria={exit => setCriteria(prev => ({ ...prev, exit_criteria: exit }))}
-                      onUpdateInitialEvent={id => setCriteria(prev => ({ ...prev, initial_event_criterion_id: id }))}
-                    />
+      {/* ── Content ── */}
+      <div className="flex flex-col flex-1 overflow-auto">
+        {/* Cohort Builder content */}
+        {mainTab === 'cohort-builder' && builderSubTab === 'builder' && (
+          <>
+            {/* Toggle button — full width above, independent */}
+            <div className={`mb-2 ${criteriaPanelOpen ? 'w-[420px]' : ''}`}>
+              <button
+                onClick={() => setCriteriaPanelOpen(prev => !prev)}
+                className={`
+                  ${criteriaPanelOpen ? 'w-full' : 'inline-flex'} flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-glass-border
+                  transition-colors cursor-pointer
+                  ${criteriaPanelOpen
+                    ? 'bg-emerald-accent/10 text-emerald-accent border-emerald-accent/30'
+                    : 'bg-surface-dark text-text-dim hover:text-emerald-accent hover:border-emerald-accent/20'}
+                `}
+              >
+                <Filter className="h-3.5 w-3.5" />
+                <span>{t('cohort.criteria_panel', 'Inclusion & Exclusion Criteria')}</span>
+                {criteriaPanelOpen
+                  ? <ChevronUp className="h-3.5 w-3.5 ml-auto" />
+                  : <ChevronDown className="h-3.5 w-3.5" />}
+              </button>
+            </div>
 
-                    {/* Detailed Sample */}
-                    <Card
-                      size="small"
-                      className="mt-2"
-                      title={
-                        <div className="flex items-center gap-1.5">
-                          <User className="h-4 w-4" />
-                          <span>{t('cohort.sample_patients', 'Sample Patients')}</span>
-                        </div>
-                      }
-                      extra={
-                        <Button
-                          size="small"
-                          onClick={runDetailedSample}
-                          loading={sampleLoading}
-                          disabled={criteria.inclusion.criteria.length === 0}
-                        >
-                          {t('cohort.sample', 'Sample')}
-                        </Button>
-                      }
+            {/* Criteria panel (left) + QueryCanvas (right) side by side */}
+            <div className="flex gap-2">
+              {criteriaPanelOpen && (
+                <div className="w-[420px] shrink-0 border border-glass-border rounded-lg p-3 bg-surface-dark/40">
+                  <div className="flex rounded-lg overflow-hidden border border-glass-border mb-2">
+                    <button
+                      className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none cursor-pointer ${
+                        addMode === 'inclusion'
+                          ? 'bg-emerald-accent/15 text-emerald-accent'
+                          : 'bg-surface-dark text-text-dim hover:text-text-muted'
+                      }`}
+                      onClick={() => setAddMode('inclusion')}
                     >
-                      {sampleLoading ? (
-                        <div className="text-center py-5">
-                          <Spinner />
-                          <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sample', 'Loading sample patients...')}</p>
-                        </div>
-                      ) : samplePatients.length > 0 ? (
-                        <Table
-                          size="small"
-                          dataSource={samplePatients}
-                          rowKey={(r) => JSON.stringify(r).slice(0, 100)}
-                          pagination={false}
-                          scroll={{ x: true }}
-                          columns={[
-                            {
-                              title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90,
-                              render: (v: number) => (
-                                <a
-                                  onClick={() => setJourneyPersonId(v)}
-                                  title={t('cohort.view_journey', 'View patient journey')}
-                                  className="text-emerald-accent hover:underline cursor-pointer"
-                                >
-                                  {v}
-                                </a>
-                              ),
-                            },
-                            { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
-                            ...sampleColumns.map(col => ({
-                              title: col.label,
-                              dataIndex: col.key,
-                              key: col.key,
-                              width: col.key === 'visit_occurrence_id' ? 90 : 150,
-                              ellipsis: true,
-                              render: (v: any) => v != null ? String(v) : '—',
-                            })),
-                          ]}
-                        />
-                      ) : (
-                        <span className="text-text-muted text-xs">
-                          {t('cohort.click_sample', 'Click Sample to see random patients')}
-                        </span>
-                      )}
-                    </Card>
-                  </>
-                ),
-              },
-              {
-                key: 'characterization',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <Table2 className="h-3.5 w-3.5" />
-                    <span>Table 1</span>
+                      + {t('cohort.inclusion', 'Inclusion')}
+                    </button>
+                    <button
+                      className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none border-l border-glass-border cursor-pointer ${
+                        addMode === 'exclusion'
+                          ? 'bg-red-500/15 text-red-400'
+                          : 'bg-surface-dark text-text-dim hover:text-text-muted'
+                      }`}
+                      onClick={() => setAddMode('exclusion')}
+                    >
+                      - {t('cohort.exclusion', 'Exclusion')}
+                    </button>
                   </div>
-                ),
-                children: (
-                  <CharacterizationPanel
-                    cdmName={selectedCdm || ''}
-                    criteria={toBackendCriteria(criteria)}
-                    cohortId={savedCohortId}
-                    cohortKey={cohortKey}
+                  <CriteriaPanel
+                    cdmName={selectedCdm}
+                    onAddCriterion={handleAddCriterion}
                   />
-                ),
-              },
-              {
-                key: 'comparison',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <ArrowLeftRight className="h-3.5 w-3.5" />
-                    <span>{t('cohort.compare', 'Compare')}</span>
-                  </div>
-                ),
-                children: (
-                  <CohortComparisonPanel
-                    cdmName={selectedCdm || ''}
-                    cohorts={cohorts}
-                    cohortKey={cohortKey}
-                  />
-                ),
-              },
-              {
-                key: 'pathways',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <GitBranch className="h-3.5 w-3.5" />
-                    <span>{t('cohort.pathways', 'Pathways')}</span>
-                  </div>
-                ),
-                children: (
-                  <PathwaysPanel
-                    cdmName={selectedCdm || ''}
-                    criteria={toBackendCriteria(criteria)}
-                    cohortKey={cohortKey}
-                    cohortId={savedCohortId}
-                  />
-                ),
-              },
-              {
-                key: 'sql',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <Code className="h-3.5 w-3.5" />
-                    <span>SQL</span>
-                  </div>
-                ),
-                children: (
-                  <SqlEditorPanel cdmName={selectedCdm || ''} />
-                ),
-              },
-              {
-                key: 'concept-sets',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <AppWindow className="h-3.5 w-3.5" />
-                    <span>{t('app.concept_sets', 'Concept Sets')}</span>
-                  </div>
-                ),
-                children: <ConceptSetPage selectedCdm={selectedCdm} />,
-              },
-              {
-                key: 'incidence',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <BarChart3 className="h-3.5 w-3.5" />
-                    <span>{t('app.incidence', 'Incidence')}</span>
-                  </div>
-                ),
-                children: <IncidencePage selectedCdm={selectedCdm} />,
-              },
-              {
-                key: 'estimation',
-                label: (
-                  <div className="flex items-center gap-1">
-                    <LineChart className="h-3.5 w-3.5" />
-                    <span>{t('app.estimation', 'Estimation')}</span>
-                  </div>
-                ),
-                children: <EstimationPage selectedCdm={selectedCdm} />,
-              },
-            ]}
-          />
-        </div>
+                </div>
+              )}
 
-        {/* Right: Results Panel */}
-        <div className="lg:col-span-2 h-full overflow-auto">
-          <ResultsPanel
-            cdmName={selectedCdm}
+              <div className="flex-1 min-w-0">
+                <QueryCanvas
+                  inclusion={criteria.inclusion}
+                  exclusion={criteria.exclusion}
+                  demographics={criteria.demographics || {}}
+                  exitCriteria={criteria.exit_criteria}
+                  initialEventId={criteria.initial_event_criterion_id}
+                  cdmName={selectedCdm || ''}
+                  onUpdateInclusion={inc => setCriteria(prev => ({ ...prev, inclusion: inc }))}
+                  onUpdateExclusion={exc => setCriteria(prev => ({ ...prev, exclusion: exc }))}
+                  onUpdateDemographics={demo => setCriteria(prev => ({ ...prev, demographics: demo }))}
+                  onUpdateExitCriteria={exit => setCriteria(prev => ({ ...prev, exit_criteria: exit }))}
+                  onUpdateInitialEvent={id => setCriteria(prev => ({ ...prev, initial_event_criterion_id: id }))}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {mainTab === 'cohort-builder' && builderSubTab === 'characterization' && (
+          <CharacterizationPanel
+            cdmName={selectedCdm || ''}
             criteria={toBackendCriteria(criteria)}
-            savedCohortId={savedCohortId}
+            cohortId={savedCohortId}
             cohortKey={cohortKey}
           />
-        </div>
+        )}
+
+        {mainTab === 'cohort-builder' && builderSubTab === 'sql' && (
+          <SqlEditorPanel cdmName={selectedCdm || ''} />
+        )}
+
+        {mainTab === 'cohort-builder' && builderSubTab === 'concept-sets' && (
+          <ConceptSetPage selectedCdm={selectedCdm} />
+        )}
+
+        {/* ── Bottom row: Sample Patients | Patient Count | Attrition — each 1/3 ── */}
+        {mainTab === 'cohort-builder' && builderSubTab === 'builder' && (
+            <>
+              {resultsError && <Alert type="error" message={resultsError} closable onClose={() => setResultsError('')} className="mt-2" />}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 mt-3">
+                {/* Sample Patients */}
+                <Card
+                  size="small"
+                  title={
+                    <div className="flex items-center gap-1.5">
+                      <User className="h-4 w-4" />
+                      <span>{t('cohort.sample_patients', 'Sample Patients')}</span>
+                    </div>
+                  }
+                  extra={
+                    <Button
+                      size="small"
+                      onClick={runDetailedSample}
+                      loading={sampleLoading}
+                      disabled={criteria.inclusion.criteria.length === 0}
+                    >
+                      {t('cohort.sample', 'Sample')}
+                    </Button>
+                  }
+                >
+                  {sampleLoading ? (
+                    <div className="text-center py-5">
+                      <Spinner />
+                      <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sample', 'Loading sample patients...')}</p>
+                    </div>
+                  ) : samplePatients.length > 0 ? (
+                    <div className="max-h-[300px] overflow-auto">
+                      <Table
+                        size="small"
+                        dataSource={samplePatients}
+                        rowKey={(r) => JSON.stringify(r).slice(0, 100)}
+                        pagination={false}
+                        scroll={{ x: true }}
+                        columns={[
+                          {
+                            title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90,
+                            render: (v: number) => (
+                              <a
+                                onClick={() => setJourneyPersonId(v)}
+                                title={t('cohort.view_journey', 'View patient journey')}
+                                className="text-emerald-accent hover:underline cursor-pointer"
+                              >
+                                {v}
+                              </a>
+                            ),
+                          },
+                          { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
+                          ...sampleColumns.map(col => ({
+                            title: col.label,
+                            dataIndex: col.key,
+                            key: col.key,
+                            width: col.key === 'visit_occurrence_id' ? 90 : 150,
+                            ellipsis: true,
+                            render: (v: any) => v != null ? String(v) : '—',
+                          })),
+                        ]}
+                      />
+                    </div>
+                  ) : (
+                    <span className="text-text-muted text-xs">
+                      {t('cohort.click_sample', 'Click Sample to see random patients')}
+                    </span>
+                  )}
+                </Card>
+
+                {/* Patient Count */}
+                <Card size="small">
+                  <div className="text-center mb-2">
+                    <Statistic
+                      title={
+                        <div className="flex items-center gap-1 justify-center">
+                          <Users className="h-3.5 w-3.5" />
+                          {t('cohort.patient_count', 'Patient Count')}
+                        </div>
+                      }
+                      value={countLoading ? '...' : (patientCount != null ? patientCount.toLocaleString() : '—')}
+                      valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-center gap-2">
+                    {anyResultsLoading ? (
+                      <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={() => { setCountLoading(false); setAttritionLoading(false); }} size="small">
+                        {t('common.cancel')}
+                      </Button>
+                    ) : (
+                      <Button variant="primary" icon={<Play className="h-3.5 w-3.5" />} onClick={runCount} disabled={!hasCriteria || !selectedCdm} size="small">
+                        {t('cohort.run_count', 'Count')}
+                      </Button>
+                    )}
+                    <Tooltip title={t('cohort.approximate_tooltip', 'Quick approximate count')}>
+                      <span>
+                        <Button
+                          icon={<Play className="h-3.5 w-3.5" />}
+                          onClick={async () => {
+                            setCountLoading(true);
+                            try {
+                              const resp = await cohortApi.countApprox(selectedCdm!, toBackendCriteria(criteria));
+                              setPatientCount(resp.data.patient_count);
+                            } catch (e: any) {
+                              setResultsError(e.response?.data?.detail || 'Error');
+                            } finally {
+                              setCountLoading(false);
+                            }
+                          }}
+                          disabled={!hasCriteria || !selectedCdm}
+                          size="small"
+                        >
+                          ~
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  </div>
+                  {generatedSql && (
+                    <div className="mt-2">
+                      <pre className="text-[10px] max-h-[120px] overflow-auto whitespace-pre-wrap break-all text-text-muted bg-deep-base p-2 rounded">
+                        {generatedSql}
+                      </pre>
+                    </div>
+                  )}
+                </Card>
+
+                {/* Attrition Diagram */}
+                <Card
+                  size="small"
+                  title={
+                    <div className="flex items-center gap-1">
+                      <BarChart3 className="h-4 w-4" />
+                      {t('cohort.attrition', 'Attrition Diagram')}
+                    </div>
+                  }
+                  extra={
+                    <Button size="small" onClick={runAttrition} loading={attritionLoading} disabled={!hasCriteria || !selectedCdm}>
+                      {t('cohort.run', 'Run')}
+                    </Button>
+                  }
+                >
+                  {attritionLoading ? (
+                    <div className="text-center py-5">
+                      <Spinner />
+                      <p className="text-sm text-text-muted mt-2">{t('cohort.loading_attrition', 'Loading attrition data...')}</p>
+                    </div>
+                  ) : attrition.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={Math.max(150, attrition.length * 30)}>
+                      <BarChart data={attritionChartData} layout="vertical" margin={{ left: 10, right: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" />
+                        <YAxis type="category" dataKey="label" width={150} tick={{ fontSize: 10 }} />
+                        <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
+                        <Bar dataKey="count">
+                          {attritionChartData.map((entry, idx) => (
+                            <Cell key={idx} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <span className="text-text-muted text-xs">
+                      {t('cohort.click_run_attrition', 'Click Run to see attrition diagram')}
+                    </span>
+                  )}
+                </Card>
+              </div>
+            </>
+          )}
+        {/* Analyse content */}
+        {mainTab === 'analyse' && analyseSubTab === 'comparison' && (
+          <CohortComparisonPanel
+            cdmName={selectedCdm || ''}
+            cohorts={cohorts}
+            cohortKey={cohortKey}
+          />
+        )}
+
+        {mainTab === 'analyse' && analyseSubTab === 'pathways' && (
+          <PathwaysPanel
+            cdmName={selectedCdm || ''}
+            criteria={toBackendCriteria(criteria)}
+            cohortKey={cohortKey}
+            cohortId={savedCohortId}
+          />
+        )}
+
+        {mainTab === 'analyse' && analyseSubTab === 'incidence' && (
+          <IncidencePage selectedCdm={selectedCdm} />
+        )}
+
+        {mainTab === 'analyse' && analyseSubTab === 'estimation' && (
+          <EstimationPage selectedCdm={selectedCdm} />
+        )}
       </div>
 
       {/* Patient Journey modal */}

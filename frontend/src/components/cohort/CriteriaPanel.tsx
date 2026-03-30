@@ -298,7 +298,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
       </Card>
 
       {/* Concept search */}
-      <Card size="small" title={t('cohort.concept_search', 'Concept Search (OMOP)')} className="flex-1 overflow-hidden flex flex-col">
+      <Card size="small" title={t('cohort.concept_search', 'Concept Search (OMOP)')} className="overflow-hidden flex flex-col">
         <Input
           prefix={<Search className="h-3.5 w-3.5" />}
           placeholder={t('cohort.search_placeholder', 'Search by name or code...')}
@@ -357,7 +357,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
         )}
 
         {/* Search results */}
-        <div className="max-h-[300px] overflow-auto">
+        <div className="max-h-[200px] overflow-auto">
           {loading ? (
             <div className="text-center p-4"><Spinner size="small" /></div>
           ) : concepts.length > 0 ? (
