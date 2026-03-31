@@ -984,6 +984,46 @@ ORDER BY freq DESC
 
 Les codebooks de reference enrichissent les descriptions des codes source. Lors d'une suggestion, si un codebook est charge pour le domaine, la description du code est ajoutee au `source_name` pour ameliorer la pertinence des recherches fuzzy et keyword.
 
+### Workflow per-user et consensus
+
+#### Decisions individuelles
+
+Chaque decision de mapping est attribuee a l'utilisateur authentifie (`_get_username(request)` leve une erreur 401 si le username n'est pas resolu). Le filtre des suggestions n'exclut que les termes approuves/modifies par l'utilisateur courant — les decisions des autres utilisateurs n'impactent pas ses suggestions. Les termes rejetes restent disponibles pour re-mapping.
+
+#### Consensus (2+ utilisateurs)
+
+Un mapping n'est exportable que lorsqu'il atteint le consensus :
+
+```python
+def _get_consensus_decisions(db, cdm_name, domain):
+    # Trouve les paires (source_value, target_concept_id) avec 2+ users distincts
+    consensus_pairs = (
+        db.query(MappingDecision.source_value, MappingDecision.target_concept_id)
+        .filter(action IN ["approved", "modified"], target_concept_id IS NOT NULL)
+        .group_by(source_value, target_concept_id)
+        .having(count(distinct(user)) >= 2)
+    )
+    # Retourne un representant par groupe consensus
+```
+
+Les endpoints `apply`, `apply/preview` et `apply/export` utilisent cette fonction.
+
+#### Actions sur l'historique
+
+| Endpoint | Effet | Permission |
+|----------|-------|------------|
+| `POST /history/{id}/withdraw` | Supprime la decision (pas de trace) | Proprietaire ou admin |
+| `POST /history/{id}/reject` | Change `action` en "rejected" (en place) | Proprietaire ou admin |
+| `POST /history/{id}/rollback` | Cree une entree `rolled_back` + supprime l'original | Proprietaire ou admin |
+
+#### Vue groupee (frontend)
+
+L'historique regroupe les decisions par `(source_value, domain, target_concept_id, action)` :
+- Meme mapping par 2 users → une seule ligne avec `users: ["a159230", "medecin"]`
+- Un `userIdMap` (user → decision_id) permet le withdraw du bon ID
+- Statut : `consensus` (2+ users, meme cible), `conflict` (cibles differentes), `single` (1 user)
+- Les decisions `rejected` sont exclues du calcul consensus/conflit
+
 ### Optimisations
 
 - **Dashboard mapping** : dernier snapshot par domaine charge en 1 requete (`DISTINCT ON`) au lieu de N+1

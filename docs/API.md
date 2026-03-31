@@ -1040,7 +1040,7 @@ Une fois termine, `GET /api/mapping/suggest/status/{task_id}` retourne les resul
 { "task_id": "abc-123", "status": "done", "results": [...], "warnings": ["..."] }
 ```
 
-Les termes deja approuves/rejetes sont automatiquement exclus.
+Les termes deja approuves/modifies par **l'utilisateur courant** sont automatiquement exclus (les termes rejetes restent disponibles pour re-mapping). Chaque utilisateur travaille independamment : les decisions d'un autre utilisateur n'impactent pas ses suggestions.
 
 ### 5.4 Validation Workflow
 
@@ -1071,9 +1071,11 @@ Enregistre une decision de mapping.
 | `reason` | string | Raison (optionnelle) |
 | `target_concept_id` | int, null | Concept cible (null si rejected) |
 
+> **Workflow per-user** : chaque decision est attribuee a l'utilisateur authentifie. Deux utilisateurs peuvent mapper le meme terme independamment. Un mapping n'est considere valide (exportable) que lorsqu'il atteint le **consensus** (2+ utilisateurs approuvent le meme source_value → target_concept_id).
+
 #### `POST /api/mapping/decide/bulk`
 
-Decision en masse au-dessus d'un seuil de confiance.
+Decision en masse au-dessus d'un seuil de confiance. Les decisions sont enregistrees pour l'utilisateur courant uniquement.
 
 **Body :**
 ```json
@@ -1090,7 +1092,7 @@ Decision en masse au-dessus d'un seuil de confiance.
 
 #### `POST /api/mapping/apply`
 
-Genere les entrees `source_to_concept_map` a partir des decisions approuvees.
+Genere les entrees `source_to_concept_map` a partir des decisions ayant atteint le **consensus** (2+ utilisateurs ont approuve le meme mapping source_value → target_concept_id). Les decisions en attente (un seul utilisateur) sont exclues.
 
 > **Note :** L'option `write_to_cdm: true` est **desactivee** et retourne `403 Forbidden`. La reponse contient toujours `"written_to_cdm": false`. Utiliser l'export CSV pour appliquer manuellement.
 
@@ -1126,30 +1128,58 @@ Genere les entrees `source_to_concept_map` a partir des decisions approuvees.
 
 #### `POST /api/mapping/apply/preview`
 
-Previsualise l'impact avant application.
+Previsualise l'impact avant application. Ne comptabilise que les decisions **consensus** (2+ utilisateurs).
 
 **Response :** `{ "total_decisions": 45, "impacted_rows": 25000, "impacted_persons": 8000 }`
 
 #### `GET /api/mapping/apply/export/{cdm_name}/{domain}`
 
-Exporte les mappings approuves au format CSV STCM.
+Exporte les mappings **consensus** au format CSV STCM. Les decisions en attente (un seul utilisateur) sont exclues.
 
 ### 5.6 History & Audit
 
 #### `GET /api/mapping/history/{cdm_name}`
 
-Historique pagine des decisions.
+Historique pagine des decisions. **Partage entre tous les utilisateurs** (affiche les decisions de tous les users). Le frontend regroupe les lignes : si 2 users approuvent le meme mapping, ils apparaissent sur une seule ligne.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `domain` | query, string | - | Filtrer par domaine |
 | `action` | query, string | - | `approved`, `modified`, `rejected`, `rolled_back` |
+| `user` | query, string | - | Filtrer par utilisateur |
 | `page` | query, int | 1 | Page |
 | `page_size` | query, int | 50 | Taille (max 200) |
 
+**Response** (extrait) :
+```json
+{
+  "total": 45,
+  "users": ["a159230", "medecin"],
+  "items": [...]
+}
+```
+
+Le champ `users` retourne la liste distincte des utilisateurs ayant des decisions pour ce CDM (pour le dropdown de filtre).
+
+Le tri est par `source_value` puis `domain` (les lignes du meme terme se suivent).
+
+#### `POST /api/mapping/history/{decision_id}/withdraw`
+
+Retire silencieusement sa propre decision (suppression en base, pas de trace `rolled_back`). Utilise pour retirer son vote d'un consensus.
+
+- **Permissions** : proprietaire de la decision ou admin
+
+#### `POST /api/mapping/history/{decision_id}/reject`
+
+Rejete une decision existante en place (change le champ `action` en `rejected` directement). Le terme reapparait dans les suggestions.
+
+- **Permissions** : proprietaire de la decision ou admin
+
 #### `POST /api/mapping/history/{decision_id}/rollback`
 
-Annule une decision de mapping. Cree une entree `rolled_back`.
+Annule une decision de mapping. Cree une entree `rolled_back` avec `previous_concept_id`.
+
+- **Permissions** : proprietaire de la decision ou admin
 
 #### `GET /api/mapping/history/{cdm_name}/export`
 
