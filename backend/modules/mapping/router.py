@@ -28,6 +28,65 @@ from utils.rate_limit import limiter
 from utils.cdm_helper import check_cdm_access, get_domain_config
 
 logger = logging.getLogger(__name__)
+
+
+def _get_username(request: Request) -> str:
+    """Extract authenticated username from request. Raises 401 if not resolved."""
+    user = getattr(request.state, "user", {})
+    username = user.get("preferred_username", "")
+    if not username or username in ("anonymous", "system"):
+        raise HTTPException(status_code=401, detail="Utilisateur non authentifié")
+    return username
+
+
+def _get_consensus_decisions(db: Session, cdm_name: str, domain: str) -> list:
+    """Return only decisions that have consensus (2+ distinct users approved same source_value → target).
+
+    Returns one representative MappingDecision per consensus group.
+    """
+    from sqlalchemy import distinct
+
+    # Find (source_value, target_concept_id) pairs with 2+ distinct users
+    consensus_pairs = (
+        db.query(
+            MappingDecision.source_value,
+            MappingDecision.target_concept_id,
+        )
+        .filter(
+            MappingDecision.cdm_name == cdm_name,
+            MappingDecision.domain == domain,
+            MappingDecision.action.in_(["approved", "modified"]),
+            MappingDecision.target_concept_id.isnot(None),
+        )
+        .group_by(MappingDecision.source_value, MappingDecision.target_concept_id)
+        .having(func.count(distinct(MappingDecision.user)) >= 2)
+        .all()
+    )
+
+    if not consensus_pairs:
+        return []
+
+    # For each consensus pair, get one representative decision (most recent)
+    results = []
+    for sv, tid in consensus_pairs:
+        decision = (
+            db.query(MappingDecision)
+            .filter(
+                MappingDecision.cdm_name == cdm_name,
+                MappingDecision.domain == domain,
+                MappingDecision.source_value == sv,
+                MappingDecision.target_concept_id == tid,
+                MappingDecision.action.in_(["approved", "modified"]),
+            )
+            .order_by(desc(MappingDecision.created_at))
+            .first()
+        )
+        if decision:
+            results.append(decision)
+
+    return results
+
+
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 
 # Background suggestion tasks — survive page navigation
@@ -612,16 +671,20 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
         raise HTTPException(status_code=400, detail=f"Unknown domain: {req.domain}")
 
     # Gather all data needed by the worker while we still have the DB session
+    username = _get_username(request)
+
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
     cfg = get_domain_config(conn, schema, req.domain)
+    # Filter already-decided terms for THIS USER only (per-user mapping workflow)
     approved_svs = [
         r[0] for r in
         db.query(MappingDecision.source_value)
         .filter(
             MappingDecision.cdm_name == req.cdm_name,
             MappingDecision.domain == req.domain,
-            MappingDecision.action.in_(["approved", "modified", "rejected"]),
+            MappingDecision.user == username,
+            MappingDecision.action.in_(["approved", "modified"]),
         ).all()
     ]
 
@@ -844,8 +907,7 @@ def record_decision(req: DecisionRequest, request: Request, db: Session = Depend
     if req.action not in ("approved", "modified", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action")
 
-    user = getattr(request.state, "user", {})
-    username = user.get("preferred_username", "system")
+    username = _get_username(request)
 
     decision = MappingDecision(
         cdm_name=req.cdm_name,
@@ -858,6 +920,7 @@ def record_decision(req: DecisionRequest, request: Request, db: Session = Depend
         target_vocabulary_id=req.target_vocabulary_id,
         suggestion_source=req.suggestion_source,
         confidence_score=req.confidence_score,
+        user=username,
         reason=req.reason,
     )
     db.add(decision)
@@ -887,14 +950,17 @@ def bulk_decision(req: BulkDecisionRequest, request: Request, db: Session = Depe
     if req.action not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid action for bulk")
 
+    username = _get_username(request)
+
     if req.source_values:
-        # Get existing source values in one query, filtered to only the requested values
+        # Get existing source values for THIS USER only
         existing = set(
             r[0] for r in
             db.query(MappingDecision.source_value)
             .filter(
                 MappingDecision.cdm_name == req.cdm_name,
                 MappingDecision.domain == req.domain,
+                MappingDecision.user == username,
                 MappingDecision.source_value.in_(req.source_values),
             ).all()
         )
@@ -907,6 +973,7 @@ def bulk_decision(req: BulkDecisionRequest, request: Request, db: Session = Depe
                     source_value=sv,
                     action=req.action,
                     suggestion_source="bulk",
+                    user=username,
                 )
                 for sv in new_values
             ])
@@ -928,20 +995,13 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
     """
     # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
     check_cdm_access(request, req.cdm_name)
-    # Get all approved/modified decisions
-    decisions = (
-        db.query(MappingDecision)
-        .filter(
-            MappingDecision.cdm_name == req.cdm_name,
-            MappingDecision.domain == req.domain,
-            MappingDecision.action.in_(["approved", "modified"]),
-            MappingDecision.target_concept_id.isnot(None),
-        )
-        .all()
-    )
+    username = _get_username(request)
+
+    # Only export consensus decisions (2+ users agree on same mapping)
+    decisions = _get_consensus_decisions(db, req.cdm_name, req.domain)
 
     if not decisions:
-        return {"message": "No approved mappings to apply", "count": 0}
+        return {"message": "No consensus mappings to apply", "count": 0}
 
     stcm_rows = []
     for d in decisions:
@@ -997,8 +1057,7 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
     #         conn.close()
     # --- End write block ---
 
-    user = getattr(request.state, "user", {})
-    username = user.get("preferred_username", "system")
+    username = _get_username(request)
     notify(
         db, username, "mapping_applied",
         title=f"Mapping exporté : {req.domain}",
@@ -1018,19 +1077,12 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
 @router.post("/apply/preview")
 def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
-    """Preview impact of applying approved mappings."""
+    """Preview impact of applying consensus mappings (2+ users agree)."""
     # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
     check_cdm_access(request, req.cdm_name)
-    decisions = (
-        db.query(MappingDecision)
-        .filter(
-            MappingDecision.cdm_name == req.cdm_name,
-            MappingDecision.domain == req.domain,
-            MappingDecision.action.in_(["approved", "modified"]),
-            MappingDecision.target_concept_id.isnot(None),
-        )
-        .all()
-    )
+    _get_username(request)  # auth check
+
+    decisions = _get_consensus_decisions(db, req.cdm_name, req.domain)
 
     if not decisions or req.domain not in DOMAIN_CONFIG:
         return {"total_decisions": 0, "impacted_rows": 0, "impacted_persons": 0}
@@ -1067,18 +1119,12 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
 
 @router.get("/apply/export/{cdm_name}/{domain}")
-def export_stcm(cdm_name: str, domain: str, db: Session = Depends(get_db)):
-    """Export approved mappings as source_to_concept_map CSV."""
-    decisions = (
-        db.query(MappingDecision)
-        .filter(
-            MappingDecision.cdm_name == cdm_name,
-            MappingDecision.domain == domain,
-            MappingDecision.action.in_(["approved", "modified"]),
-            MappingDecision.target_concept_id.isnot(None),
-        )
-        .all()
-    )
+def export_stcm(cdm_name: str, domain: str, request: Request, db: Session = Depends(get_db)):
+    """Export approved mappings as source_to_concept_map CSV (per-user)."""
+    username = _get_username(request)
+
+    # Only export consensus decisions (2+ users agree)
+    decisions = _get_consensus_decisions(db, cdm_name, domain)
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -1111,24 +1157,36 @@ def mapping_history(
     cdm_name: str,
     domain: str | None = None,
     action: str | None = None,
+    user_filter: str | None = Query(default=None, alias="user"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    """Paginated mapping decision history with filters."""
+    """Paginated mapping decision history with filters (shared across all users)."""
     query = db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name)
 
     if domain:
         query = query.filter(MappingDecision.domain == domain)
     if action:
         query = query.filter(MappingDecision.action == action)
+    if user_filter:
+        query = query.filter(MappingDecision.user == user_filter)
 
     total = query.count()
     offset = (page - 1) * page_size
-    decisions = query.order_by(desc(MappingDecision.created_at)).offset(offset).limit(page_size).all()
+    decisions = query.order_by(MappingDecision.source_value, MappingDecision.domain, desc(MappingDecision.created_at)).offset(offset).limit(page_size).all()
+
+    # Distinct users for this CDM (for filter dropdown)
+    distinct_users = [
+        r[0] for r in
+        db.query(MappingDecision.user)
+        .filter(MappingDecision.cdm_name == cdm_name)
+        .distinct().all()
+    ]
 
     return {
         "total": total,
+        "users": sorted(distinct_users),
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
@@ -1155,11 +1213,18 @@ def mapping_history(
 
 
 @router.post("/history/{decision_id}/rollback")
-def rollback_decision(decision_id: int, db: Session = Depends(get_db)):
-    """Rollback a specific mapping decision."""
+def rollback_decision(decision_id: int, request: Request, db: Session = Depends(get_db)):
+    """Rollback a specific mapping decision (own decisions only)."""
+    username = _get_username(request)
+    roles = getattr(request.state, "user", {}).get("roles", [])
+
     decision = db.query(MappingDecision).filter(MappingDecision.id == decision_id).first()
     if not decision:
         raise HTTPException(status_code=404, detail="Decision not found")
+
+    # Only allow rollback of own decisions (admins can rollback any)
+    if decision.user != username and "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Vous ne pouvez annuler que vos propres décisions")
 
     # Create a rollback entry
     rollback = MappingDecision(
@@ -1171,6 +1236,7 @@ def rollback_decision(decision_id: int, db: Session = Depends(get_db)):
         target_concept_id=None,
         previous_concept_id=decision.target_concept_id,
         suggestion_source=f"rollback of #{decision.id}",
+        user=username,
     )
     db.add(rollback)
 
@@ -1179,6 +1245,44 @@ def rollback_decision(decision_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"rolled_back": True, "original_id": decision_id}
+
+
+@router.post("/history/{decision_id}/withdraw")
+def withdraw_decision(decision_id: int, request: Request, db: Session = Depends(get_db)):
+    """Silently remove own decision (no rolled_back trace). Used to undo a consensus vote."""
+    username = _get_username(request)
+    roles = getattr(request.state, "user", {}).get("roles", [])
+
+    decision = db.query(MappingDecision).filter(MappingDecision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    if decision.user != username and "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Vous ne pouvez retirer que vos propres décisions")
+
+    db.delete(decision)
+    db.commit()
+
+    return {"withdrawn": True, "id": decision_id}
+
+
+@router.post("/history/{decision_id}/reject")
+def reject_decision(decision_id: int, request: Request, db: Session = Depends(get_db)):
+    """Reject an existing mapping decision in-place (own decisions or admin)."""
+    username = _get_username(request)
+    roles = getattr(request.state, "user", {}).get("roles", [])
+
+    decision = db.query(MappingDecision).filter(MappingDecision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    if decision.user != username and "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Vous ne pouvez rejeter que vos propres décisions")
+
+    decision.action = "rejected"
+    db.commit()
+
+    return {"rejected": True, "id": decision_id}
 
 
 @router.get("/history/{cdm_name}/export")
