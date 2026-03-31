@@ -87,10 +87,13 @@
 ### Mapping (`/mapping`)
 | Action | admin | data-manager | chercheur | medecin |
 |--------|:-----:|:------------:|:---------:|:-------:|
-| Consulter les suggestions | ✅ | ✅ | ❌ | ✅ |
+| Consulter les suggestions (per-user) | ✅ | ✅ | ❌ | ✅ |
 | Approuver / rejeter un mapping | ✅ | ✅ | ❌ | ✅ |
-| Appliquer au CDM (source_to_concept_map) | ✅ | ✅ | ❌ | ✅ |
-| Historique des décisions | ✅ | ✅ | ❌ | ✅ |
+| Approuver / rejeter depuis l'historique | ✅ | ✅ | ❌ | ✅ |
+| Retirer sa propre décision (withdraw) | ✅ | ✅ | ❌ | ✅ |
+| Rejeter la décision d'un autre user | ✅ | ❌ | ❌ | ❌ |
+| Exporter STCM (consensus uniquement) | ✅ | ✅ | ❌ | ✅ |
+| Historique des décisions (partagé) | ✅ | ✅ | ❌ | ✅ |
 
 ### Concept Explorer (`/concepts`)
 | Action | admin | data-manager | chercheur | medecin |

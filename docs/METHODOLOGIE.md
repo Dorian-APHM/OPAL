@@ -466,6 +466,32 @@ Règle générique : les DCI en `-INE` perdent le `-E` final en anglais.
 4. Dédoublonnage par `concept_id` (un concept n'apparaît qu'une fois)
 5. Tri final par confiance décroissante, retour des top N
 
+### 6.9 Workflow per-user et validation par consensus
+
+#### Principe
+
+Le mapping dans OPAL suit un modèle de **double validation** : chaque utilisateur travaille indépendamment sur les suggestions, et un mapping n'est considéré valide que lorsque 2+ utilisateurs convergent sur la même correspondance.
+
+#### Cycle de vie d'une décision
+
+1. **Pending** : un seul utilisateur a approuvé le mapping (source_value → target_concept_id). Le terme reste visible dans les suggestions des autres utilisateurs.
+2. **Consensus** : 2+ utilisateurs ont approuvé le même mapping. Le mapping est exportable via apply/STCM CSV.
+3. **Conflit** : des utilisateurs ont mappé le même terme vers des cibles différentes. Un indicateur visuel (triangle jaune) signale le désaccord.
+4. **Rejeté** : un utilisateur a rejeté un mapping. Le terme redevient disponible dans ses suggestions. Les décisions rejetées sont exclues du calcul de consensus/conflit.
+
+#### Filtrage des suggestions
+
+Seuls les termes `approved` ou `modified` par l'utilisateur courant sont exclus de ses suggestions. Les termes `rejected` restent disponibles pour permettre un re-mapping vers une autre cible.
+
+#### Critère de consensus pour l'export
+
+L'export STCM et la prévisualisation (preview) ne retournent que les mappings ayant :
+- `action` IN (`approved`, `modified`)
+- `target_concept_id` IS NOT NULL
+- `COUNT(DISTINCT user) >= 2` pour le même couple (source_value, target_concept_id)
+
+Un représentant unique (la décision la plus récente) est retourné par groupe consensus.
+
 ---
 
 ## 7. Extraction de données
@@ -537,4 +563,4 @@ Format : `{table}__{colonne}` (ex: `condition_occurrence__condition_concept_id`,
 
 ---
 
-*Document généré pour OPAL v1.2.1 — Mars 2026*
+*Document généré pour OPAL v2.0.0 — Mars 2026*
