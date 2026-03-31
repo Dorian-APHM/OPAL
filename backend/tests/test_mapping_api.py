@@ -319,19 +319,21 @@ def test_apply_no_approved(client, cdm_name):
 
 
 def test_apply_with_approved_decisions(client, cdm_name):
-    # Create approved decisions
-    client.post("/api/mapping/decide", json={
-        "cdm_name": cdm_name, "domain": "Condition",
+    # Apply requires consensus (2+ users approve same mapping).
+    # User 1 approves
+    decide_e11 = {"cdm_name": cdm_name, "domain": "Condition",
         "source_value": "E11", "source_name": "Diabetes",
         "action": "approved", "target_concept_id": 201826,
-        "target_concept_name": "Type 2 diabetes", "target_vocabulary_id": "SNOMED",
-    })
-    client.post("/api/mapping/decide", json={
-        "cdm_name": cdm_name, "domain": "Condition",
+        "target_concept_name": "Type 2 diabetes", "target_vocabulary_id": "SNOMED"}
+    decide_j45 = {"cdm_name": cdm_name, "domain": "Condition",
         "source_value": "J45", "source_name": "Asthma",
         "action": "approved", "target_concept_id": 317009,
-        "target_concept_name": "Asthma", "target_vocabulary_id": "SNOMED",
-    })
+        "target_concept_name": "Asthma", "target_vocabulary_id": "SNOMED"}
+    client.post("/api/mapping/decide", json=decide_e11, headers={"X-Test-Username": "user1"})
+    client.post("/api/mapping/decide", json=decide_j45, headers={"X-Test-Username": "user1"})
+    # User 2 approves same mappings → consensus
+    client.post("/api/mapping/decide", json=decide_e11, headers={"X-Test-Username": "user2"})
+    client.post("/api/mapping/decide", json=decide_j45, headers={"X-Test-Username": "user2"})
     # Add a rejected decision (should be ignored)
     client.post("/api/mapping/decide", json={
         "cdm_name": cdm_name, "domain": "Condition",
@@ -367,12 +369,12 @@ def test_apply_preview_no_decisions(client, cdm_name):
 # ──── Export tests ────
 
 def test_export_stcm_csv(client, cdm_name):
-    # Create approved decision
-    client.post("/api/mapping/decide", json={
-        "cdm_name": cdm_name, "domain": "Condition",
+    # Export requires consensus (2+ users approve same mapping)
+    decide = {"cdm_name": cdm_name, "domain": "Condition",
         "source_value": "E11", "action": "approved",
-        "target_concept_id": 201826, "target_vocabulary_id": "SNOMED",
-    })
+        "target_concept_id": 201826, "target_vocabulary_id": "SNOMED"}
+    client.post("/api/mapping/decide", json=decide, headers={"X-Test-Username": "user1"})
+    client.post("/api/mapping/decide", json=decide, headers={"X-Test-Username": "user2"})
 
     resp = client.get(f"/api/mapping/apply/export/{cdm_name}/Condition")
     assert resp.status_code == 200
