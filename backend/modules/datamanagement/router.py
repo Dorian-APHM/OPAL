@@ -2,10 +2,9 @@
 Data Management module API endpoints.
 
 Allows users to select a saved cohort, pick OMOP tables/columns,
-and extract a flat dataset for research use.
+and extract a dataset (one CSV per table, packaged as ZIP).
 
-Extraction runs as a background task with progress polling (same pattern
-as cohort characterization / quality analysis).
+Extraction runs as a background task with progress polling.
 """
 import csv
 import io
@@ -15,6 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -35,7 +35,8 @@ from modules.cohort.sql_builder import build_cohort_sql
 from modules.datamanagement.extractor import (
     list_available_tables,
     get_table_columns,
-    build_extraction_sql,
+    build_table_sql,
+    build_schema,
     EXTRACTABLE_TABLES,
 )
 
@@ -125,6 +126,10 @@ class ExtractRequest(BaseModel):
     preview_limit: int = Field(default=50, ge=1, le=1000)
 
 
+class SchemaRequest(BaseModel):
+    table_selections: list[TableSelection] = Field(..., min_length=1)
+
+
 # ──── Background task registry ────
 _active_extractions: dict[str, dict] = {}
 _extractions_lock = threading.Lock()
@@ -139,7 +144,6 @@ def list_cohorts_for_extraction(
     db: Session = Depends(get_db),
 ):
     """List saved cohorts available for data extraction."""
-    # Subquery: get the max version per cohort_id
     max_ver_subq = (
         db.query(
             CohortVersion.cohort_id,
@@ -148,7 +152,6 @@ def list_cohorts_for_extraction(
         .group_by(CohortVersion.cohort_id)
         .subquery()
     )
-    # Join cohorts with their latest version in a single query
     rows = (
         db.query(Cohort, CohortVersion)
         .outerjoin(max_ver_subq, Cohort.id == max_ver_subq.c.cohort_id)
@@ -217,37 +220,34 @@ def list_columns(
         conn.close()
 
 
-# ──── Background extraction (preview + download) ────
+# ──── BDR Schema endpoint ────
 
-def _build_extraction_context(db: Session, req: ExtractRequest):
-    """Validate request and return (cohort, cdm, conn, schema, extraction_sql, cohort_has_visit)."""
-    cohort, version = _get_cohort_and_version(db, req.cohort_id)
-    cdm, conn = _get_cdm_conn(db, cohort.cdm_name)
+@router.post("/extract/schema")
+def extract_schema(
+    req: SchemaRequest,
+    cdm_name: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the relational schema (BDR) for the selected tables.
+    Shows tables, columns, data types, and FK relationships.
+    """
+    cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = _get_omop_schema(db, cdm)
+    try:
+        # Fetch full column metadata for each selected table
+        all_columns: dict[str, list[dict]] = {}
+        for sel in req.table_selections:
+            all_columns[sel.table] = get_table_columns(conn, schema, sel.table)
 
-    criteria = version.criteria_json
-    cohort_has_visit = _cohort_has_same_visit(criteria)
-
-    if req.same_visit_only and not cohort_has_visit:
+        table_sels = [{"table": s.table, "columns": s.columns} for s in req.table_selections]
+        bdr = build_schema(table_sels, all_columns)
+        return bdr
+    finally:
         conn.close()
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot use 'Same Visit Only' mode: this cohort was not built with sameVisit enabled.",
-        )
 
-    include_visit_id = cohort_has_visit
-    cohort_sql = build_cohort_sql(criteria, schema, include_visit_id=include_visit_id)
 
-    table_sels = [{"table": s.table, "columns": s.columns} for s in req.table_selections]
-    extraction_sql = build_extraction_sql(
-        cohort_sql=cohort_sql,
-        omop_schema=schema,
-        table_selections=table_sels,
-        same_visit_only=req.same_visit_only,
-        cohort_has_visit=cohort_has_visit,
-    )
-    return cohort, cdm, conn, schema, extraction_sql
-
+# ──── Background extraction (ZIP with 1 CSV per table) ────
 
 @router.post("/extract/start")
 @limiter.limit("3/minute")
@@ -256,14 +256,8 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     Launch extraction as a background task.
     Returns a task_id for polling via /extract/status/{task_id}.
 
-    The task performs:
-    1. Count total rows
-    2. Execute preview (limited rows)
-    3. Build full CSV in memory
-
-    Progress is reported at each step.
+    Produces a ZIP file containing one CSV per selected table.
     """
-    # Validate upfront (will raise HTTPException if invalid)
     cohort, version = _get_cohort_and_version(db, req.cohort_id)
     cdm_name = cohort.cdm_name
     check_cdm_access(request, cdm_name)
@@ -278,13 +272,13 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
             detail="Cannot use 'Same Visit Only' mode: this cohort was not built with sameVisit enabled.",
         )
 
-    # Capture request user for notifications
     user = getattr(request.state, "user", {})
     username = user.get("preferred_username", "anonymous")
 
     task_id = str(uuid.uuid4())
+    num_tables = len(req.table_selections)
+
     with _extractions_lock:
-        # Evict completed/error tasks if at capacity
         if len(_active_extractions) >= _MAX_ACTIVE_EXTRACTIONS:
             stale = [k for k, v in _active_extractions.items() if v["status"] in ("completed", "error")]
             for k in stale:
@@ -298,20 +292,18 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
             "cohort_id": req.cohort_id,
             "username": username,
             "completed": 0,
-            "total": 3,  # count + preview + full CSV
+            "total": num_tables,
             "current_step": "",
             "result": None,
-            "csv_path": None,
-            "csv_filename": None,
+            "zip_path": None,
+            "zip_filename": None,
             "completed_at": None,
             "error": None,
         }
 
-    # Serialise request params for the thread
     cohort_id = req.cohort_id
     same_visit_only = req.same_visit_only
     table_sels_raw = [{"table": s.table, "columns": s.columns} for s in req.table_selections]
-    preview_limit = req.preview_limit
 
     def _progress(completed: int, total: int, step_label: str):
         with _extractions_lock:
@@ -324,7 +316,6 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
     def _worker():
         conn = None
         try:
-            # Open own DB session + CDM connection in thread
             thread_db = SessionLocal()
             try:
                 cohort_t, version_t = _get_cohort_and_version(thread_db, cohort_id)
@@ -338,83 +329,84 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
             include_visit_id = ch_visit
             cohort_sql = build_cohort_sql(criteria_t, schema, include_visit_id=include_visit_id)
 
-            extraction_sql = build_extraction_sql(
-                cohort_sql=cohort_sql,
-                omop_schema=schema,
-                table_selections=table_sels_raw,
-                same_visit_only=same_visit_only,
-                cohort_has_visit=ch_visit,
-            )
+            # Build ZIP with one CSV per table
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="opal_extract_")
+            os.close(tmp_fd)
 
-            # Step 1: Count total rows
-            _progress(0, 3, "Counting rows...")
-            count_sql = f"SELECT COUNT(*) FROM ({extraction_sql}) _cnt"
-            with conn.cursor() as cur:
-                cur.execute(count_sql)
-                total_count = cur.fetchone()[0]
-            _progress(1, 3, "Counting rows")
+            table_row_counts: dict[str, int] = {}
 
-            # Step 2: Preview (limited rows)
-            _progress(1, 3, "Fetching preview...")
-            limited_sql = f"{extraction_sql}\nLIMIT {preview_limit}"
-            with conn.cursor(cursor_factory=DictCursor) as cur:
-                cur.execute(limited_sql)
-                columns = [desc[0] for desc in cur.description] if cur.description else []
-                rows = [dict(r) for r in cur.fetchall()]
-                # Serialise non-JSON types
-                for row in rows:
-                    for k, v in row.items():
-                        if hasattr(v, 'isoformat'):
-                            row[k] = v.isoformat()
-                        elif isinstance(v, (bytes, memoryview)):
-                            row[k] = str(v)
-            _progress(2, 3, "Fetching preview")
-
-            # Step 3: Build full CSV — stream to temp file to avoid OOM
-            _progress(2, 3, "Building CSV...")
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".csv", prefix="opal_extract_")
             try:
-                with os.fdopen(tmp_fd, "w", newline="", encoding="utf-8") as tmp_f:
-                    writer = csv.writer(tmp_f)
-                    with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
-                        cur.itersize = 2000
-                        cur.execute(extraction_sql)
-                        first_row = cur.fetchone()
-                        csv_columns = [desc[0] for desc in cur.description] if cur.description else []
-                        writer.writerow(csv_columns)
-                        if first_row:
-                            writer.writerow([
-                                v.isoformat() if hasattr(v, 'isoformat') else v
-                                for v in (first_row[col] for col in csv_columns)
-                            ])
-                        for row in cur:
-                            writer.writerow([
-                                v.isoformat() if hasattr(v, 'isoformat') else v
-                                for v in (row[col] for col in csv_columns)
-                            ])
+                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for idx, sel in enumerate(table_sels_raw):
+                        tbl_name = sel["table"]
+                        columns = sel["columns"]
+                        _progress(idx, num_tables, f"Extracting {tbl_name}...")
+
+                        table_sql = build_table_sql(
+                            cohort_sql=cohort_sql,
+                            omop_schema=schema,
+                            table_name=tbl_name,
+                            columns=columns,
+                            same_visit_only=same_visit_only,
+                            cohort_has_visit=ch_visit,
+                        )
+
+                        # Stream rows into a CSV buffer, then write to ZIP
+                        csv_buf = io.StringIO()
+                        writer = csv.writer(csv_buf)
+                        row_count = 0
+
+                        with conn.cursor(
+                            name=f"extract_{tbl_name}",
+                            cursor_factory=DictCursor,
+                        ) as cur:
+                            cur.itersize = 2000
+                            cur.execute(table_sql)
+                            first_row = cur.fetchone()
+                            csv_columns = (
+                                [desc[0] for desc in cur.description]
+                                if cur.description else columns
+                            )
+                            writer.writerow(csv_columns)
+                            if first_row:
+                                writer.writerow([
+                                    v.isoformat() if hasattr(v, "isoformat") else v
+                                    for v in (first_row[col] for col in csv_columns)
+                                ])
+                                row_count += 1
+                            for row in cur:
+                                writer.writerow([
+                                    v.isoformat() if hasattr(v, "isoformat") else v
+                                    for v in (row[col] for col in csv_columns)
+                                ])
+                                row_count += 1
+
+                        zf.writestr(f"{tbl_name}.csv", csv_buf.getvalue())
+                        table_row_counts[tbl_name] = row_count
+
             except Exception:
-                # Clean up temp file on error
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
                 raise
-            _progress(3, 3, "Done")
 
-            filename = f"dataset_{cohort_name.replace(' ', '_')}_{cohort_id}.csv"
+            _progress(num_tables, num_tables, "Done")
+
+            total_rows = sum(table_row_counts.values())
+            filename = f"dataset_{cohort_name.replace(' ', '_')}_{cohort_id}.zip"
 
             with _extractions_lock:
                 task = _active_extractions.get(task_id)
                 if task:
                     task["result"] = {
-                        "columns": columns,
-                        "rows": rows,
-                        "total_count": total_count,
-                        "preview_limit": preview_limit,
+                        "table_row_counts": table_row_counts,
+                        "total_rows": total_rows,
+                        "num_tables": num_tables,
                         "cohort_name": cohort_name,
                     }
-                    task["csv_path"] = tmp_path
-                    task["csv_filename"] = filename
+                    task["zip_path"] = tmp_path
+                    task["zip_filename"] = filename
                     task["completed_at"] = time.time()
                     task["status"] = "completed"
 
@@ -427,7 +419,7 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                         username=username,
                         notif_type="extraction_done",
                         title=f"Extraction ready: {cohort_name}",
-                        message=f"{total_count} rows extracted from cohort '{cohort_name}'",
+                        message=f"{total_rows} rows across {num_tables} tables extracted from cohort '{cohort_name}'",
                         link="/data-management",
                         item_id=task_id,
                     )
@@ -470,13 +462,12 @@ def extract_status(task_id: str, request: Request):
         "task_id": task_id,
         "status": task["status"],
         "completed": task.get("completed", 0),
-        "total": task.get("total", 3),
+        "total": task.get("total", 0),
         "current_step": task.get("current_step", ""),
         "cohort_name": task.get("cohort_name", ""),
     }
     if task["status"] == "completed":
         resp["result"] = task["result"]
-        # Don't clean up yet — CSV may still be downloaded
     elif task["status"] == "error":
         resp["error"] = task["error"]
         with _extractions_lock:
@@ -486,7 +477,7 @@ def extract_status(task_id: str, request: Request):
 
 @router.get("/extract/download/{task_id}")
 def extract_download_task(task_id: str, request: Request):
-    """Download the CSV produced by a completed extraction task."""
+    """Download the ZIP produced by a completed extraction task."""
     with _extractions_lock:
         task = _active_extractions.get(task_id)
     if not task:
@@ -495,25 +486,24 @@ def extract_download_task(task_id: str, request: Request):
     if task["status"] != "completed":
         raise HTTPException(status_code=400, detail="Extraction not yet completed")
 
-    csv_path = task.get("csv_path")
-    filename = task.get("csv_filename", "dataset.csv")
-    if not csv_path or not os.path.exists(csv_path):
-        raise HTTPException(status_code=404, detail="CSV data not available")
+    zip_path = task.get("zip_path")
+    filename = task.get("zip_filename", "dataset.zip")
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="ZIP data not available")
 
-    file_size = os.path.getsize(csv_path)
+    file_size = os.path.getsize(zip_path)
 
     def _stream_and_cleanup():
         try:
-            with open(csv_path, "r", encoding="utf-8") as f:
+            with open(zip_path, "rb") as f:
                 while True:
-                    chunk = f.read(65536)  # 64KB chunks
+                    chunk = f.read(65536)
                     if not chunk:
                         break
                     yield chunk
         finally:
-            # Clean up temp file and task entry after streaming
             try:
-                os.unlink(csv_path)
+                os.unlink(zip_path)
             except OSError:
                 pass
             with _extractions_lock:
@@ -521,7 +511,7 @@ def extract_download_task(task_id: str, request: Request):
 
     return StreamingResponse(
         _stream_and_cleanup(),
-        media_type="text/csv",
+        media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(file_size),
@@ -541,11 +531,10 @@ def extract_cancel(task_id: str, request: Request):
         task = _active_extractions.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Clean up temp file if present
-    csv_path = task.get("csv_path")
-    if csv_path:
+    zip_path = task.get("zip_path")
+    if zip_path:
         try:
-            os.unlink(csv_path)
+            os.unlink(zip_path)
         except OSError:
             pass
     return {"status": "cancelled"}
@@ -564,10 +553,9 @@ def extract_active():
                 "cdm_name": task.get("cdm_name"),
                 "cohort_name": task.get("cohort_name"),
                 "completed": task.get("completed", 0),
-                "total": task.get("total", 3),
+                "total": task.get("total", 0),
                 "current_step": task.get("current_step", ""),
             }
-    # Also return completed tasks not yet downloaded
     for tid, task in items:
         if task["status"] == "completed":
             return {
@@ -575,140 +563,8 @@ def extract_active():
                 "status": "completed",
                 "cdm_name": task.get("cdm_name"),
                 "cohort_name": task.get("cohort_name"),
-                "completed": task.get("total", 3),
-                "total": task.get("total", 3),
+                "completed": task.get("total", 0),
+                "total": task.get("total", 0),
                 "current_step": "Done",
             }
     return {"task_id": None, "status": "none"}
-
-
-# ──── Legacy synchronous endpoints (kept for backwards compatibility) ────
-
-@router.post("/extract/preview")
-def extract_preview(req: ExtractRequest, db: Session = Depends(get_db)):
-    """
-    Preview the extracted dataset (limited rows).
-    Returns columns and rows for display.
-    """
-    cohort, version = _get_cohort_and_version(db, req.cohort_id)
-    cdm, conn = _get_cdm_conn(db, cohort.cdm_name)
-    schema = _get_omop_schema(db, cdm)
-
-    criteria = version.criteria_json
-    cohort_has_visit = _cohort_has_same_visit(criteria)
-
-    if req.same_visit_only and not cohort_has_visit:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot use 'Same Visit Only' mode: this cohort was not built with sameVisit enabled.",
-        )
-
-    try:
-        include_visit_id = cohort_has_visit
-        cohort_sql = build_cohort_sql(criteria, schema, include_visit_id=include_visit_id)
-
-        table_sels = [{"table": s.table, "columns": s.columns} for s in req.table_selections]
-        extraction_sql = build_extraction_sql(
-            cohort_sql=cohort_sql,
-            omop_schema=schema,
-            table_selections=table_sels,
-            same_visit_only=req.same_visit_only,
-            cohort_has_visit=cohort_has_visit,
-        )
-
-        limited_sql = f"{extraction_sql}\nLIMIT {req.preview_limit}"
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(limited_sql)
-            columns = [desc[0] for desc in cur.description] if cur.description else []
-            rows = [dict(r) for r in cur.fetchall()]
-
-        count_sql = f"SELECT COUNT(*) FROM ({extraction_sql}) _cnt"
-        with conn.cursor() as cur:
-            cur.execute(count_sql)
-            total_count = cur.fetchone()[0]
-
-        return {
-            "columns": columns,
-            "rows": rows,
-            "total_count": total_count,
-            "preview_limit": req.preview_limit,
-            "cohort_name": cohort.name,
-            "sql": extraction_sql,
-        }
-    finally:
-        conn.close()
-
-
-@router.post("/extract/download")
-def extract_download(req: ExtractRequest, db: Session = Depends(get_db)):
-    """
-    Download the full extracted dataset as CSV.
-    """
-    cohort, version = _get_cohort_and_version(db, req.cohort_id)
-    cdm, conn = _get_cdm_conn(db, cohort.cdm_name)
-    schema = _get_omop_schema(db, cdm)
-
-    criteria = version.criteria_json
-    cohort_has_visit = _cohort_has_same_visit(criteria)
-
-    if req.same_visit_only and not cohort_has_visit:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot use 'Same Visit Only' mode: this cohort was not built with sameVisit enabled.",
-        )
-
-    try:
-        include_visit_id = cohort_has_visit
-        cohort_sql = build_cohort_sql(criteria, schema, include_visit_id=include_visit_id)
-
-        table_sels = [{"table": s.table, "columns": s.columns} for s in req.table_selections]
-        extraction_sql = build_extraction_sql(
-            cohort_sql=cohort_sql,
-            omop_schema=schema,
-            table_selections=table_sels,
-            same_visit_only=req.same_visit_only,
-            cohort_has_visit=cohort_has_visit,
-        )
-
-        def generate_csv():
-            with conn.cursor(name="extract_cursor", cursor_factory=DictCursor) as cur:
-                cur.itersize = 2000
-                cur.execute(extraction_sql)
-                # Named cursors: description is None until first fetch
-                first_row = cur.fetchone()
-                columns = [desc[0] for desc in cur.description] if cur.description else []
-
-                output = io.StringIO()
-                writer = csv.writer(output)
-                writer.writerow(columns)
-                yield output.getvalue()
-
-                if first_row:
-                    output = io.StringIO()
-                    writer = csv.writer(output)
-                    writer.writerow([
-                        v.isoformat() if hasattr(v, 'isoformat') else v
-                        for v in (first_row[col] for col in columns)
-                    ])
-                    yield output.getvalue()
-
-                for row in cur:
-                    output = io.StringIO()
-                    writer = csv.writer(output)
-                    writer.writerow([
-                        v.isoformat() if hasattr(v, 'isoformat') else v
-                        for v in (row[col] for col in columns)
-                    ])
-                    yield output.getvalue()
-
-            conn.close()
-
-        filename = f"dataset_{cohort.name.replace(' ', '_')}_{cohort.id}.csv"
-        return StreamingResponse(
-            generate_csv(),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    except Exception:
-        conn.close()
-        raise
