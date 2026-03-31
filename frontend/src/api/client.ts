@@ -614,6 +614,20 @@ export const dataManagementApi = {
     api.get<{ table: string; columns: { column_name: string; data_type: string }[] }>(
       `/datamanagement/tables/${tableName}/columns`, { params: { cdm_name: cdmName } }
     ),
+  extractSchema: (
+    cdmName: string,
+    data: { table_selections: { table: string; columns: string[] }[] },
+  ) => api.post<{
+    tables: {
+      name: string;
+      columns: { name: string; data_type?: string; selected: boolean }[];
+      pk: string;
+    }[];
+    relationships: {
+      from_table: string; from_column: string;
+      to_table: string; to_column: string;
+    }[];
+  }>('/datamanagement/extract/schema', data, { params: { cdm_name: cdmName } }),
   extractStart: (data: {
     cohort_id: number; same_visit_only: boolean;
     table_selections: { table: string; columns: string[] }[];
@@ -625,9 +639,10 @@ export const dataManagementApi = {
       completed?: number; total?: number; current_step?: string;
       cohort_name?: string;
       result?: {
-        columns: string[]; rows: Record<string, any>[];
-        total_count: number; preview_limit: number;
-        cohort_name: string; sql: string;
+        table_row_counts: Record<string, number>;
+        total_rows: number;
+        num_tables: number;
+        cohort_name: string;
       };
       error?: string;
     }>(`/datamanagement/extract/status/${taskId}`),
@@ -641,20 +656,6 @@ export const dataManagementApi = {
       cdm_name?: string; cohort_name?: string;
       completed?: number; total?: number; current_step?: string;
     }>('/datamanagement/extract/active'),
-  // Legacy synchronous endpoints (kept for backwards compat)
-  extractPreview: (data: {
-    cohort_id: number; same_visit_only: boolean;
-    table_selections: { table: string; columns: string[] }[];
-    preview_limit?: number;
-  }) => api.post<{
-    columns: string[]; rows: Record<string, any>[];
-    total_count: number; preview_limit: number;
-    cohort_name: string; sql: string;
-  }>('/datamanagement/extract/preview', data),
-  extractDownload: (data: {
-    cohort_id: number; same_visit_only: boolean;
-    table_selections: { table: string; columns: string[] }[];
-  }) => api.post('/datamanagement/extract/download', data, { responseType: 'blob' }),
 };
 
 // CDM Access Control endpoints
