@@ -401,6 +401,12 @@ Vue d'ensemble des taux de mapping :
 
 > Les termes sont tries par nombre de records decroissant (les plus impactants en premier).
 
+### Workflow collaboratif
+
+Le mapping dans OPAL est **individuel par utilisateur** : chaque utilisateur travaille independamment sur les suggestions et prend ses propres decisions. Les termes deja approuves par un autre utilisateur restent visibles dans vos suggestions.
+
+Un mapping n'est considere **valide** que lorsqu'il atteint le **consensus** : 2 utilisateurs ou plus ont approuve le meme mapping (meme source_value vers le meme concept cible). Tant qu'un seul utilisateur a approuve, la decision est en statut **pending**.
+
 ### Onglet 3 : Suggestions
 
 #### Configurer les strategies
@@ -417,7 +423,8 @@ Definir le **nombre de termes** a traiter par lot (5 a 100).
 #### Generer des suggestions
 
 1. Cliquer sur **Generer les suggestions**
-2. Pour chaque terme non mappe, une carte affiche :
+2. Seuls les termes que **vous** n'avez pas encore traites apparaissent (les decisions des autres utilisateurs n'impactent pas votre liste)
+3. Pour chaque terme non mappe, une carte affiche :
    - Le **code source** et sa description
    - Les **suggestions classees** par confiance decroissante :
      - Confiance en vert (≥80%) : forte probabilite
@@ -432,7 +439,7 @@ Pour chaque terme, vous pouvez :
 
 - **Approuver** (pouce vert) : accepter la suggestion proposee
 - **Modifier** (crayon) : choisir un concept cible different
-- **Rejeter** (croix rouge) : marquer comme "pas de mapping applicable"
+- **Rejeter** (croix rouge) : marquer comme "pas de mapping applicable" (le terme reapparaitra dans les suggestions)
 
 Vous pouvez aussi ajouter une **raison** pour documenter votre decision.
 
@@ -444,30 +451,59 @@ Pour accelerer le processus :
 
 ### Onglet 4 : Historique et Application
 
-#### Historique des decisions
+#### Vue groupee
 
-- Liste paginee de toutes les decisions prises
-- Filtrer par **domaine** et **action** (approuve, modifie, rejete, annule)
-- Colonnes : domaine, code source, action, concept cible, confiance, raison, date
-- **Annuler** (rollback) : revenir sur une decision individuelle
-- **Exporter** l'historique complet en CSV
+L'historique presente les decisions de **tous les utilisateurs**, groupees intelligemment :
+
+- Les lignes sont triees par **source value** (les decisions sur le meme terme se suivent)
+- Si 2 utilisateurs approuvent le meme mapping (meme source → meme cible), ils sont **fusionnes sur une seule ligne** avec les deux noms d'utilisateurs et un compteur
+- La colonne **Source** affiche le libelle (`source_name`) quand il existe, avec le code en petit
+
+#### Indicateurs de statut
+
+| Icone | Statut | Signification |
+|-------|--------|---------------|
+| Tick vert | **Consensus** | 2+ utilisateurs ont approuve le meme mapping |
+| Triangle jaune | **Conflit** | Des utilisateurs ont mappe le meme terme vers des cibles differentes |
+| *(vide)* | **Single** | Un seul utilisateur a pris une decision |
+
+#### Tag d'action
+
+| Tag | Couleur | Signification |
+|-----|---------|---------------|
+| **pending** | Orange | Approuve par un seul utilisateur, en attente de validation |
+| **approved** | Vert | Consensus atteint (2+ utilisateurs) |
+| **rejected** | Rouge | Mapping rejete |
+| **rolled_back** | Gris | Decision annulee |
+
+#### Actions directes depuis l'historique
+
+Pour chaque ligne, des boutons d'action sont disponibles selon votre relation avec la decision :
+
+- **Tick vert** (Approuver) : approuver ce mapping pour vous — visible si vous n'avez pas encore vote sur cette ligne et qu'un concept cible existe
+- **Croix rouge** (Rejeter) : rejeter ce mapping en place (passe la decision en "rejected") — visible si c'est votre decision ou si vous etes admin
+- **Fleche retour** (Retirer) : retirer silencieusement votre decision (pas de trace) — visible si c'est votre decision
+
+> **Astuce** : pour resoudre un conflit (triangle jaune), approuvez la bonne ligne et rejetez l'autre directement depuis l'historique.
+
+#### Filtres
+
+- **Domaine** : filtrer par domaine clinique
+- **Action** : filtrer par type de decision (approved, rejected, etc.)
+- **Utilisateur** : filtrer par utilisateur (liste dynamique)
 
 #### Appliquer les mappings
 
-Une fois les decisions prises, vous pouvez les appliquer :
+Seuls les mappings ayant atteint le **consensus** (2+ utilisateurs d'accord) sont inclus dans l'application et l'export :
 
 1. Selectionner un **domaine**
 2. Cliquer sur **Preview** pour voir l'impact :
-   - Nombre total de decisions
+   - Nombre total de decisions consensus
    - Nombre de lignes impactees
    - Nombre de personnes impactees
-3. Deux options d'application :
-   - **Exporter STCM CSV** (recommande) : telecharge un fichier CSV au format `source_to_concept_map`
-   - **Ecrire dans le CDM** (admin uniquement) : ecrit directement dans la table du CDM
-     - Une confirmation est requise (saisir le nom du CDM)
-     - L'operation est transactionnelle (rollback en cas d'erreur)
+3. **Exporter STCM CSV** (recommande) : telecharge un fichier CSV au format `source_to_concept_map` contenant uniquement les mappings consensus
 
-> **Attention** : L'ecriture dans le CDM est la seule operation qui modifie vos donnees. Il est recommande d'utiliser l'export CSV et de l'appliquer via vos propres processus ETL.
+> **Note** : Les decisions en statut "pending" (un seul utilisateur) ne sont pas incluses dans l'export. Demandez a un collegue de valider vos mappings pour qu'ils atteignent le consensus.
 
 ### Chargement des donnees de reference
 
