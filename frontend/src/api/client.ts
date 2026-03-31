@@ -385,12 +385,16 @@ export const mappingApi = {
     ),
   exportStcmUrl: (cdmName: string, domain: string) =>
     `/api/mapping/apply/export/${cdmName}/${domain}`,
-  history: (cdmName: string, domain?: string, action?: string, page?: number, pageSize?: number) =>
-    api.get<{ total: number; page: number; total_pages: number; items: MappingDecisionEntry[] }>(
-      `/mapping/history/${cdmName}`, { params: { domain: domain || '', action: action || '', page: page || 1, page_size: pageSize || 50 } }
+  history: (cdmName: string, domain?: string, action?: string, page?: number, pageSize?: number, user?: string) =>
+    api.get<{ total: number; page: number; total_pages: number; users: string[]; items: MappingDecisionEntry[] }>(
+      `/mapping/history/${cdmName}`, { params: { domain: domain || '', action: action || '', user: user || '', page: page || 1, page_size: pageSize || 50 } }
     ),
   rollback: (decisionId: number) =>
     api.post(`/mapping/history/${decisionId}/rollback`),
+  reject: (decisionId: number) =>
+    api.post(`/mapping/history/${decisionId}/reject`),
+  withdraw: (decisionId: number) =>
+    api.post(`/mapping/history/${decisionId}/withdraw`),
   exportHistoryUrl: (cdmName: string, domain?: string) =>
     `/api/mapping/history/${cdmName}/export${domain ? `?domain=${domain}` : ''}`,
   conceptLookup: (cdmName: string, conceptId: number) =>

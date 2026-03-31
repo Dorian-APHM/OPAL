@@ -41,7 +41,8 @@ AUTH_READ_PATHS = {"/api/cdm/"}
 # Path patterns where CDM name appears as a path segment
 _CDM_PATH_PATTERNS = [
     re.compile(r"^/api/quality/(?:snapshots|conformity|timeline|report)/([^/]+)"),
-    re.compile(r"^/api/mapping/(?:dashboard|unmapped|strategies|concept-lookup|history|apply/export)/([^/]+)"),
+    re.compile(r"^/api/mapping/(?:dashboard|unmapped|strategies|concept-lookup|apply/export)/([^/]+)"),
+    re.compile(r"^/api/mapping/history/([a-zA-Z][^/]*)"),
     re.compile(r"^/api/cdm/([^/]+)"),
 ]
 

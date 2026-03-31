@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useSessionState } from '../hooks/useSessionState';
 import {
@@ -8,7 +8,7 @@ import {
 import type { TabItem, Column } from '../components/ui';
 import {
   BarChart3, Search, Lightbulb, History, Download, Check, X, Edit,
-  Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link,
+  Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link, CheckCircle2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -580,7 +580,8 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
             min={5}
             max={100}
             value={limit}
-            onChange={v => setLimit(v || 20)}
+            onChange={v => setLimit(v as any)}
+            onBlur={() => { if (!limit || limit < 5) setLimit(5); if (limit > 100) setLimit(100); }}
             className="w-[70px]"
           />
           <span className="border-l border-glass-border pl-3 ml-1 flex items-center gap-3">
@@ -1091,37 +1092,73 @@ function ReasonCell({ value }: { value: string }) {
 function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKey?: number }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const { roles } = useAuth();
+  const { roles, username: currentUser } = useAuth();
   const canWriteCdm = roles.includes('admin') || roles.includes('data-manager');
   const [items, setItems] = useState<MappingDecisionEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useSessionState('mapping:history:page', 1);
   const [filterDomain, setFilterDomain] = useSessionState('mapping:history:filterDomain', '');
   const [filterAction, setFilterAction] = useSessionState('mapping:history:filterAction', '');
+  const [filterUser, setFilterUser] = useSessionState('mapping:history:filterUser', '');
+  const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
   const [applyPreview, setApplyPreview] = useState<{ total_decisions: number; impacted_rows: number; impacted_persons: number } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
-    mappingApi.history(cdmName, filterDomain || undefined, filterAction || undefined, page)
-      .then(r => { setItems(r.data.items); setTotal(r.data.total); })
+    mappingApi.history(cdmName, filterDomain || undefined, filterAction || undefined, page, undefined, filterUser || undefined)
+      .then(r => { setItems(r.data.items); setTotal(r.data.total); if (r.data.users) setAvailableUsers(r.data.users); })
       .catch(() => { setItems([]); setTotal(0); })
       .finally(() => setLoading(false));
-  }, [cdmName, filterDomain, filterAction, page]);
+  }, [cdmName, filterDomain, filterAction, filterUser, page]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
-  // Rollback confirm state
-  const [rollbackConfirm, setRollbackConfirm] = useState<{ open: boolean; id: number }>({ open: false, id: 0 });
+  // Withdraw confirm state
+  const [withdrawConfirm, setWithdrawConfirm] = useState<{ open: boolean; id: number }>({ open: false, id: 0 });
 
-  const handleRollback = async (id: number) => {
+  const handleWithdraw = async (id: number) => {
     try {
-      await mappingApi.rollback(id);
-      toast.success('Rolled back');
+      await mappingApi.withdraw(id);
+      toast.success('Decision withdrawn');
       load();
     } catch (e: any) {
-      toast.error(e.response?.data?.detail || 'Rollback failed');
+      toast.error(e.response?.data?.detail || 'Withdraw failed');
+    }
+  };
+
+  const handleApproveFromHistory = async (row: GroupedRow) => {
+    try {
+      await mappingApi.decide({
+        cdm_name: cdmName,
+        domain: row.domain,
+        source_value: row.source_value,
+        source_name: row.source_name,
+        action: 'approved',
+        target_concept_id: row.target_concept_id ?? undefined,
+        target_concept_name: row.target_concept_name || undefined,
+        target_vocabulary_id: row.target_vocabulary_id || undefined,
+        suggestion_source: 'history',
+        confidence_score: row.confidence_score ?? undefined,
+      });
+      toast.success('Approved');
+      load();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Approve failed');
+    }
+  };
+
+  const handleReject = async (row: GroupedRow) => {
+    try {
+      // Reject all decisions in this grouped row
+      for (const id of row.ids) {
+        await mappingApi.reject(id);
+      }
+      toast.success('Rejected');
+      load();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Reject failed');
     }
   };
 
@@ -1154,7 +1191,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   };
 
   const actionColor = (a: string): 'green' | 'blue' | 'red' | 'orange' | 'default' => {
-    const colors: Record<string, 'green' | 'blue' | 'red' | 'orange'> = { approved: 'green', modified: 'blue', rejected: 'red', rolled_back: 'orange' };
+    const colors: Record<string, 'green' | 'blue' | 'red' | 'orange' | 'default'> = { approved: 'green', modified: 'blue', rejected: 'red', rolled_back: 'default' };
     return colors[a] || 'default';
   };
 
@@ -1165,43 +1202,193 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
     { value: 'rolled_back', label: 'Rolled back' },
   ];
 
-  const columns: Column<MappingDecisionEntry>[] = [
+  // ── Group decisions: merge rows when same source_value + same target_concept_id ──
+  interface GroupedRow {
+    key: string;
+    ids: number[];
+    userIdMap: Record<string, number>; // user → decision id
+    domain: string;
+    source_value: string;
+    source_name: string;
+    action: string;
+    target_concept_id: number | null;
+    target_concept_name: string;
+    target_vocabulary_id: string;
+    confidence_score: number | null;
+    reason: string;
+    users: string[];
+    created_at: string | null;
+    status: 'consensus' | 'conflict' | 'single';
+  }
+
+  const groupedRows = useMemo(() => {
+    // 1. Group by (source_value, domain, target_concept_id, action)
+    const groupMap = new Map<string, GroupedRow>();
+    for (const item of items) {
+      const gk = `${item.domain}::${item.source_value}::${item.target_concept_id ?? 'null'}::${item.action}`;
+      const existing = groupMap.get(gk);
+      if (existing) {
+        if (!existing.users.includes(item.user)) existing.users.push(item.user);
+        existing.ids.push(item.id);
+        existing.userIdMap[item.user] = item.id;
+        // Keep highest confidence
+        if (item.confidence_score != null && (existing.confidence_score == null || item.confidence_score > existing.confidence_score))
+          existing.confidence_score = item.confidence_score;
+        // Keep most recent date
+        if (item.created_at && (!existing.created_at || item.created_at > existing.created_at))
+          existing.created_at = item.created_at;
+        // Append reason
+        if (item.reason && !existing.reason.includes(item.reason))
+          existing.reason = existing.reason ? `${existing.reason}; ${item.reason}` : item.reason;
+      } else {
+        groupMap.set(gk, {
+          key: gk,
+          ids: [item.id],
+          userIdMap: { [item.user]: item.id },
+          domain: item.domain,
+          source_value: item.source_value,
+          source_name: item.source_name,
+          action: item.action,
+          target_concept_id: item.target_concept_id,
+          target_concept_name: item.target_concept_name,
+          target_vocabulary_id: item.target_vocabulary_id,
+          confidence_score: item.confidence_score,
+          reason: item.reason || '',
+          users: [item.user],
+          created_at: item.created_at,
+          status: 'single',
+        });
+      }
+    }
+
+    const groups = Array.from(groupMap.values());
+
+    // 2. Determine consensus/conflict per source_value+domain
+    // Group by source_value+domain to check if multiple different targets exist
+    const svGroups = new Map<string, GroupedRow[]>();
+    for (const g of groups) {
+      const svKey = `${g.domain}::${g.source_value}`;
+      const arr = svGroups.get(svKey) || [];
+      arr.push(g);
+      svGroups.set(svKey, arr);
+    }
+    for (const arr of svGroups.values()) {
+      const mappedGroups = arr.filter(g => g.action === 'approved' || g.action === 'modified');
+      const hasMultipleTargets = new Set(mappedGroups.map(g => g.target_concept_id)).size > 1;
+      for (const g of mappedGroups) {
+        if (g.users.length > 1) {
+          // Multiple users agree on this target → consensus (tick vert)
+          // But also flag conflict if other groups map to a different target
+          g.status = hasMultipleTargets ? 'conflict' : 'consensus';
+        } else if (hasMultipleTargets) {
+          // Single user but other mappings exist for this source → conflict
+          g.status = 'conflict';
+        }
+        // else: single user, single target → stays 'single' (no icon)
+      }
+      // Non-mapped groups (rejected, rolled_back) stay 'single'
+    }
+
+    // 3. Sort by source_value (grouped), then domain
+    groups.sort((a, b) => {
+      const sv = a.source_value.localeCompare(b.source_value);
+      if (sv !== 0) return sv;
+      const dom = a.domain.localeCompare(b.domain);
+      if (dom !== 0) return dom;
+      return (a.target_concept_id ?? 0) - (b.target_concept_id ?? 0);
+    });
+
+    return groups;
+  }, [items]);
+
+  const columns: Column<GroupedRow>[] = [
+    { title: '', key: 'status', width: 45,
+      render: (_: any, r: GroupedRow) => {
+        if (r.status === 'single') return null;
+        const hasConsensus = r.users.length > 1;
+        const hasConflict = r.status === 'conflict';
+        return (
+          <div className="flex items-center gap-0.5">
+            {hasConsensus && <Tooltip title={`Consensus — ${r.users.length} users`}><CheckCircle2 className="h-4 w-4 text-emerald-400" /></Tooltip>}
+            {hasConflict && <Tooltip title="Conflit — cible différente pour ce terme"><AlertTriangle className="h-4 w-4 text-amber-400" /></Tooltip>}
+          </div>
+        );
+      } },
     { title: t('mapping.domain', 'Domain'), dataIndex: 'domain', key: 'd', width: 100 },
-    { title: t('mapping.source_value', 'Source'), dataIndex: 'source_value', key: 'sv', width: 160, ellipsis: true },
-    { title: t('mapping.action', 'Action'), dataIndex: 'action', key: 'a', width: 100,
-      render: (a: string) => <Tag color={actionColor(a)}>{a}</Tag> },
+    { title: 'Source', key: 'sv', width: 200,
+      render: (_: any, r: GroupedRow) => r.source_name
+        ? <span title={r.source_value}>{r.source_name} <span className="text-text-muted text-[10px]">({r.source_value})</span></span>
+        : <span>{r.source_value}</span> },
+    { title: t('mapping.action', 'Action'), key: 'a', width: 100,
+      render: (_: any, r: GroupedRow) => {
+        const isPending = (r.action === 'approved' || r.action === 'modified') && r.users.length < 2;
+        const label = isPending ? 'pending' : r.action;
+        const color = isPending ? 'orange' as const : actionColor(r.action);
+        return <Tag color={color}>{label}</Tag>;
+      } },
     { title: t('mapping.target', 'Target'), key: 'target', width: 200,
-      render: (_: any, r: MappingDecisionEntry) => r.target_concept_id
+      render: (_: any, r: GroupedRow) => r.target_concept_id
         ? <span>{r.target_concept_name} <span className="text-text-muted text-[10px]">({r.target_concept_id})</span></span>
         : <span className="text-text-dim">—</span> },
     { title: t('mapping.confidence', 'Confidence'), dataIndex: 'confidence_score', key: 'c', width: 80,
       render: (v: number | null) => v != null ? <Tag>{v}%</Tag> : '—' },
-    { title: t('mapping.reason', 'Reason'), dataIndex: 'reason', key: 'reason', width: 150, ellipsis: true,
+    { title: t('mapping.reason', 'Reason'), dataIndex: 'reason', key: 'reason', width: 140, ellipsis: true,
       render: (v: string) => v
         ? <ReasonCell value={v} />
         : <span className="text-text-dim">—</span> },
-    { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 120,
+    { title: t('mapping.users', 'Users'), key: 'users', width: 130,
+      render: (_: any, r: GroupedRow) => (
+        <div className="flex flex-wrap gap-1">
+          {r.users.map(u => <Tag key={u}>{u}</Tag>)}
+          {r.users.length > 1 && <span className="text-[10px] text-emerald-400 font-medium ml-1">×{r.users.length}</span>}
+        </div>
+      ) },
+    { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 110,
       render: (v: string) => v?.substring(0, 16).replace('T', ' ') },
-    { title: '', key: 'actions', width: 50,
-      render: (_: any, r: MappingDecisionEntry) => r.action !== 'rolled_back' ? (
-        <Button
-          size="small"
-          variant="link"
-          onClick={() => setRollbackConfirm({ open: true, id: r.id })}
-        >
-          <Undo2 className="h-4 w-4" />
-        </Button>
-      ) : null },
+    { title: '', key: 'actions', width: 110,
+      render: (_: any, r: GroupedRow) => {
+        if (r.action === 'rolled_back') return null;
+        const isAdmin = roles.includes('admin');
+        const alreadyMine = r.users.includes(currentUser);
+        const canReject = r.action !== 'rejected' && (alreadyMine || isAdmin);
+        const canApprove = !alreadyMine && r.target_concept_id && r.action !== 'rejected';
+        const canRollback = alreadyMine || isAdmin;
+        return (
+          <div className="flex items-center gap-1">
+            {canApprove && (
+              <Tooltip title="Approve this mapping for me">
+                <Button size="small" variant="link" onClick={() => handleApproveFromHistory(r)}>
+                  <Check className="h-4 w-4 text-emerald-400" />
+                </Button>
+              </Tooltip>
+            )}
+            {canReject && (
+              <Tooltip title="Reject this mapping">
+                <Button size="small" variant="link" onClick={() => handleReject(r)}>
+                  <X className="h-4 w-4 text-red-400" />
+                </Button>
+              </Tooltip>
+            )}
+            {canRollback && r.userIdMap[currentUser] && (
+              <Tooltip title="Retirer ma décision">
+                <Button size="small" variant="link" onClick={() => setWithdrawConfirm({ open: true, id: r.userIdMap[currentUser] })}>
+                  <Undo2 className="h-4 w-4" />
+                </Button>
+              </Tooltip>
+            )}
+          </div>
+        );
+      } },
   ];
 
   return (
     <div>
       <Confirm
-        open={rollbackConfirm.open}
-        onClose={() => setRollbackConfirm({ open: false, id: 0 })}
-        onConfirm={() => handleRollback(rollbackConfirm.id)}
-        title="Rollback?"
-        confirmText="Rollback"
+        open={withdrawConfirm.open}
+        onClose={() => setWithdrawConfirm({ open: false, id: 0 })}
+        onConfirm={() => handleWithdraw(withdrawConfirm.id)}
+        title="Retirer ma décision ?"
+        confirmText="Retirer"
         danger
       />
 
@@ -1222,6 +1409,14 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             className="w-full sm:w-[120px]"
             allowClear
             placeholder="All actions"
+          />
+          <Select
+            value={filterUser}
+            onChange={v => { setFilterUser(v); setPage(1); }}
+            options={availableUsers.map(u => ({ value: u, label: u }))}
+            className="w-full sm:w-[130px]"
+            allowClear
+            placeholder="All users"
           />
           <Button icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportHistoryUrl(cdmName, filterDomain || undefined))} size="small">
             {t('mapping.export_history', 'Export')}
@@ -1320,9 +1515,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
       )}
 
       <Table
-        dataSource={items}
+        dataSource={groupedRows}
         columns={columns}
-        rowKey="id"
+        rowKey="key"
         loading={loading}
         pagination={{ pageSize: 50, current: page, total, onChange: setPage }}
         size="small"
