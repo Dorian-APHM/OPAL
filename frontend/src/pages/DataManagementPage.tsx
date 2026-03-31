@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
 import {
   Card,
@@ -6,7 +6,6 @@ import {
   Select,
   Switch,
   Checkbox,
-  Table,
   Tag,
   Spinner,
   Empty,
@@ -15,19 +14,19 @@ import {
   Progress,
   useToast,
 } from '../components/ui';
-import type { Column } from '../components/ui';
 import {
   Database,
   Download,
-  Eye,
   Table2,
   ChevronRight,
   Info,
   Users,
   Columns3,
   FileSpreadsheet,
+  FileArchive,
   Link2,
   X,
+  Key,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { dataManagementApi } from '../api/client';
@@ -65,9 +64,84 @@ interface TableColumnState {
   };
 }
 
+interface SchemaTable {
+  name: string;
+  columns: { name: string; data_type?: string; selected: boolean }[];
+  pk: string;
+}
+
+interface SchemaRelationship {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+}
+
+interface SchemaData {
+  tables: SchemaTable[];
+  relationships: SchemaRelationship[];
+}
+
+interface ExtractionResult {
+  table_row_counts: Record<string, number>;
+  total_rows: number;
+  num_tables: number;
+  cohort_name: string;
+}
+
 interface Props {
   selectedCdm: string | null;
 }
+
+// Default columns to pre-select per OMOP table
+const _DEFAULT_COLUMNS: Record<string, Set<string>> = {
+  person: new Set([
+    'person_id', 'gender_concept_id', 'year_of_birth', 'month_of_birth',
+    'day_of_birth', 'birth_datetime', 'death_datetime', 'person_source_value',
+  ]),
+  visit_occurrence: new Set([
+    'visit_occurrence_id', 'person_id', 'visit_concept_id', 'visit_start_date',
+    'visit_end_date', 'visit_source_value', 'admitted_from_concept_id',
+    'discharged_to_concept_id',
+  ]),
+  condition_occurrence: new Set([
+    'condition_occurrence_id', 'person_id', 'visit_occurrence_id',
+    'condition_concept_id', 'condition_start_date', 'condition_end_date',
+    'condition_source_value', 'condition_status_concept_id',
+  ]),
+  drug_exposure: new Set([
+    'drug_exposure_id', 'person_id', 'visit_occurrence_id', 'drug_concept_id',
+    'drug_exposure_start_date', 'drug_exposure_end_date', 'drug_source_value',
+    'quantity', 'days_supply', 'route_concept_id',
+  ]),
+  measurement: new Set([
+    'measurement_id', 'person_id', 'visit_occurrence_id', 'measurement_concept_id',
+    'measurement_date', 'value_as_number', 'value_as_concept_id', 'unit_concept_id',
+    'measurement_source_value', 'range_low', 'range_high',
+  ]),
+  observation: new Set([
+    'observation_id', 'person_id', 'visit_occurrence_id', 'observation_concept_id',
+    'observation_date', 'value_as_number', 'value_as_string', 'value_as_concept_id',
+    'unit_concept_id', 'observation_source_value',
+  ]),
+  procedure_occurrence: new Set([
+    'procedure_occurrence_id', 'person_id', 'visit_occurrence_id',
+    'procedure_concept_id', 'procedure_date', 'procedure_end_date',
+    'procedure_source_value', 'quantity',
+  ]),
+  device_exposure: new Set([
+    'device_exposure_id', 'person_id', 'visit_occurrence_id', 'device_concept_id',
+    'device_exposure_start_date', 'device_exposure_end_date', 'device_source_value',
+    'quantity',
+  ]),
+  death: new Set([
+    'person_id', 'death_date', 'cause_concept_id', 'cause_source_value',
+  ]),
+  observation_period: new Set([
+    'observation_period_id', 'person_id', 'observation_period_start_date',
+    'observation_period_end_date',
+  ]),
+};
 
 // ---------- Component ----------
 
@@ -88,17 +162,17 @@ export default function DataManagementPage({ selectedCdm }: Props) {
   const [taskId, setTaskId] = useSessionState<string | null>('data:taskId', null);
   const [loading, setLoading] = useSessionState('data:loading', false);
   const [progressCompleted, setProgressCompleted] = useSessionState('data:progDone', 0);
-  const [progressTotal, setProgressTotal] = useSessionState('data:progTotal', 3);
+  const [progressTotal, setProgressTotal] = useSessionState('data:progTotal', 0);
   const [currentStep, setCurrentStep] = useSessionState('data:step', '');
 
   // ── Result state (persisted) ──
-  const [previewData, setPreviewData] = useSessionState<{
-    columns: string[];
-    rows: Record<string, any>[];
-    total_count: number;
-  } | null>('data:previewData', null);
+  const [extractionResult, setExtractionResult] = useSessionState<ExtractionResult | null>('data:extractResult', null);
   const [completedTaskId, setCompletedTaskId] = useSessionState<string | null>('data:completedTaskId', null);
   const [error, setError] = useState('');
+
+  // ── Schema state ──
+  const [schemaData, setSchemaData] = useSessionState<SchemaData | null>('data:schema', null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
 
   // Expanded tables (for accordion behavior)
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
@@ -127,27 +201,23 @@ export default function DataManagementPage({ selectedCdm }: Props) {
         if (resp.data.current_step) setCurrentStep(resp.data.current_step);
 
         if (resp.data.status === 'completed' && resp.data.result) {
-          setPreviewData({
-            columns: resp.data.result.columns,
-            rows: resp.data.result.rows,
-            total_count: resp.data.result.total_count,
-          });
+          setExtractionResult(resp.data.result);
           setCompletedTaskId(tid);
           setLoading(false);
           setTaskId(null);
           setProgressCompleted(0);
-          setProgressTotal(3);
+          setProgressTotal(0);
           setCurrentStep('');
           stopPolling();
           toast.success(
-            `${t('datamanagement.extraction_complete', 'Extraction complete')} — ${resp.data.result.total_count.toLocaleString()} ${t('datamanagement.rows', 'rows')}`
+            `${t('datamanagement.extraction_complete', 'Extraction complete')} — ${resp.data.result.total_rows.toLocaleString()} ${t('datamanagement.rows', 'rows')} (${resp.data.result.num_tables} tables)`
           );
         } else if (resp.data.status === 'error') {
           setError(resp.data.error || 'Extraction failed');
           setLoading(false);
           setTaskId(null);
           setProgressCompleted(0);
-          setProgressTotal(3);
+          setProgressTotal(0);
           setCurrentStep('');
           stopPolling();
         }
@@ -167,14 +237,9 @@ export default function DataManagementPage({ selectedCdm }: Props) {
           setTaskId(resp.data.task_id);
           startPolling(resp.data.task_id);
         } else if (resp.data.task_id && resp.data.status === 'completed') {
-          // Completed while away — fetch result
           dataManagementApi.extractStatus(resp.data.task_id).then(r => {
             if (r.data.result) {
-              setPreviewData({
-                columns: r.data.result.columns,
-                rows: r.data.result.rows,
-                total_count: r.data.result.total_count,
-              });
+              setExtractionResult(r.data.result);
               setCompletedTaskId(resp.data.task_id!);
             }
             setLoading(false);
@@ -196,10 +261,8 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     const cdmChanged = prevCdmRef.current !== null && prevCdmRef.current !== selectedCdm;
     prevCdmRef.current = selectedCdm;
 
-    // On first mount, only reload lists if not already cached
     if (!mountedRef.current) {
       mountedRef.current = true;
-      // Refresh cohort list silently (don't clear selections)
       setLoadingCohorts(true);
       dataManagementApi
         .listCohorts(selectedCdm)
@@ -229,11 +292,11 @@ export default function DataManagementPage({ selectedCdm }: Props) {
       return;
     }
 
-    // CDM actually changed by user — reset everything
     if (cdmChanged) {
       setSelectedCohortId(null);
-      setPreviewData(null);
+      setExtractionResult(null);
       setCompletedTaskId(null);
+      setSchemaData(null);
     }
     setLoadingCohorts(true);
     dataManagementApi
@@ -264,13 +327,13 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     }
   }, [selectedCdm]);
 
-  // Reset sameVisitOnly when cohort actually changes (not on remount)
+  // Reset sameVisitOnly when cohort actually changes
   const prevCohortRef = useRef<string | null>(selectedCohortId);
   useEffect(() => {
-    if (prevCohortRef.current === selectedCohortId) return; // skip remount
+    if (prevCohortRef.current === selectedCohortId) return;
     prevCohortRef.current = selectedCohortId;
     setSameVisitOnly(false);
-    setPreviewData(null);
+    setExtractionResult(null);
     setCompletedTaskId(null);
   }, [selectedCohortId]);
 
@@ -288,12 +351,16 @@ export default function DataManagementPage({ selectedCdm }: Props) {
             .listColumns(selectedCdm, tableName)
             .then((res) => {
               const cols: ColumnInfo[] = res.data.columns;
+              const preset = _DEFAULT_COLUMNS[tableName];
+              const selected = preset
+                ? new Set(cols.filter((c) => preset.has(c.column_name)).map((c) => c.column_name))
+                : new Set(cols.map((c) => c.column_name));
               setTableState((p) => ({
                 ...p,
                 [tableName]: {
                   ...p[tableName],
                   columns: cols,
-                  selectedColumns: new Set(cols.map((c) => c.column_name)),
+                  selectedColumns: selected,
                   loading: false,
                 },
               }));
@@ -308,6 +375,8 @@ export default function DataManagementPage({ selectedCdm }: Props) {
         return next;
       });
       if (checked) setExpandedTable(tableName);
+      // Clear schema when selection changes
+      setSchemaData(null);
     },
     [selectedCdm],
   );
@@ -320,6 +389,7 @@ export default function DataManagementPage({ selectedCdm }: Props) {
       else next.delete(colName);
       return { ...prev, [tableName]: { ...ts, selectedColumns: next } };
     });
+    setSchemaData(null);
   };
 
   const handleSelectAllColumns = (tableName: string, checked: boolean) => {
@@ -328,6 +398,7 @@ export default function DataManagementPage({ selectedCdm }: Props) {
       const next = checked ? new Set(ts.columns.map((c) => c.column_name)) : new Set<string>();
       return { ...prev, [tableName]: { ...ts, selectedColumns: next } };
     });
+    setSchemaData(null);
   };
 
   const getTableSelections = () => {
@@ -345,59 +416,59 @@ export default function DataManagementPage({ selectedCdm }: Props) {
 
   const canExtract = cohortIdNum !== null && getTableSelections().length > 0 && !loading;
   const selectedTableCount = Object.values(tableState).filter((s) => s.selected).length;
-  const [previewLoading, setPreviewLoading] = useSessionState('data:previewLoading', false);
-  const previewAbortRef = useRef<AbortController | null>(null);
 
-  // ── Quick preview (synchronous, no CSV build) ──
-  const runPreview = useCallback(async () => {
-    if (!cohortIdNum) return;
+  // ── Load BDR schema when tables/columns change ──
+  const loadSchema = useCallback(async () => {
+    if (!selectedCdm) return;
     const sels = getTableSelections();
-    if (sels.length === 0) return;
-    // Cancel any in-flight preview
-    if (previewAbortRef.current) previewAbortRef.current.abort();
-    const ctrl = new AbortController();
-    previewAbortRef.current = ctrl;
-    setPreviewLoading(true);
-    setError('');
+    if (sels.length === 0) {
+      setSchemaData(null);
+      return;
+    }
+    setSchemaLoading(true);
     try {
-      const resp = await dataManagementApi.extractPreview({
-        cohort_id: cohortIdNum,
-        same_visit_only: sameVisitOnly,
+      const resp = await dataManagementApi.extractSchema(selectedCdm, {
         table_selections: sels,
-        preview_limit: 50,
       });
-      if (ctrl.signal.aborted) return;
-      setPreviewData({
-        columns: resp.data.columns,
-        rows: resp.data.rows,
-        total_count: resp.data.total_count,
-      });
-    } catch (err: any) {
-      if (ctrl.signal.aborted) return;
-      setError(err.response?.data?.detail || err.message || 'Preview failed');
+      setSchemaData(resp.data);
+    } catch {
+      // Silent fail — schema is informational
     } finally {
-      if (!ctrl.signal.aborted) setPreviewLoading(false);
+      setSchemaLoading(false);
     }
-  }, [cohortIdNum, sameVisitOnly, tableState]);
+  }, [selectedCdm, tableState]);
 
-  const handlePreview = () => { runPreview(); };
-
-  // Re-launch preview on remount if it was in progress
-  const previewResumedRef = useRef(false);
+  // Auto-load schema when selections stabilize (debounced)
+  const schemaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSelectionsRef = useRef<string>('');
   useEffect(() => {
-    if (previewLoading && !previewResumedRef.current && cohortIdNum) {
-      previewResumedRef.current = true;
-      runPreview();
-    }
-    return () => { if (previewAbortRef.current) previewAbortRef.current.abort(); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const sels = getTableSelections();
+    const key = JSON.stringify(sels);
+    if (key === prevSelectionsRef.current) return;
+    prevSelectionsRef.current = key;
 
-  // ── Launch full extraction (background, builds CSV for download) ──
+    if (sels.length === 0) {
+      setSchemaData(null);
+      return;
+    }
+
+    if (schemaTimerRef.current) clearTimeout(schemaTimerRef.current);
+    schemaTimerRef.current = setTimeout(() => {
+      loadSchema();
+    }, 600);
+
+    return () => {
+      if (schemaTimerRef.current) clearTimeout(schemaTimerRef.current);
+    };
+  }, [tableState, selectedCdm]);
+
+  // ── Launch full extraction (background, builds ZIP) ──
   const handleExtract = async () => {
     if (!canExtract) return;
     setLoading(true);
     setError('');
     setCompletedTaskId(null);
+    setExtractionResult(null);
     try {
       const resp = await dataManagementApi.extractStart({
         cohort_id: cohortIdNum!,
@@ -423,17 +494,15 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     setTaskId(null);
     setLoading(false);
     setProgressCompleted(0);
-    setProgressTotal(3);
+    setProgressTotal(0);
     setCurrentStep('');
   };
 
-  // ── Download CSV ──
+  // ── Download ZIP ──
   const handleDownload = () => {
     if (!completedTaskId) return;
     const url = dataManagementApi.extractDownloadUrl(completedTaskId);
     authDownload(url);
-    // Don't clear completedTaskId — user might want to download again
-    // The backend cleans up the task after download
   };
 
   // ---------- Render ----------
@@ -480,8 +549,8 @@ export default function DataManagementPage({ selectedCdm }: Props) {
           {t('datamanagement.select_tables', 'Tables & Columns')}
         </span>
         <ChevronRight className="h-3.5 w-3.5 text-text-dim" />
-        <StepBadge step={3} active={canExtract} done={!!previewData} />
-        <span className={previewData ? 'text-text-muted' : ''}>
+        <StepBadge step={3} active={canExtract} done={!!extractionResult} />
+        <span className={extractionResult ? 'text-text-muted' : ''}>
           {t('datamanagement.extract', 'Extract')}
         </span>
       </div>
@@ -604,7 +673,6 @@ export default function DataManagementPage({ selectedCdm }: Props) {
 
                 return (
                   <div key={tbl.table_name}>
-                    {/* Table row — click to toggle selection */}
                     <button
                       className={`
                         w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm
@@ -641,7 +709,6 @@ export default function DataManagementPage({ selectedCdm }: Props) {
                       )}
                     </button>
 
-                    {/* Columns panel — only when selected + expanded */}
                     {ts.selected && isExpanded && (
                       <div className="ml-7 px-3 py-2.5 mb-1 rounded-lg bg-surface-dark/50 border border-glass-border/50">
                         {ts.loading ? (
@@ -689,6 +756,32 @@ export default function DataManagementPage({ selectedCdm }: Props) {
         </div>
       </Card>
 
+      {/* BDR Schema — shows automatically when tables are selected */}
+      {(schemaData || schemaLoading) && (
+        <Card
+          size="small"
+          title={
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-emerald-400" />
+              <span>{t('datamanagement.schema_title', 'Relational Schema')}</span>
+              {schemaData && (
+                <Tag color="blue">
+                  {schemaData.tables.length} tables · {schemaData.relationships.length} relations
+                </Tag>
+              )}
+            </div>
+          }
+        >
+          <div className="p-4">
+            {schemaLoading ? (
+              <Spinner size="small" tip="Loading schema..." />
+            ) : schemaData ? (
+              <BdrDiagram schema={schemaData} />
+            ) : null}
+          </div>
+        </Card>
+      )}
+
       {/* Step 3: Extract Dataset */}
       <Card
         size="small"
@@ -711,27 +804,14 @@ export default function DataManagementPage({ selectedCdm }: Props) {
                 {t('common.cancel', 'Cancel')}
               </Button>
             ) : (
-              <>
-                <Button
-                  variant="primary"
-                  onClick={handlePreview}
-                  disabled={!canExtract || previewLoading}
-                  loading={previewLoading}
-                  icon={<Eye className="h-4 w-4" />}
-                >
-                  {previewData
-                    ? t('datamanagement.re_preview', 'Re-preview')
-                    : t('datamanagement.preview', 'Preview')}
-                </Button>
-                <Button
-                  onClick={handleExtract}
-                  disabled={!canExtract}
-                  icon={<Download className="h-4 w-4" />}
-                  className="!bg-emerald-600 hover:!bg-emerald-500"
-                >
-                  {t('datamanagement.extract_csv', 'Extract CSV')}
-                </Button>
-              </>
+              <Button
+                onClick={handleExtract}
+                disabled={!canExtract}
+                icon={<FileArchive className="h-4 w-4" />}
+                className="!bg-emerald-600 hover:!bg-emerald-500"
+              >
+                {t('datamanagement.extract_zip', 'Extract ZIP')}
+              </Button>
             )}
             {completedTaskId && !loading && (
               <Button
@@ -740,12 +820,12 @@ export default function DataManagementPage({ selectedCdm }: Props) {
                 icon={<Download className="h-4 w-4" />}
                 className="!bg-emerald-600 hover:!bg-emerald-500"
               >
-                {t('datamanagement.download_csv', 'Download CSV')}
+                {t('datamanagement.download_zip', 'Download ZIP')}
               </Button>
             )}
           </div>
 
-          {!canExtract && !loading && !previewData && (
+          {!canExtract && !loading && !extractionResult && (
             <p className="text-xs text-text-dim">
               {!cohortIdNum
                 ? t('datamanagement.hint_select_cohort', 'Select a cohort to begin.')
@@ -779,47 +859,415 @@ export default function DataManagementPage({ selectedCdm }: Props) {
             </div>
           )}
 
-          {previewData && !loading && (
+          {/* Extraction result summary */}
+          {extractionResult && !loading && (
             <>
               <div className="h-px bg-glass-border" />
-
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-text-bright">
-                  {t('datamanagement.total_rows', 'Total rows')}: {previewData.total_count.toLocaleString()}
-                </span>
-                <span className="text-xs text-text-dim">
-                  ({t('datamanagement.showing', 'showing')} {Math.min(previewData.rows.length, 50)})
-                </span>
-              </div>
-
-              <div className="overflow-auto max-h-[420px] rounded-xl border border-glass-border">
-                <Table
-                  dataSource={previewData.rows.map((r, i) => ({ ...r, _key: String(i) }))}
-                  rowKey="_key"
-                  columns={previewData.columns.map(
-                    (col): Column<Record<string, any>> => ({
-                      key: col,
-                      title: col,
-                      dataIndex: col,
-                      width: 150,
-                      ellipsis: true,
-                      render: (val: any) =>
-                        val === null ? (
-                          <span className="text-text-dim italic">NULL</span>
-                        ) : (
-                          String(val)
-                        ),
-                    }),
-                  )}
-                  size="small"
-                  pagination={false}
-                  scroll={{ x: true }}
-                />
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <Tag color="green">
+                    {extractionResult.total_rows.toLocaleString()} rows total
+                  </Tag>
+                  <Tag color="blue">
+                    {extractionResult.num_tables} tables
+                  </Tag>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                  {Object.entries(extractionResult.table_row_counts).map(([tbl, count]) => (
+                    <div
+                      key={tbl}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-dark border border-glass-border"
+                    >
+                      <Table2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                      <span className="text-xs font-medium text-text-bright truncate">{tbl}</span>
+                      <span className="text-xs text-text-dim ml-auto whitespace-nowrap">
+                        {count.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </>
           )}
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ---------- BDR Diagram sub-component ----------
+
+function BdrDiagram({ schema }: { schema: SchemaData }) {
+  const TABLE_W = 220;
+  const COL_H = 18;
+  const HEADER_H = 32;
+  const PAD = 10;
+  const MARGIN = 40;
+  const EXPAND_ICON_W = 20;
+
+  // Track which tables are expanded (show all columns)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggleExpand = useCallback((name: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  // Determine which columns are "key" columns (PK or FK) per table
+  const keyColumns = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const tbl of schema.tables) {
+      const keys = new Set<string>();
+      keys.add(tbl.pk);
+      for (const r of schema.relationships) {
+        if (r.from_table === tbl.name) keys.add(r.from_column);
+        if (r.to_table === tbl.name) keys.add(r.to_column);
+      }
+      map[tbl.name] = keys;
+    }
+    return map;
+  }, [schema]);
+
+  // Visible columns per table: keys only when collapsed, all when expanded
+  const visibleColumns = useMemo(() => {
+    return schema.tables.map((tbl) => {
+      if (expanded.has(tbl.name)) return tbl.columns;
+      const keys = keyColumns[tbl.name] || new Set();
+      return tbl.columns.filter((c) => keys.has(c.name));
+    });
+  }, [schema.tables, expanded, keyColumns]);
+
+  // Heights depend on visible columns
+  const tableHeights = useMemo(
+    () => visibleColumns.map((cols) => HEADER_H + cols.length * COL_H + PAD * 2),
+    [visibleColumns],
+  );
+
+  // ── Radial hub layout ──
+  const tablePositions = useMemo(() => {
+    const n = schema.tables.length;
+    if (n === 0) return [];
+
+    // Hub priority: person is always #1 hub, visit_occurrence #2.
+    // After that, sort by actual degree.
+    const HUB_PRIORITY: Record<string, number> = {
+      person: 10000,
+      visit_occurrence: 5000,
+    };
+
+    const degree: Record<string, number> = {};
+    for (const t of schema.tables) degree[t.name] = 0;
+    for (const r of schema.relationships) {
+      degree[r.from_table] = (degree[r.from_table] || 0) + 1;
+      degree[r.to_table] = (degree[r.to_table] || 0) + 1;
+    }
+
+    const sorted = schema.tables
+      .map((t, i) => ({
+        name: t.name,
+        idx: i,
+        deg: (HUB_PRIORITY[t.name] || 0) + (degree[t.name] || 0),
+      }))
+      .sort((a, b) => b.deg - a.deg);
+
+    if (n === 1) {
+      return [{ x: MARGIN, y: MARGIN, w: TABLE_W, h: tableHeights[0] }];
+    }
+    if (n === 2) {
+      const gap = 120;
+      return schema.tables.map((_, i) => ({
+        x: MARGIN + i * (TABLE_W + gap),
+        y: MARGIN,
+        w: TABLE_W,
+        h: tableHeights[i],
+      }));
+    }
+
+    const hubs = sorted.filter((s) => s.deg > 0).slice(0, Math.min(2, n));
+    const satellites = sorted.filter((s) => !hubs.some((h) => h.idx === s.idx));
+
+    const maxH = Math.max(...tableHeights);
+    const ringRadius = Math.max(
+      (satellites.length * (TABLE_W + 30)) / (2 * Math.PI),
+      maxH + 60,
+      200,
+    );
+
+    const cx = ringRadius + TABLE_W / 2 + MARGIN;
+    const cy = ringRadius + maxH / 2 + MARGIN;
+
+    const positions: { x: number; y: number; w: number; h: number }[] = new Array(n);
+
+    if (hubs.length === 1) {
+      positions[hubs[0].idx] = {
+        x: cx - TABLE_W / 2,
+        y: cy - tableHeights[hubs[0].idx] / 2,
+        w: TABLE_W,
+        h: tableHeights[hubs[0].idx],
+      };
+    } else if (hubs.length >= 2) {
+      const gap = 80;
+      positions[hubs[0].idx] = {
+        x: cx - TABLE_W - gap / 2,
+        y: cy - tableHeights[hubs[0].idx] / 2,
+        w: TABLE_W,
+        h: tableHeights[hubs[0].idx],
+      };
+      positions[hubs[1].idx] = {
+        x: cx + gap / 2,
+        y: cy - tableHeights[hubs[1].idx] / 2,
+        w: TABLE_W,
+        h: tableHeights[hubs[1].idx],
+      };
+    }
+
+    if (satellites.length > 0) {
+      const startAngle = -Math.PI / 2;
+      satellites.forEach((sat, i) => {
+        const angle = startAngle + (2 * Math.PI * i) / satellites.length;
+        positions[sat.idx] = {
+          x: cx + ringRadius * Math.cos(angle) - TABLE_W / 2,
+          y: cy + ringRadius * Math.sin(angle) - tableHeights[sat.idx] / 2,
+          w: TABLE_W,
+          h: tableHeights[sat.idx],
+        };
+      });
+    }
+
+    let minX = Infinity, minY = Infinity;
+    for (const p of positions) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+    }
+    const dx = MARGIN - minX;
+    const dy = MARGIN - minY;
+    for (const p of positions) { p.x += dx; p.y += dy; }
+
+    return positions;
+  }, [schema.tables, schema.relationships, tableHeights]);
+
+  const totalW = useMemo(() => {
+    if (tablePositions.length === 0) return 400;
+    return Math.max(...tablePositions.map((p) => p.x + p.w)) + MARGIN;
+  }, [tablePositions]);
+
+  const totalH = useMemo(() => {
+    if (tablePositions.length === 0) return 200;
+    return Math.max(...tablePositions.map((p) => p.y + p.h)) + MARGIN;
+  }, [tablePositions]);
+
+  const tableIdx = useMemo(() => {
+    const m: Record<string, number> = {};
+    schema.tables.forEach((t, i) => (m[t.name] = i));
+    return m;
+  }, [schema.tables]);
+
+  // ── Edges: FK row → FK row ──
+  const lines = useMemo(() => {
+    const portCounts: Record<string, number> = {};
+    const getPort = (key: string): number => {
+      const n = portCounts[key] || 0;
+      portCounts[key] = n + 1;
+      return n;
+    };
+
+    return schema.relationships
+      .map((rel) => {
+        const fromI = tableIdx[rel.from_table];
+        const toI = tableIdx[rel.to_table];
+        if (fromI == null || toI == null) return null;
+        const from = tablePositions[fromI];
+        const to = tablePositions[toI];
+
+        // Find column index in the *visible* list
+        const fromColIdx = visibleColumns[fromI].findIndex((c) => c.name === rel.from_column);
+        const toColIdx = visibleColumns[toI].findIndex((c) => c.name === rel.to_column);
+
+        const fromRowY =
+          from.y + HEADER_H + PAD + Math.max(0, fromColIdx) * COL_H + COL_H / 2;
+        const toRowY =
+          to.y + HEADER_H + PAD + Math.max(0, toColIdx) * COL_H + COL_H / 2;
+
+        const goRight = (from.x + from.w / 2) <= (to.x + to.w / 2);
+        const exitX = goRight ? from.x + from.w : from.x;
+        const enterX = goRight ? to.x : to.x + to.w;
+
+        const portKey = `${fromI}:${goRight ? 'R' : 'L'}:${rel.from_column}`;
+        const portKey2 = `${toI}:${goRight ? 'L' : 'R'}:${rel.to_column}`;
+        const pOff1 = getPort(portKey) * 4;
+        const pOff2 = getPort(portKey2) * 4;
+
+        const fy = fromRowY + pOff1;
+        const ty = toRowY + pOff2;
+
+        const cpLen = Math.min(Math.max(Math.abs(enterX - exitX) * 0.4, 40), 100);
+        const cp1x = exitX + (goRight ? cpLen : -cpLen);
+        const cp2x = enterX + (goRight ? -cpLen : cpLen);
+
+        const path = `M${exitX},${fy} C${cp1x},${fy} ${cp2x},${ty} ${enterX},${ty}`;
+        return { path, rel };
+      })
+      .filter(Boolean) as { path: string; rel: SchemaRelationship }[];
+  }, [schema, tablePositions, tableIdx, visibleColumns]);
+
+  return (
+    <div className="overflow-auto rounded-xl border border-glass-border bg-[#0a1628]">
+      <svg
+        width={totalW}
+        height={totalH}
+        viewBox={`0 0 ${totalW} ${totalH}`}
+        className="min-w-full"
+      >
+        <defs>
+          <marker id="bdr-dot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6">
+            <circle cx="5" cy="5" r="3" fill="#10B981" opacity="0.8" />
+          </marker>
+          <marker id="bdr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#10B981" opacity="0.7" />
+          </marker>
+        </defs>
+
+        {/* Edges (behind) */}
+        {lines.map((l, i) => (
+          <path
+            key={i}
+            d={l.path}
+            fill="none"
+            stroke="#10B981"
+            strokeWidth="1.5"
+            strokeOpacity="0.45"
+            strokeLinejoin="round"
+            markerStart="url(#bdr-dot)"
+            markerEnd="url(#bdr-arrow)"
+          />
+        ))}
+
+        {/* Tables (on top) */}
+        {schema.tables.map((tbl, i) => {
+          const pos = tablePositions[i];
+          const isOpen = expanded.has(tbl.name);
+          const visCols = visibleColumns[i];
+          const totalCols = tbl.columns.length;
+          const hiddenCount = totalCols - visCols.length;
+
+          return (
+            <g key={tbl.name} transform={`translate(${pos.x},${pos.y})`}>
+              {/* Background */}
+              <rect
+                width={pos.w}
+                height={pos.h}
+                rx="8"
+                fill="#0d1f3c"
+                stroke="#1e3a5f"
+                strokeWidth="1"
+              />
+              {/* Header — clickable to toggle expand */}
+              <rect
+                width={pos.w}
+                height={HEADER_H}
+                rx="8"
+                fill="#10B981"
+                fillOpacity={0.12}
+                className="cursor-pointer"
+                onClick={() => toggleExpand(tbl.name)}
+              />
+              <rect
+                y={HEADER_H - 8}
+                width={pos.w}
+                height={8}
+                fill="#10B981"
+                fillOpacity={0.12}
+                className="cursor-pointer"
+                onClick={() => toggleExpand(tbl.name)}
+              />
+              <text
+                x={PAD}
+                y={HEADER_H / 2 + 1}
+                dominantBaseline="middle"
+                className="text-[12px] font-bold cursor-pointer"
+                fill="#10B981"
+                onClick={() => toggleExpand(tbl.name)}
+              >
+                {tbl.name}
+              </text>
+              {/* Expand/collapse chevron */}
+              <text
+                x={pos.w - PAD}
+                y={HEADER_H / 2 + 1}
+                dominantBaseline="middle"
+                textAnchor="end"
+                fill="#64748b"
+                className="text-[10px] cursor-pointer select-none"
+                onClick={() => toggleExpand(tbl.name)}
+              >
+                {isOpen ? '▾' : `▸ +${hiddenCount}`}
+              </text>
+
+              {/* Columns */}
+              {visCols.map((col, ci) => {
+                const cy = HEADER_H + PAD + ci * COL_H;
+                const isPk = col.name === tbl.pk;
+                const isSelected = col.selected;
+                const isFk = schema.relationships.some(
+                  (r) =>
+                    (r.from_table === tbl.name && r.from_column === col.name) ||
+                    (r.to_table === tbl.name && r.to_column === col.name),
+                );
+                return (
+                  <g key={col.name}>
+                    {isSelected && (
+                      <rect
+                        x={2}
+                        y={cy - 1}
+                        width={pos.w - 4}
+                        height={COL_H}
+                        rx="3"
+                        fill="#10B981"
+                        fillOpacity="0.06"
+                      />
+                    )}
+                    {isPk && (
+                      <text x={PAD} y={cy + COL_H / 2} dominantBaseline="middle" fill="#f59e0b" className="text-[9px]">
+                        PK
+                      </text>
+                    )}
+                    {!isPk && isFk && (
+                      <text x={PAD} y={cy + COL_H / 2} dominantBaseline="middle" fill="#38bdf8" className="text-[9px]">
+                        FK
+                      </text>
+                    )}
+                    <text
+                      x={isPk || isFk ? PAD + 20 : PAD}
+                      y={cy + COL_H / 2}
+                      dominantBaseline="middle"
+                      fill={isSelected ? '#e2e8f0' : '#64748b'}
+                      className="text-[11px]"
+                    >
+                      {col.name}
+                    </text>
+                    {col.data_type && (
+                      <text
+                        x={pos.w - PAD}
+                        y={cy + COL_H / 2}
+                        dominantBaseline="middle"
+                        textAnchor="end"
+                        fill="#475569"
+                        className="text-[9px]"
+                      >
+                        {col.data_type}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

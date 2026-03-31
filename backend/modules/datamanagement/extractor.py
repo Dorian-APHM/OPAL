@@ -2,14 +2,8 @@
 Data Management — Dataset extraction engine.
 
 Given a cohort (person_ids + optional visit_ids) and a selection of
-OMOP tables/columns, builds SQL to produce a flat dataset.
-
-Two modes:
-- same_visit_only=True  (requires cohort with sameVisit): one row per
-  (person_id, visit_occurrence_id) from the cohort, joined to selected tables
-  on both person_id AND visit_occurrence_id.
-- same_visit_only=False: one row per (person_id, visit_occurrence_id) for ALL
-  visits of each person_id in the cohort.
+OMOP tables/columns, builds one SQL query per table (no aggregation,
+raw data) and produces a relational schema (BDR) for the selected tables.
 """
 import logging
 import re
@@ -26,7 +20,7 @@ def _safe(name: str) -> str:
     return name
 
 
-# Standard OMOP tables that can be extracted, with their join column to visit
+# Standard OMOP tables that can be extracted, with their join semantics
 EXTRACTABLE_TABLES = {
     "person": {
         "join_key": "person_id",
@@ -77,6 +71,28 @@ EXTRACTABLE_TABLES = {
     },
 }
 
+# OMOP CDM foreign-key relationships between extractable tables
+# Each entry: (source_table, source_column, target_table, target_column)
+_OMOP_RELATIONSHIPS = [
+    # All clinical tables → person
+    ("visit_occurrence", "person_id", "person", "person_id"),
+    ("condition_occurrence", "person_id", "person", "person_id"),
+    ("drug_exposure", "person_id", "person", "person_id"),
+    ("measurement", "person_id", "person", "person_id"),
+    ("observation", "person_id", "person", "person_id"),
+    ("procedure_occurrence", "person_id", "person", "person_id"),
+    ("device_exposure", "person_id", "person", "person_id"),
+    ("death", "person_id", "person", "person_id"),
+    ("observation_period", "person_id", "person", "person_id"),
+    # Clinical tables → visit_occurrence
+    ("condition_occurrence", "visit_occurrence_id", "visit_occurrence", "visit_occurrence_id"),
+    ("drug_exposure", "visit_occurrence_id", "visit_occurrence", "visit_occurrence_id"),
+    ("measurement", "visit_occurrence_id", "visit_occurrence", "visit_occurrence_id"),
+    ("observation", "visit_occurrence_id", "visit_occurrence", "visit_occurrence_id"),
+    ("procedure_occurrence", "visit_occurrence_id", "visit_occurrence", "visit_occurrence_id"),
+    ("device_exposure", "visit_occurrence_id", "visit_occurrence", "visit_occurrence_id"),
+]
+
 
 def get_table_columns(conn, omop_schema: str, table_name: str) -> list[dict]:
     """
@@ -114,213 +130,173 @@ def list_available_tables(conn, omop_schema: str) -> list[str]:
     return sorted(t for t in EXTRACTABLE_TABLES if t in existing)
 
 
-def _agg_expr(col: str, data_type: str | None = None) -> str:
-    """Return a PostgreSQL aggregation expression for a column.
-
-    - concept_id columns → comma-separated distinct integers
-    - date/datetime columns → min..max range
-    - numeric columns → comma-separated distinct values
-    - text columns → comma-separated distinct values (truncated)
-    """
-    safe_col = _safe(col)
-    # All columns: aggregate distinct values with string_agg
-    return f"string_agg(DISTINCT {safe_col}::text, ', ' ORDER BY {safe_col}::text)"
-
-
-def build_extraction_sql(
+def build_table_sql(
     cohort_sql: str,
     omop_schema: str,
-    table_selections: list[dict],
+    table_name: str,
+    columns: list[str],
     same_visit_only: bool,
     cohort_has_visit: bool,
 ) -> str:
     """
-    Build the flat extraction SQL.
+    Build SQL to extract raw (non-aggregated) rows for a single table,
+    filtered to cohort patients/visits.
 
-    Clinical tables with has_visit=True are pre-aggregated per
-    (person_id, visit_occurrence_id) to avoid cross-product explosions
-    when multiple tables are selected. Each column becomes a
-    comma-separated list of distinct values for that visit.
-
-    Parameters
-    ----------
-    cohort_sql : str
-        SQL that produces person_id (and visit_occurrence_id if cohort has sameVisit).
-    omop_schema : str
-        OMOP schema name.
-    table_selections : list[dict]
-        Each dict: {"table": str, "columns": list[str]}
-    same_visit_only : bool
-        If True and cohort has visit IDs, filter by (person_id, visit_occurrence_id) pairs.
-    cohort_has_visit : bool
-        Whether the cohort SQL produces visit_occurrence_id column.
-
-    Returns
-    -------
-    str
-        SQL query producing the flat dataset.
+    Returns one row per actual row in the source table (no grouping).
     """
     schema = _safe(omop_schema)
+    tbl = _safe(table_name)
+    meta = EXTRACTABLE_TABLES.get(table_name)
+    if not meta:
+        raise ValueError(f"Unknown table: {table_name}")
 
-    if not table_selections:
-        raise ValueError("No tables selected for extraction")
+    # Validate columns
+    for col in columns:
+        _safe(col)
 
-    # Validate all identifiers upfront
-    for sel in table_selections:
-        _safe(sel["table"])
-        for col in sel["columns"]:
-            _safe(col)
+    select_cols = ", ".join(f"t.{_safe(c)}" for c in columns)
 
     use_visit_filter = same_visit_only and cohort_has_visit
 
-    # Build CTE for cohort
-    parts = [f"WITH cohort AS (\n{cohort_sql}\n)"]
+    if table_name == "person":
+        # person: 1 row per person, join on person_id only
+        return (
+            f"WITH cohort AS (\n{cohort_sql}\n)\n"
+            f"SELECT {select_cols}\n"
+            f"FROM {schema}.{tbl} t\n"
+            f"WHERE t.person_id IN (SELECT DISTINCT person_id FROM cohort)\n"
+            f"ORDER BY t.person_id"
+        )
 
-    # Base: start from cohort person_ids joined to visit_occurrence
-    # to get one row per (person_id, visit_occurrence_id)
+    if not meta.get("has_visit"):
+        # death, observation_period: join on person_id
+        return (
+            f"WITH cohort AS (\n{cohort_sql}\n)\n"
+            f"SELECT {select_cols}\n"
+            f"FROM {schema}.{tbl} t\n"
+            f"WHERE t.person_id IN (SELECT DISTINCT person_id FROM cohort)\n"
+            f"ORDER BY t.person_id"
+        )
+
+    # Clinical tables with visit: filter by cohort person_ids
+    # and optionally by specific visit_occurrence_ids
+    visit_col = _safe(meta.get("visit_col", "visit_occurrence_id"))
+
     if use_visit_filter:
-        base_sql = (
-            "base AS (\n"
-            "  SELECT DISTINCT c.person_id, c.visit_occurrence_id\n"
-            "  FROM cohort c\n"
-            "  WHERE c.visit_occurrence_id IS NOT NULL\n"
-            ")"
+        return (
+            f"WITH cohort AS (\n{cohort_sql}\n)\n"
+            f"SELECT {select_cols}\n"
+            f"FROM {schema}.{tbl} t\n"
+            f"WHERE (t.person_id, t.{visit_col}) IN (\n"
+            f"  SELECT DISTINCT person_id, visit_occurrence_id FROM cohort\n"
+            f"  WHERE visit_occurrence_id IS NOT NULL\n"
+            f")\n"
+            f"ORDER BY t.person_id, t.{visit_col}"
         )
     else:
-        base_sql = (
-            "base AS (\n"
-            f"  SELECT DISTINCT c.person_id, v.visit_occurrence_id\n"
-            f"  FROM cohort c\n"
-            f"  JOIN {schema}.visit_occurrence v ON v.person_id = c.person_id\n"
-            ")"
+        return (
+            f"WITH cohort AS (\n{cohort_sql}\n)\n"
+            f"SELECT {select_cols}\n"
+            f"FROM {schema}.{tbl} t\n"
+            f"WHERE t.person_id IN (SELECT DISTINCT person_id FROM cohort)\n"
+            f"ORDER BY t.person_id, t.{visit_col}"
         )
-    parts.append(base_sql)
 
-    # Separate tables into categories:
-    # - clinical (has_visit=True, not visit_occurrence): pre-aggregate per visit
-    # - person, visit_occurrence, death, observation_period: 1:1 join, no aggregation needed
-    clinical_sels = []
-    direct_sels = []
 
+def build_schema(
+    table_selections: list[dict],
+    all_columns: dict[str, list[dict]] | None = None,
+) -> dict:
+    """
+    Build a BDR (relational schema) description for the selected tables.
+
+    Parameters
+    ----------
+    table_selections : list[dict]
+        Each dict: {"table": str, "columns": list[str]}
+    all_columns : dict[str, list[dict]] | None
+        Optional mapping table_name → full column list with data_type.
+        If provided, includes data_type in the schema.
+
+    Returns
+    -------
+    dict with keys:
+        "tables": list of {name, columns: [{name, data_type?, selected}], pk}
+        "relationships": list of {from_table, from_column, to_table, to_column}
+    """
+    selected_tables = {sel["table"] for sel in table_selections}
+    selected_cols_map = {sel["table"]: set(sel["columns"]) for sel in table_selections}
+
+    tables_out = []
     for sel in table_selections:
         tbl = sel["table"]
-        meta = EXTRACTABLE_TABLES.get(tbl)
-        if not meta:
-            continue
-        if meta.get("has_visit") and tbl not in ("visit_occurrence",):
-            clinical_sels.append(sel)
-        else:
-            direct_sels.append(sel)
+        meta = EXTRACTABLE_TABLES.get(tbl, {})
 
-    # Build pre-aggregated CTEs for clinical tables
-    cte_idx = 0
-    cte_aliases = {}  # tbl -> cte_alias
-
-    for sel in clinical_sels:
-        tbl = sel["table"]
-        columns = sel["columns"]
-        meta = EXTRACTABLE_TABLES[tbl]
-        visit_col = meta.get("visit_col", "visit_occurrence_id")
-        cte_alias = f"agg_{tbl}"
-        cte_aliases[tbl] = cte_alias
-
-        # Build aggregated columns (skip join keys)
-        agg_cols = []
-        for col in columns:
-            if col == "person_id" or col == visit_col:
-                continue
-            safe_col = _safe(col)
-            agg_cols.append(
-                f"  {_agg_expr(col)} AS {_safe(tbl)}__{safe_col}"
-            )
-
-        if not agg_cols:
-            # Only join keys selected, add a count
-            agg_cols.append(f"  COUNT(*) AS {_safe(tbl)}__count")
-
-        agg_select = ",\n".join(agg_cols)
-        cte_sql = (
-            f"{cte_alias} AS (\n"
-            f"  SELECT person_id, {_safe(visit_col)} AS visit_occurrence_id,\n"
-            f"{agg_select}\n"
-            f"  FROM {schema}.{_safe(tbl)}\n"
-            f"  WHERE (person_id, {_safe(visit_col)}) IN (SELECT person_id, visit_occurrence_id FROM base)\n"
-            f"  GROUP BY person_id, {_safe(visit_col)}\n"
-            f")"
-        )
-        parts.append(cte_sql)
-        cte_idx += 1
-
-    # Build final SELECT
-    select_cols = ["b.person_id", "b.visit_occurrence_id"]
-    joins = []
-    join_idx = 0
-
-    # Direct (non-aggregated) tables
-    for sel in direct_sels:
-        tbl = sel["table"]
-        columns = sel["columns"]
-        meta = EXTRACTABLE_TABLES[tbl]
-        alias = f"t{join_idx}"
-        join_idx += 1
-
-        for col in columns:
-            if tbl == "visit_occurrence" and col == "visit_occurrence_id":
-                continue
-            if col == "person_id":
-                continue
-            select_cols.append(f"{alias}.{_safe(col)} AS {_safe(tbl)}__{_safe(col)}")
-
+        # Determine primary key
         if tbl == "person":
-            joins.append(
-                f"LEFT JOIN {schema}.{tbl} {alias} ON {alias}.person_id = b.person_id"
-            )
+            pk = "person_id"
         elif tbl == "visit_occurrence":
-            joins.append(
-                f"LEFT JOIN {schema}.{tbl} {alias} "
-                f"ON {alias}.visit_occurrence_id = b.visit_occurrence_id"
-            )
+            pk = "visit_occurrence_id"
+        elif meta.get("has_visit"):
+            pk = f"{tbl}_id"
         else:
-            # death, observation_period
-            joins.append(
-                f"LEFT JOIN {schema}.{tbl} {alias} ON {alias}.person_id = b.person_id"
-            )
+            pk = f"{tbl.split('_')[0]}_id" if tbl != "death" else "person_id"
 
-    # Aggregated clinical tables — join from pre-aggregated CTEs
-    for sel in clinical_sels:
-        tbl = sel["table"]
-        columns = sel["columns"]
-        meta = EXTRACTABLE_TABLES[tbl]
-        cte_alias = cte_aliases[tbl]
-        alias = f"t{join_idx}"
-        join_idx += 1
+        # Build column list
+        cols_out = []
+        if all_columns and tbl in all_columns:
+            for c in all_columns[tbl]:
+                cols_out.append({
+                    "name": c["column_name"],
+                    "data_type": c["data_type"],
+                    "selected": c["column_name"] in selected_cols_map.get(tbl, set()),
+                })
+        else:
+            for col_name in sel["columns"]:
+                cols_out.append({
+                    "name": col_name,
+                    "selected": True,
+                })
 
-        # Add columns from the CTE
-        has_data_cols = False
-        for col in columns:
-            if col == "person_id" or col == meta.get("visit_col", "visit_occurrence_id"):
-                continue
-            select_cols.append(f"{alias}.{_safe(tbl)}__{_safe(col)}")
-            has_data_cols = True
+        tables_out.append({
+            "name": tbl,
+            "columns": cols_out,
+            "pk": pk,
+        })
 
-        if not has_data_cols:
-            select_cols.append(f"{alias}.{_safe(tbl)}__count")
+    # Build set of all columns that actually exist per table
+    # (from all_columns if available, otherwise from selected columns)
+    existing_cols_map: dict[str, set[str]] = {}
+    for tbl in selected_tables:
+        if all_columns and tbl in all_columns:
+            existing_cols_map[tbl] = {c["column_name"] for c in all_columns[tbl]}
+        else:
+            existing_cols_map[tbl] = selected_cols_map.get(tbl, set())
 
-        joins.append(
-            f"LEFT JOIN {cte_alias} {alias} "
-            f"ON {alias}.person_id = b.person_id "
-            f"AND {alias}.visit_occurrence_id = b.visit_occurrence_id"
-        )
+    # Build relationships between all selected tables that share join columns.
+    # Two tables are linked if they both have a common join column
+    # (person_id or visit_occurrence_id).
+    rels_out = []
+    seen = set()  # avoid duplicate (tblA, col, tblB, col) pairs
+    join_columns = ["person_id", "visit_occurrence_id"]
 
-    select_clause = ",\n  ".join(select_cols)
-    join_clause = "\n".join(joins)
+    table_list = sorted(selected_tables)
+    for i, tbl_a in enumerate(table_list):
+        for tbl_b in table_list[i + 1:]:
+            for jcol in join_columns:
+                if (jcol in existing_cols_map.get(tbl_a, set())
+                        and jcol in existing_cols_map.get(tbl_b, set())):
+                    key = (tbl_a, jcol, tbl_b, jcol)
+                    if key not in seen:
+                        seen.add(key)
+                        rels_out.append({
+                            "from_table": tbl_a,
+                            "from_column": jcol,
+                            "to_table": tbl_b,
+                            "to_column": jcol,
+                        })
 
-    final_sql = (
-        ",\n".join(parts)
-        + f"\nSELECT\n  {select_clause}\n"
-        + "FROM base b\n"
-        + join_clause
-        + "\nORDER BY b.person_id, b.visit_occurrence_id"
-    )
-
-    return final_sql
+    return {
+        "tables": tables_out,
+        "relationships": rels_out,
+    }
