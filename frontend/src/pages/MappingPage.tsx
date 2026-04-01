@@ -1423,9 +1423,6 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             allowClear
             placeholder="All users"
           />
-          <Button icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportHistoryUrl(cdmName, filterDomain || undefined))} size="small">
-            {t('mapping.export_history', 'Export')}
-          </Button>
           <Button icon={<RefreshCw className="h-4 w-4" />} size="small" onClick={load} loading={loading} />
           <span className="text-text-muted text-sm">{total} {t('mapping.decisions', 'decisions')}</span>
 
