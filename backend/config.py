@@ -101,6 +101,7 @@ DOMAIN_CONFIG = {
         "source_value": "drug_source_value",
         "source_name": "drug_source_name",
         "source_concept_id": "drug_source_concept_id",
+        "source_atc": "drug_source_atc",
     },
     "Measurement": {
         "table": "measurement",

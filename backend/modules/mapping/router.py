@@ -363,6 +363,7 @@ def list_unmapped(
         query = db.query(
             SourceValueCache.source_value,
             SourceValueCache.source_name,
+            SourceValueCache.source_atc,
             sa_func.sum(SourceValueCache.n_records).label("n_records"),
             sa_func.sum(SourceValueCache.n_persons).label("n_persons"),
         ).filter(
@@ -374,13 +375,13 @@ def list_unmapped(
                 or_(SourceValueCache.mapped_concept_id == 0, SourceValueCache.mapped_concept_id.is_(None))
             )
         if search:
-            query = query.filter(
-                or_(
-                    SourceValueCache.source_value.ilike(f"%{search}%"),
-                    SourceValueCache.source_name.ilike(f"%{search}%"),
-                )
-            )
-        query = query.group_by(SourceValueCache.source_value, SourceValueCache.source_name)
+            search_clauses = [
+                SourceValueCache.source_value.ilike(f"%{search}%"),
+                SourceValueCache.source_name.ilike(f"%{search}%"),
+                SourceValueCache.source_atc.ilike(f"%{search}%"),
+            ]
+            query = query.filter(or_(*search_clauses))
+        query = query.group_by(SourceValueCache.source_value, SourceValueCache.source_name, SourceValueCache.source_atc)
 
         total_q = query.subquery()
         total = db.query(sa_func.count()).select_from(total_q).scalar() or 0
@@ -389,6 +390,7 @@ def list_unmapped(
         rows_q = query.order_by(sa_func.sum(SourceValueCache.n_records).desc()).offset(offset).limit(page_size).all()
         rows = [
             {"source_value": r.source_value, "source_name": r.source_name or "",
+             "source_atc": r.source_atc or "",
              "n_records": int(r.n_records), "n_persons": int(r.n_persons)}
             for r in rows_q
         ]
@@ -402,6 +404,7 @@ def list_unmapped(
     sv_col = safe_identifier(cfg["source_value"])
     concept_col = safe_identifier(cfg["concept_id"])
     sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+    atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
     full_table = f"{schema}.{table}"
 
     try:
@@ -413,6 +416,10 @@ def list_unmapped(
                 select_cols.append(f"MAX(t.{sn_col}) AS source_name")
             else:
                 select_cols.append("'' AS source_name")
+            if atc_col:
+                select_cols.append(f"MAX(t.{atc_col}) AS source_atc")
+            else:
+                select_cols.append("'' AS source_atc")
 
             wheres: list[str] = []
             if not include_mapped:
@@ -420,10 +427,12 @@ def list_unmapped(
             params: dict = {}
 
             if search:
-                search_clause = f"t.{sv_col} ILIKE %(search)s"
+                search_parts = [f"t.{sv_col} ILIKE %(search)s"]
                 if sn_col:
-                    search_clause = f"({search_clause} OR t.{sn_col} ILIKE %(search)s)"
-                wheres.append(search_clause)
+                    search_parts.append(f"t.{sn_col} ILIKE %(search)s")
+                if atc_col:
+                    search_parts.append(f"t.{atc_col} ILIKE %(search)s")
+                wheres.append(f"({' OR '.join(search_parts)})")
                 params["search"] = f"%{search}%"
 
             where_clause = " AND ".join(wheres)

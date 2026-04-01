@@ -251,7 +251,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                     onClick={() => toggleSourceCode(r.source_value)}
                   >
                     <div className="flex justify-between">
-                      <span className="text-xs font-semibold text-text-bright">{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}</span>
+                      <span className="text-xs font-semibold text-text-bright">{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}{(r as any).source_atc ? <span className="text-blue-400 ml-1">[{(r as any).source_atc}]</span> : null}</span>
                       <span className="text-text-dim text-[10px]">{r.n_records.toLocaleString()} rec</span>
                     </div>
                     <div className="text-[11px] text-text-dim">{t(`domains.${r.domain}`, r.domain)}{DOMAIN_NOMENCLATURE[r.domain] ? ` (${DOMAIN_NOMENCLATURE[r.domain]})` : ''} · {r.n_persons.toLocaleString()} pers</div>
