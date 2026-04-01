@@ -74,8 +74,8 @@ def get_domain_config(conn, schema: str, domain: str) -> dict:
         return {}
     cfg = dict(cfg)  # shallow copy to avoid mutating the global
 
-    # Check optional columns — source_name is the main one that may be absent
-    optional_cols = ["source_name"]
+    # Check optional columns that may be absent from certain CDMs
+    optional_cols = ["source_name", "source_concept_id"]
     table = cfg.get("table", "")
     for opt in optional_cols:
         col_name = cfg.get(opt)

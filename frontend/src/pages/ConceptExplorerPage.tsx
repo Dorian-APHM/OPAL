@@ -198,19 +198,27 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
     setDescendants([]);
     setSourceValues([]);
 
-    try {
-      const [detailRes, hierRes, svRes] = await Promise.all([
-        conceptApi.details(selectedCdm, concept.concept_id),
-        conceptApi.hierarchy(selectedCdm, concept.concept_id),
-        conceptApi.sourceValues(selectedCdm, concept.concept_id),
-      ]);
-      setRelationships(detailRes.data.relationships || []);
-      setSynonyms(detailRes.data.synonyms || []);
-      setAncestors(hierRes.data.ancestors || []);
-      setDescendants(hierRes.data.descendants || []);
-      setSourceValues(svRes.data.source_values || []);
-    } catch { toast.error(t('common.error', 'An error occurred')); }
-    finally { setDetailLoading(false); }
+    const results = await Promise.allSettled([
+      conceptApi.details(selectedCdm, concept.concept_id),
+      conceptApi.hierarchy(selectedCdm, concept.concept_id),
+      conceptApi.sourceValues(selectedCdm, concept.concept_id),
+    ]);
+    const [detailRes, hierRes, svRes] = results;
+    if (detailRes.status === 'fulfilled') {
+      setRelationships(detailRes.value.data.relationships || []);
+      setSynonyms(detailRes.value.data.synonyms || []);
+    }
+    if (hierRes.status === 'fulfilled') {
+      setAncestors(hierRes.value.data.ancestors || []);
+      setDescendants(hierRes.value.data.descendants || []);
+    }
+    if (svRes.status === 'fulfilled') {
+      setSourceValues(svRes.value.data.source_values || []);
+    }
+    if (results.some(r => r.status === 'rejected')) {
+      toast.error(t('common.error', 'An error occurred'));
+    }
+    setDetailLoading(false);
   };
 
   if (!selectedCdm) {
