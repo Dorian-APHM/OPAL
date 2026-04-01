@@ -372,20 +372,25 @@ def search_source_value(
 
     # ── Try cache first ──
     from db.models import SourceValueCache
-    from sqlalchemy import or_, func
+    from sqlalchemy import or_, and_, func
 
     cache_exists = db.query(SourceValueCache.id).filter(
         SourceValueCache.cdm_name == cdm_name,
     ).first()
 
     if cache_exists:
+        search_clauses = [
+            SourceValueCache.source_value.ilike(f"{q}%"),
+            SourceValueCache.source_name.ilike(f"{q}%"),
+        ]
+        # ATC only exists for Drug domain
+        if not domain or domain == "Drug":
+            search_clauses.append(
+                and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
+            )
         query = db.query(SourceValueCache).filter(
             SourceValueCache.cdm_name == cdm_name,
-            or_(
-                SourceValueCache.source_value.ilike(f"{q}%"),
-                SourceValueCache.source_name.ilike(f"{q}%"),
-                SourceValueCache.source_atc.ilike(f"{q}%"),
-            ),
+            or_(*search_clauses),
         )
         if domain:
             query = query.filter(SourceValueCache.domain == domain)
@@ -528,6 +533,15 @@ def search_source_value_fast(
     ).first()
 
     if cache_exists:
+        from sqlalchemy import and_
+        search_clauses = [
+            SourceValueCache.source_value.ilike(f"{q}%"),
+            SourceValueCache.source_name.ilike(f"{q}%"),
+        ]
+        if not domain or domain == "Drug":
+            search_clauses.append(
+                and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
+            )
         query = db.query(
             SourceValueCache.domain,
             SourceValueCache.source_value,
@@ -535,11 +549,7 @@ def search_source_value_fast(
             SourceValueCache.source_atc,
         ).filter(
             SourceValueCache.cdm_name == cdm_name,
-            or_(
-                SourceValueCache.source_value.ilike(f"{q}%"),
-                SourceValueCache.source_name.ilike(f"{q}%"),
-                SourceValueCache.source_atc.ilike(f"{q}%"),
-            ),
+            or_(*search_clauses),
         ).distinct()
         if domain:
             query = query.filter(SourceValueCache.domain == domain)
