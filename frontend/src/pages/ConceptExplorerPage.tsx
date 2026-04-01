@@ -8,7 +8,7 @@ import {
   Search, GitBranch, Link, FileText, Database, Download, StopCircle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { conceptApi, authDownload } from '../api/client';
+import { conceptApi } from '../api/client';
 import useIsMobile from '../hooks/useIsMobile';
 
 interface Props {
@@ -577,7 +577,23 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
               {searchMode === 'source' && sourceResults.length > 0 && (
                 <Button
                   icon={<Download className="h-4 w-4" />}
-                  onClick={() => authDownload(conceptApi.exportSourceValueUrl(selectedCdm!, query, domainFilter))}
+                  onClick={() => {
+                    const header = ['source_value', 'source_name', 'source_atc', 'domain', 'n_records', 'n_persons', 'mapped_concept_id', 'mapped_concept_name', 'mapped_vocabulary_id', 'mapped_standard_concept'];
+                    const csvRows = [header.join(',')];
+                    for (const r of sourceResults) {
+                      csvRows.push([
+                        r.source_value, r.source_name || '', (r as any).source_atc || '', r.domain,
+                        r.n_records, r.n_persons, r.mapped_concept_id ?? '', r.mapped_concept_name || '',
+                        r.mapped_vocabulary_id || '', r.mapped_standard_concept || '',
+                      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+                    }
+                    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `source_value_search_${query}_${selectedCdm}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                  }}
                 >
                   CSV
                 </Button>
