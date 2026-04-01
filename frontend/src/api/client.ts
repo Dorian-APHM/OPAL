@@ -393,8 +393,6 @@ export const mappingApi = {
     api.post(`/mapping/history/${decisionId}/reject`),
   withdraw: (decisionId: number) =>
     api.post(`/mapping/history/${decisionId}/withdraw`),
-  exportHistoryUrl: (cdmName: string, domain?: string) =>
-    `/api/mapping/history/${cdmName}/export${domain ? `?domain=${domain}` : ''}`,
   conceptLookup: (cdmName: string, conceptId: number) =>
     api.get<{
       concept_id: number; concept_name: string; concept_code: string;

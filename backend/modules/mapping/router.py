@@ -1223,38 +1223,6 @@ def reject_decision(decision_id: int, request: Request, db: Session = Depends(ge
     return {"rejected": True, "id": decision_id}
 
 
-@router.get("/history/{cdm_name}/export")
-def export_history(cdm_name: str, domain: str | None = None, db: Session = Depends(get_db)):
-    """Export full mapping history as CSV."""
-    query = db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name)
-    if domain:
-        query = query.filter(MappingDecision.domain == domain)
-    decisions = query.order_by(desc(MappingDecision.created_at)).all()
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "id", "domain", "source_value", "source_name", "action",
-        "target_concept_id", "target_concept_name", "target_vocabulary_id",
-        "previous_concept_id", "suggestion_source", "confidence_score",
-        "user", "created_at",
-    ])
-    for d in decisions:
-        writer.writerow([
-            d.id, csv_safe(d.domain), csv_safe(d.source_value), csv_safe(d.source_name), csv_safe(d.action),
-            d.target_concept_id, csv_safe(d.target_concept_name), csv_safe(d.target_vocabulary_id),
-            d.previous_concept_id, csv_safe(d.suggestion_source), d.confidence_score,
-            csv_safe(d.user), d.created_at.isoformat() if d.created_at else "",
-        ])
-    output.seek(0)
-
-    filename = f"mapping_history_{cdm_name}.csv"
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
-
 
 # ──── 7. Reference Codebooks ────
 
