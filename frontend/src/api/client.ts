@@ -558,7 +558,7 @@ export const conceptSetApi = {
   list: (cdmName?: string, domain?: string) =>
     api.get<{ concept_sets: ConceptSetSummary[] }>('/concept-sets/', { params: { cdm_name: cdmName, domain } }),
   get: (id: number) => api.get<ConceptSetDetail>(`/concept-sets/${id}`),
-  create: (data: { name: string; cdm_name: string; domain?: string; description?: string; concepts: any[] }) =>
+  create: (data: { name: string; cdm_name: string; domain?: string; description?: string; concepts: any[]; source_codes?: any[] }) =>
     api.post<{ id: number; name: string }>('/concept-sets/', data),
   update: (id: number, data: { name?: string; domain?: string; description?: string; concepts?: any[] }) =>
     api.put(`/concept-sets/${id}`, data),

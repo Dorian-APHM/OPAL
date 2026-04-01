@@ -3,7 +3,7 @@ import { Card, Input, Select, Tag, Empty, Spinner } from '../../components/ui';
 import { Search, Plus, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cohortApi, conceptApi, conceptSetApi } from '../../api/client';
-import type { OmopConcept, CohortCriterion, ConceptSetSummary, ConceptSetDetail } from '../../types';
+import type { OmopConcept, CohortCriterion, ConceptSetSummary } from '../../types';
 
 interface Props {
   cdmName: string;
@@ -112,39 +112,70 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   const [conceptSets, setConceptSets] = useState<ConceptSetSummary[]>([]);
   const [conceptSetsLoading, setConceptSetsLoading] = useState(false);
 
-  useEffect(() => {
+  const loadConceptSets = () => {
     if (!cdmName) return;
     setConceptSetsLoading(true);
     conceptSetApi.list(cdmName)
       .then(r => setConceptSets(r.data.concept_sets || []))
       .catch(() => setConceptSets([]))
       .finally(() => setConceptSetsLoading(false));
+  };
+
+  useEffect(() => { loadConceptSets(); }, [cdmName]);
+
+  // Reload when concept sets change or tab becomes visible
+  useEffect(() => {
+    const handler = () => loadConceptSets();
+    window.addEventListener('focus', handler);
+    window.addEventListener('opal:concept-sets-changed', handler);
+    return () => {
+      window.removeEventListener('focus', handler);
+      window.removeEventListener('opal:concept-sets-changed', handler);
+    };
   }, [cdmName]);
 
   const addConceptSetAsCriterion = async (cs: ConceptSetSummary) => {
     try {
       const resp = await conceptSetApi.get(cs.id);
-      const detail: ConceptSetDetail = resp.data;
-      if (!detail.concepts || detail.concepts.length === 0) return;
-      const concepts: OmopConcept[] = detail.concepts.map(c => ({
+      const detail = resp.data;
+      const sourceCodes: string[] = (detail.source_codes || []).map((s: any) => s.source_value);
+      const concepts: OmopConcept[] = (detail.concepts || []).map((c: any) => ({
         concept_id: c.concept_id,
         concept_name: c.concept_name,
         concept_code: c.concept_code,
-        domain_id: cs.domain || detail.concepts[0]?.vocabulary_id || '',
+        domain_id: cs.domain || '',
         vocabulary_id: c.vocabulary_id,
         concept_class_id: '',
         standard_concept: null,
       }));
-      const criterion: CohortCriterion = {
-        id: Math.random().toString(36).slice(2) + Date.now().toString(36),
-        domain: cs.domain || concepts[0]?.domain_id || 'Condition',
-        concepts,
-        include_descendants: detail.concepts.some(c => c.include_descendants),
-        source_codes: [],
-        temporal: { type: 'any_time' },
-        occurrence: { type: 'any', count: 1 },
-      };
-      onAddCriterion(criterion);
+
+      if (sourceCodes.length > 0) {
+        // Source code based criterion
+        const domain = detail.source_codes?.[0]?.domain || cs.domain || 'Condition';
+        const criterion: CohortCriterion = {
+          id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+          domain,
+          concepts: [],
+          include_descendants: false,
+          source_codes: sourceCodes,
+          temporal: { type: 'any_time' },
+          occurrence: { type: 'any', count: 1 },
+        };
+        onAddCriterion(criterion);
+      }
+      if (concepts.length > 0) {
+        // Concept based criterion
+        const criterion: CohortCriterion = {
+          id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+          domain: cs.domain || concepts[0]?.domain_id || 'Condition',
+          concepts,
+          include_descendants: detail.concepts.some((c: any) => c.include_descendants),
+          source_codes: [],
+          temporal: { type: 'any_time' },
+          occurrence: { type: 'any', count: 1 },
+        };
+        onAddCriterion(criterion);
+      }
     } catch {
       // ignore
     }
@@ -164,7 +195,6 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   return (
     <div className="h-full flex flex-col gap-3">
       {/* Concept Sets */}
-      {conceptSets.length > 0 && (
         <Card
           size="small"
           title={<span className="flex items-center gap-1"><Layers className="h-4 w-4" /> {t('cohort.concept_sets', 'Concept Sets')}</span>}
@@ -196,8 +226,10 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
               ))}
             </div>
           )}
+          {!conceptSetsLoading && conceptSets.length === 0 && (
+            <Empty description={t('concept_sets.no_sets', 'No concept sets yet')} className="!py-2" />
+          )}
         </Card>
-      )}
 
       {/* Source code input */}
       <Card size="small" title={t('cohort.source_code_search', 'Source Code')}>

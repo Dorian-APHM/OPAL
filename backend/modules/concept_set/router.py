@@ -40,7 +40,8 @@ class ConceptSetCreate(BaseModel):
     cdm_name: str
     domain: str | None = None
     description: str = ""
-    concepts: list[dict]
+    concepts: list[dict] = []
+    source_codes: list[dict] = []
 
 
 class ConceptSetUpdate(BaseModel):
@@ -48,6 +49,21 @@ class ConceptSetUpdate(BaseModel):
     domain: str | None = None
     description: str | None = None
     concepts: list[dict] | None = None
+
+
+def _parse_payload(concepts_json: str | None):
+    """Parse concepts_json supporting old (list) and new (dict) formats."""
+    if not concepts_json:
+        return [], []
+    data = json.loads(concepts_json)
+    if isinstance(data, list):
+        return data, []
+    return data.get("concepts", []), data.get("source_codes", [])
+
+
+def _count_items(concepts_json: str | None) -> int:
+    concepts, source_codes = _parse_payload(concepts_json)
+    return len(concepts) + len(source_codes)
 
 
 @router.get("/")
@@ -71,7 +87,7 @@ def list_concept_sets(
                 "cdm_name": s.cdm_name,
                 "domain": s.domain,
                 "description": s.description,
-                "concept_count": len(json.loads(s.concepts_json)) if s.concepts_json else 0,
+                "concept_count": _count_items(s.concepts_json),
                 "created_by": s.created_by,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
                 "updated_at": s.updated_at.isoformat() if s.updated_at else None,
@@ -85,12 +101,16 @@ def list_concept_sets(
 def create_concept_set(body: ConceptSetCreate, request: Request, db=Depends(get_db)):
     check_cdm_access(request, body.cdm_name)
     user_info = getattr(request.state, "user", {})
+    payload = {
+        "concepts": body.concepts,
+        "source_codes": body.source_codes,
+    }
     cs = ConceptSet(
         name=body.name,
         cdm_name=body.cdm_name,
         domain=body.domain,
         description=body.description,
-        concepts_json=json.dumps(body.concepts),
+        concepts_json=json.dumps(payload),
         created_by=user_info.get("preferred_username", "system"),
     )
     db.add(cs)
@@ -104,13 +124,15 @@ def get_concept_set(concept_set_id: int, db=Depends(get_db)):
     cs = db.query(ConceptSet).filter(ConceptSet.id == concept_set_id).first()
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
+    concepts, source_codes = _parse_payload(cs.concepts_json)
     return {
         "id": cs.id,
         "name": cs.name,
         "cdm_name": cs.cdm_name,
         "domain": cs.domain,
         "description": cs.description,
-        "concepts": json.loads(cs.concepts_json) if cs.concepts_json else [],
+        "concepts": concepts,
+        "source_codes": source_codes,
         "created_by": cs.created_by,
         "created_at": cs.created_at.isoformat() if cs.created_at else None,
         "updated_at": cs.updated_at.isoformat() if cs.updated_at else None,
