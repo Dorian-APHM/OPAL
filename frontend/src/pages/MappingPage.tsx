@@ -291,6 +291,10 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
     { title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
     { title: t('mapping.source_name', 'Source Name'), dataIndex: 'source_name', key: 'sn', ellipsis: true,
       render: (v: string) => v || <span className="text-text-dim">—</span> },
+    ...(domain === 'Drug' ? [{
+      title: 'ATC', dataIndex: 'source_atc' as any, key: 'atc', width: 100, ellipsis: true,
+      render: (v: string) => v || <span className="text-text-dim">—</span>,
+    }] : []),
     { title: t('mapping.n_records', 'Records'), dataIndex: 'n_records', key: 'nr',
       render: (v: number) => v.toLocaleString(), sorter: (a: UnmappedItem, b: UnmappedItem) => a.n_records - b.n_records },
     { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
@@ -844,6 +848,10 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     { title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
     { title: t('mapping.source_name', 'Source Name'), dataIndex: 'source_name', key: 'sn', ellipsis: true,
       render: (v: string) => v || <span className="text-text-dim">—</span> },
+    ...(domain === 'Drug' ? [{
+      title: 'ATC', dataIndex: 'source_atc' as any, key: 'atc', width: 100, ellipsis: true,
+      render: (v: string) => v || <span className="text-text-dim">—</span>,
+    }] : []),
     { title: t('mapping.n_records', 'Records'), dataIndex: 'n_records', key: 'nr',
       render: (v: number) => v.toLocaleString() },
     { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
@@ -919,6 +927,10 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
                 <span className="text-text-dim text-[11px]">{t('mapping.source_name', 'Source Name')}</span>
                 <div className="text-sm text-text-bright">{selectedSource.source_name || '—'}</div>
               </div>
+              {(selectedSource as any).source_atc && <div>
+                <span className="text-text-dim text-[11px]">ATC</span>
+                <div className="text-sm text-blue-400 font-medium">{(selectedSource as any).source_atc}</div>
+              </div>}
               <div>
                 <span className="text-text-dim text-[11px]">{t('mapping.n_records', 'Records')}</span>
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.n_records.toLocaleString()}</div>

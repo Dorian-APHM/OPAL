@@ -65,14 +65,18 @@ def populate_domain(
     source_col = safe_identifier(source_col_name)
     concept_col = safe_identifier(cfg["concept_id"])
     source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+    source_atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
 
     # Build the aggregation query
     sn_select = f", t.{source_name_col} AS source_name" if source_name_col else ", NULL AS source_name"
     sn_group = f", t.{source_name_col}" if source_name_col else ""
+    atc_select = f", t.{source_atc_col} AS source_atc" if source_atc_col else ", NULL AS source_atc"
+    atc_group = f", t.{source_atc_col}" if source_atc_col else ""
 
     sql = f"""
         SELECT t.{source_col} AS source_value
-               {sn_select},
+               {sn_select}
+               {atc_select},
                COUNT(*) AS n_records,
                COUNT(DISTINCT t.person_id) AS n_persons,
                t.{concept_col} AS mapped_concept_id,
@@ -82,7 +86,7 @@ def populate_domain(
         FROM {omop_schema}.{table} t
         LEFT JOIN {omop_schema}.concept c ON c.concept_id = t.{concept_col}
         WHERE t.{source_col} IS NOT NULL
-        GROUP BY t.{source_col}{sn_group},
+        GROUP BY t.{source_col}{sn_group}{atc_group},
                  t.{concept_col}, c.concept_name, c.vocabulary_id, c.standard_concept
     """
 
@@ -113,6 +117,7 @@ def populate_domain(
                     "domain": domain_name,
                     "source_value": str(r["source_value"] or ""),
                     "source_name": str(r.get("source_name") or ""),
+                    "source_atc": str(r.get("source_atc") or ""),
                     "n_records": r["n_records"],
                     "n_persons": r["n_persons"],
                     "mapped_concept_id": r.get("mapped_concept_id"),

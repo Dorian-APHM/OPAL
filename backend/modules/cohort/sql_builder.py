@@ -33,6 +33,7 @@ _DOMAIN_TABLE_MAP = {
         "date_col": cfg["date_col"],
         "source_value": cfg.get("source_value"),
         "source_name": cfg.get("source_name"),
+        "source_atc": cfg.get("source_atc"),
     }
     for name, cfg in DOMAIN_CONFIG.items()
 }
@@ -314,6 +315,7 @@ def build_detailed_sample_sql(
         concept_col = dmeta["concept_id"]
         source_value_col = dmeta.get("source_value")
         source_name_col = dmeta.get("source_name")
+        source_atc_col = dmeta.get("source_atc")
         alias = f"cr{i}"
 
         # Build WHERE for this criterion's concept/source filters
@@ -341,10 +343,12 @@ def build_detailed_sample_sql(
             quoted = ", ".join(
                 _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
             )
-            # Match on source_value (code) OR source_name (description) when available
+            # Match on source_value (code) OR source_name OR source_atc when available
             source_parts = [f"t.{source_value_col} IN ({quoted})"]
             if source_name_col:
                 source_parts.append(f"t.{source_name_col} IN ({quoted})")
+            if source_atc_col:
+                source_parts.append(f"t.{source_atc_col} IN ({quoted})")
             source_filter = f"({' OR '.join(source_parts)})"
 
         if concept_filter and source_filter:
@@ -694,6 +698,7 @@ def _build_criterion_cte(
     date_col = dmeta["date_col"]
     source_value_col = dmeta.get("source_value")
     source_name_col = dmeta.get("source_name")
+    source_atc_col = dmeta.get("source_atc")
 
     # Build WHERE clauses
     wheres: list[str] = []
@@ -717,8 +722,7 @@ def _build_criterion_cte(
             )
             concept_filter = f"t.{concept_col} IN ({concept_list})"
 
-    # Source code filtering (match on source_value or source_name)
-    # Uses psycopg2's own adapter for safe quoting (same mechanism as %s params).
+    # Source code filtering (match on source_value, source_name, or source_atc)
     source_filter = None
     if source_codes and source_value_col:
         quoted = ", ".join(
@@ -727,6 +731,8 @@ def _build_criterion_cte(
         source_parts = [f"t.{source_value_col} IN ({quoted})"]
         if source_name_col:
             source_parts.append(f"t.{source_name_col} IN ({quoted})")
+        if source_atc_col:
+            source_parts.append(f"t.{source_atc_col} IN ({quoted})")
         source_filter = f"({' OR '.join(source_parts)})"
 
     # Combine concept + source filters with OR

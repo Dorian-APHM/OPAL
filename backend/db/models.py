@@ -364,6 +364,7 @@ class SourceValueCache(Base):
     __table_args__ = (
         Index("ix_svc_cdm_domain", "cdm_name", "domain"),
         Index("ix_svc_search", "cdm_name", "domain", "source_value"),
+        Index("ix_svc_search_atc", "cdm_name", "domain", "source_atc"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -371,6 +372,7 @@ class SourceValueCache(Base):
     domain = Column(String(100), nullable=False)
     source_value = Column(String(1000), nullable=False)
     source_name = Column(String(1000), nullable=True, default="")
+    source_atc = Column(String(255), nullable=True, default="")
     n_records = Column(Integer, nullable=False, default=0)
     n_persons = Column(Integer, nullable=False, default=0)
     mapped_concept_id = Column(Integer, nullable=True)
