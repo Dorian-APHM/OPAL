@@ -716,6 +716,7 @@ export interface ConceptSetSummary {
 
 export interface ConceptSetDetail extends ConceptSetSummary {
   concepts: ConceptSetItem[];
+  source_codes?: { source_value: string; source_name: string; domain: string }[];
 }
 
 // ──── Exit Criteria ────
