@@ -348,7 +348,7 @@ def get_concept_source_values(
                     for r in rows:
                         results.append(dict(r))
                 except Exception:
-                    logger.warning("Failed to fetch source values for concept %s in domain %s", concept_id, domain, exc_info=True)
+                    logger.warning("Failed to fetch source values for concept %s in domain %s", concept_id, domain_name, exc_info=True)
                     conn.rollback()
 
         return {"concept_id": concept_id, "source_values": results}
