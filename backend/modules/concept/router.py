@@ -384,6 +384,7 @@ def search_source_value(
             or_(
                 SourceValueCache.source_value.ilike(f"{q}%"),
                 SourceValueCache.source_name.ilike(f"{q}%"),
+                SourceValueCache.source_atc.ilike(f"{q}%"),
             ),
         )
         if domain:
@@ -396,6 +397,7 @@ def search_source_value(
                 "domain": r.domain,
                 "source_value": r.source_value,
                 "source_name": r.source_name,
+                "source_atc": r.source_atc or "",
                 "n_records": r.n_records,
                 "n_persons": r.n_persons,
                 "mapped_concept_id": r.mapped_concept_id,
@@ -426,8 +428,8 @@ def search_source_value(
                 concept_col = safe_identifier(cfg["concept_id"])
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                # Index-friendly search: exact/prefix on source_value and source_name
-                # No leading % wildcard = B-tree index scan instead of seq scan
+                source_atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
+                # Index-friendly search: exact/prefix on source_value, source_name, source_atc
                 where_clause = psysql.SQL(
                     "t.{} LIKE %s"
                 ).format(_ident(source_col))
@@ -437,12 +439,20 @@ def search_source_value(
                         "{} OR t.{} LIKE %s"
                     ).format(where_clause, _ident(source_name_col))
                     query_params.append(f"{q}%")
+                if source_atc_col:
+                    where_clause = psysql.SQL(
+                        "{} OR t.{} LIKE %s"
+                    ).format(where_clause, _ident(source_atc_col))
+                    query_params.append(f"{q}%")
                 source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
                 source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
+                source_atc_select = psysql.SQL("t.{}").format(_ident(source_atc_col)) if source_atc_col else psysql.SQL("NULL")
+                source_atc_group = psysql.SQL(", t.{}").format(_ident(source_atc_col)) if source_atc_col else psysql.SQL("")
                 union_parts.append(psysql.SQL("""
                     SELECT %s AS domain,
                            t.{source_col} AS source_value,
                            {source_name_select} AS source_name,
+                           {source_atc_select} AS source_atc,
                            COUNT(*) AS n_records,
                            COUNT(DISTINCT t.person_id) AS n_persons,
                            t.{concept_col} AS mapped_concept_id,
@@ -452,16 +462,18 @@ def search_source_value(
                     FROM {schema}.{table} t
                     LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
                     WHERE {where_clause}
-                    GROUP BY t.{source_col}{source_name_group}, t.{concept_col},
+                    GROUP BY t.{source_col}{source_name_group}{source_atc_group}, t.{concept_col},
                              c.concept_name, c.vocabulary_id, c.standard_concept
                 """).format(
                     source_col=_ident(source_col),
                     source_name_select=source_name_select,
+                    source_atc_select=source_atc_select,
                     concept_col=_ident(concept_col),
                     schema=_ident(schema),
                     table=_ident(table),
                     where_clause=where_clause,
                     source_name_group=source_name_group,
+                    source_atc_group=source_atc_group,
                 ))
                 params.extend(query_params)
 
@@ -520,18 +532,20 @@ def search_source_value_fast(
             SourceValueCache.domain,
             SourceValueCache.source_value,
             SourceValueCache.source_name,
+            SourceValueCache.source_atc,
         ).filter(
             SourceValueCache.cdm_name == cdm_name,
             or_(
                 SourceValueCache.source_value.ilike(f"{q}%"),
                 SourceValueCache.source_name.ilike(f"{q}%"),
+                SourceValueCache.source_atc.ilike(f"{q}%"),
             ),
         ).distinct()
         if domain:
             query = query.filter(SourceValueCache.domain == domain)
         rows = query.limit(limit).all()
         return {"results": [
-            {"domain": r.domain, "source_value": r.source_value, "source_name": r.source_name}
+            {"domain": r.domain, "source_value": r.source_value, "source_name": r.source_name, "source_atc": r.source_atc or ""}
             for r in rows
         ]}
 
@@ -553,21 +567,25 @@ def search_source_value_fast(
                 table = safe_identifier(cfg["table"])
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+                source_atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
 
                 source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
+                source_atc_select = psysql.SQL("t.{}").format(_ident(source_atc_col)) if source_atc_col else psysql.SQL("NULL")
 
                 # Search by source_value prefix
                 union_parts.append(psysql.SQL("""(
                     SELECT %s AS domain,
                            t.{source_col} AS source_value,
-                           {source_name_select} AS source_name
+                           {source_name_select} AS source_name,
+                           {source_atc_select} AS source_atc
                     FROM {schema}.{table} t
                     WHERE t.{source_col} LIKE %s
-                    GROUP BY t.{source_col}, {source_name_select}
+                    GROUP BY t.{source_col}, {source_name_select}, {source_atc_select}
                     LIMIT %s
                 )""").format(
                     source_col=_ident(source_col),
                     source_name_select=source_name_select,
+                    source_atc_select=source_atc_select,
                     schema=_ident(schema),
                     table=_ident(table),
                 ))
@@ -578,14 +596,36 @@ def search_source_value_fast(
                     union_parts.append(psysql.SQL("""(
                         SELECT %s AS domain,
                                t.{source_col} AS source_value,
-                               t.{source_name_col} AS source_name
+                               t.{source_name_col} AS source_name,
+                               {source_atc_select} AS source_atc
                         FROM {schema}.{table} t
                         WHERE t.{source_name_col} LIKE %s
-                        GROUP BY t.{source_col}, t.{source_name_col}
+                        GROUP BY t.{source_col}, t.{source_name_col}, {source_atc_select}
                         LIMIT %s
                     )""").format(
                         source_col=_ident(source_col),
                         source_name_col=_ident(source_name_col),
+                        source_atc_select=source_atc_select,
+                        schema=_ident(schema),
+                        table=_ident(table),
+                    ))
+                    params.extend([domain_name, f"{q}%", limit])
+
+                # Search by source_atc prefix (Drug domain only)
+                if source_atc_col:
+                    union_parts.append(psysql.SQL("""(
+                        SELECT %s AS domain,
+                               t.{source_col} AS source_value,
+                               {source_name_select} AS source_name,
+                               t.{source_atc_col} AS source_atc
+                        FROM {schema}.{table} t
+                        WHERE t.{source_atc_col} LIKE %s
+                        GROUP BY t.{source_col}, {source_name_select}, t.{source_atc_col}
+                        LIMIT %s
+                    )""").format(
+                        source_col=_ident(source_col),
+                        source_name_select=source_name_select,
+                        source_atc_col=_ident(source_atc_col),
                         schema=_ident(schema),
                         table=_ident(table),
                     ))

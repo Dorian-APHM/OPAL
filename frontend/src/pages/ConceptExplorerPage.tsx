@@ -275,7 +275,11 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
   const sourceColumns: Column<SourceValueSearchResult>[] = [
     {
       key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true,
-      render: (_: string, r: SourceValueSearchResult) => r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value,
+      render: (_: string, r: SourceValueSearchResult) => {
+        let label = r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value;
+        if ((r as any).source_atc) label += ` [ATC: ${(r as any).source_atc}]`;
+        return label;
+      },
     },
     { key: 'domain', title: t('concept.domain'), dataIndex: 'domain', width: 150, render: (v: string) => DOMAIN_NOMENCLATURE[v] ? `${t(`domains.${v}`, v)} (${DOMAIN_NOMENCLATURE[v]})` : t(`domains.${v}`, v) },
     { key: 'n_records', title: t('quality.n_records'), dataIndex: 'n_records', width: 90, render: (v: number) => v?.toLocaleString() },
