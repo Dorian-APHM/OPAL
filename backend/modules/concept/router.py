@@ -676,94 +676,145 @@ def export_source_value_search(
     if not q:
         raise HTTPException(status_code=400, detail="Query parameter 'q' is required")
 
-    from config import DOMAIN_CONFIG
+    from sqlalchemy import or_, and_
+    from db.models import SourceValueCache
 
-    conn, schema = _get_conn(db, cdm_name)
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            domain_names = [domain] if domain and domain in DOMAIN_CONFIG else list(DOMAIN_CONFIG.keys())
+    # ── Try cache first (same logic as search endpoint) ──
+    cache_exists = db.query(SourceValueCache.id).filter(
+        SourceValueCache.cdm_name == cdm_name,
+    ).first()
 
-            union_parts = []
-            params = []
-            for domain_name in domain_names:
-                cfg = get_domain_config(conn, schema, domain_name)
-                if not cfg:
-                    continue
-                table = safe_identifier(cfg["table"])
-                concept_col = safe_identifier(cfg["concept_id"])
-                source_col = safe_identifier(cfg["source_value"])
-                source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-
-                # Index-friendly search: exact/prefix on source_value and source_name
-                # No leading % wildcard = B-tree index scan instead of seq scan
-                where_clause = psysql.SQL(
-                    "t.{} LIKE %s"
-                ).format(_ident(source_col))
-                query_params = [domain_name, f"{q}%"]
-                if source_name_col:
-                    where_clause = psysql.SQL(
-                        "{} OR t.{} LIKE %s"
-                    ).format(where_clause, _ident(source_name_col))
-                    query_params.append(f"{q}%")
-                source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
-                source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
-                union_parts.append(psysql.SQL("""
-                    SELECT %s AS domain,
-                           t.{source_col} AS source_value,
-                           {source_name_select} AS source_name,
-                           COUNT(*) AS n_records,
-                           COUNT(DISTINCT t.person_id) AS n_persons,
-                           t.{concept_col} AS mapped_concept_id,
-                           c.concept_name AS mapped_concept_name,
-                           c.vocabulary_id AS mapped_vocabulary_id,
-                           c.standard_concept AS mapped_standard_concept
-                    FROM {schema}.{table} t
-                    LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
-                    WHERE {where_clause}
-                    GROUP BY t.{source_col}{source_name_group}, t.{concept_col},
-                             c.concept_name, c.vocabulary_id, c.standard_concept
-                """).format(
-                    source_col=_ident(source_col),
-                    source_name_select=source_name_select,
-                    concept_col=_ident(concept_col),
-                    schema=_ident(schema),
-                    table=_ident(table),
-                    where_clause=where_clause,
-                    source_name_group=source_name_group,
-                ))
-                params.extend(query_params)
-
-            if not union_parts:
-                raise HTTPException(status_code=404, detail="No domains to search")
-
-            full_query = psysql.SQL(" UNION ALL ").join(union_parts)
-            cur.execute(
-                psysql.SQL("SELECT * FROM ({}) sub ORDER BY n_records DESC").format(full_query),
-                params,
+    if cache_exists:
+        search_clauses = [
+            SourceValueCache.source_value.ilike(f"{q}%"),
+            SourceValueCache.source_name.ilike(f"{q}%"),
+        ]
+        if not domain or domain == "Drug":
+            search_clauses.append(
+                and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
             )
-            rows = [dict(r) for r in cur.fetchall()]
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["source_value", "domain", "n_records", "n_persons",
-                         "mapped_concept_id", "mapped_concept_name",
-                         "mapped_vocabulary_id", "mapped_standard_concept"])
-        for r in rows:
-            writer.writerow([
-                csv_safe(r["source_value"]), csv_safe(r["domain"]), r["n_records"], r["n_persons"],
-                r.get("mapped_concept_id", ""), csv_safe(r.get("mapped_concept_name", "")),
-                csv_safe(r.get("mapped_vocabulary_id", "")), csv_safe(r.get("mapped_standard_concept", "")),
-            ])
-
-        output.seek(0)
-        filename = f"source_value_search_{q}_{cdm_name}.csv"
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        cache_query = db.query(SourceValueCache).filter(
+            SourceValueCache.cdm_name == cdm_name,
+            or_(*search_clauses),
         )
-    finally:
-        conn.close()
+        if domain:
+            cache_query = cache_query.filter(SourceValueCache.domain == domain)
+        rows = [
+            {
+                "source_value": r.source_value,
+                "source_name": r.source_name or "",
+                "source_atc": r.source_atc or "",
+                "domain": r.domain,
+                "n_records": r.n_records,
+                "n_persons": r.n_persons,
+                "mapped_concept_id": r.mapped_concept_id,
+                "mapped_concept_name": r.mapped_concept_name or "",
+                "mapped_vocabulary_id": r.mapped_vocabulary_id or "",
+                "mapped_standard_concept": r.mapped_standard_concept or "",
+            }
+            for r in cache_query.order_by(SourceValueCache.n_records.desc()).all()
+        ]
+    else:
+        # ── Fallback: direct CDM query ──
+        from config import DOMAIN_CONFIG
+
+        conn, schema = _get_conn(db, cdm_name)
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                domain_names = [domain] if domain and domain in DOMAIN_CONFIG else list(DOMAIN_CONFIG.keys())
+
+                union_parts = []
+                params = []
+                for domain_name in domain_names:
+                    cfg = get_domain_config(conn, schema, domain_name)
+                    if not cfg:
+                        continue
+                    table = safe_identifier(cfg["table"])
+                    concept_col = safe_identifier(cfg["concept_id"])
+                    source_col = safe_identifier(cfg["source_value"])
+                    source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
+                    source_atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
+
+                    where_clause = psysql.SQL(
+                        "LOWER(t.{}) LIKE %s"
+                    ).format(_ident(source_col))
+                    query_params = [domain_name, f"{q.lower()}%"]
+                    if source_name_col:
+                        where_clause = psysql.SQL(
+                            "{} OR LOWER(t.{}) LIKE %s"
+                        ).format(where_clause, _ident(source_name_col))
+                        query_params.append(f"{q.lower()}%")
+                    if source_atc_col:
+                        where_clause = psysql.SQL(
+                            "{} OR LOWER(t.{}) LIKE %s"
+                        ).format(where_clause, _ident(source_atc_col))
+                        query_params.append(f"{q.lower()}%")
+                    source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
+                    source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
+                    source_atc_select = psysql.SQL("t.{}").format(_ident(source_atc_col)) if source_atc_col else psysql.SQL("NULL")
+                    source_atc_group = psysql.SQL(", t.{}").format(_ident(source_atc_col)) if source_atc_col else psysql.SQL("")
+                    union_parts.append(psysql.SQL("""
+                        SELECT %s AS domain,
+                               t.{source_col} AS source_value,
+                               {source_name_select} AS source_name,
+                               {source_atc_select} AS source_atc,
+                               COUNT(*) AS n_records,
+                               COUNT(DISTINCT t.person_id) AS n_persons,
+                               t.{concept_col} AS mapped_concept_id,
+                               c.concept_name AS mapped_concept_name,
+                               c.vocabulary_id AS mapped_vocabulary_id,
+                               c.standard_concept AS mapped_standard_concept
+                        FROM {schema}.{table} t
+                        LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
+                        WHERE {where_clause}
+                        GROUP BY t.{source_col}{source_name_group}{source_atc_group}, t.{concept_col},
+                                 c.concept_name, c.vocabulary_id, c.standard_concept
+                    """).format(
+                        source_col=_ident(source_col),
+                        source_name_select=source_name_select,
+                        source_atc_select=source_atc_select,
+                        concept_col=_ident(concept_col),
+                        schema=_ident(schema),
+                        table=_ident(table),
+                        where_clause=where_clause,
+                        source_name_group=source_name_group,
+                        source_atc_group=source_atc_group,
+                    ))
+                    params.extend(query_params)
+
+                if not union_parts:
+                    raise HTTPException(status_code=404, detail="No domains to search")
+
+                full_query = psysql.SQL(" UNION ALL ").join(union_parts)
+                cur.execute(
+                    psysql.SQL("SELECT * FROM ({}) sub ORDER BY n_records DESC").format(full_query),
+                    params,
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["source_value", "source_name", "source_atc", "domain", "n_records", "n_persons",
+                     "mapped_concept_id", "mapped_concept_name",
+                     "mapped_vocabulary_id", "mapped_standard_concept"])
+    for r in rows:
+        writer.writerow([
+            csv_safe(r["source_value"]), csv_safe(r.get("source_name", "")),
+            csv_safe(r.get("source_atc", "")), csv_safe(r["domain"]),
+            r["n_records"], r["n_persons"],
+            r.get("mapped_concept_id", ""), csv_safe(r.get("mapped_concept_name", "")),
+            csv_safe(r.get("mapped_vocabulary_id", "")), csv_safe(r.get("mapped_standard_concept", "")),
+        ])
+
+    output.seek(0)
+    filename = f"source_value_search_{q}_{cdm_name}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 class ConceptCountsRequest(BaseModel):
