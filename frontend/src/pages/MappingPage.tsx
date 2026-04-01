@@ -318,13 +318,6 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
             onChange={e => { setSearch(e.target.value); setPage(1); }}
             className="w-full sm:w-[250px]"
           />
-          <Button
-            icon={<Download className="h-4 w-4" />}
-            onClick={() => authDownload(mappingApi.exportUnmappedUrl(cdmName, domain))}
-            size="small"
-          >
-            CSV
-          </Button>
           <span className="text-text-muted text-sm">{total.toLocaleString()} {t('mapping.terms', 'terms')}</span>
         </div>
       </Card>
@@ -1446,9 +1439,6 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               className="w-full sm:w-[120px]"
             />
             <Button size="small" onClick={handleApplyPreview}>Preview</Button>
-            <Button size="small" icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
-              STCM CSV
-            </Button>
           </span>
         </div>
       </Card>

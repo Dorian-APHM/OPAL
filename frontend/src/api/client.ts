@@ -352,8 +352,6 @@ export const mappingApi = {
     api.get<{ domain: string; total: number; page: number; page_size: number; total_pages: number; items: UnmappedItem[] }>(
       `/mapping/unmapped/${cdmName}/${domain}`, { params: { page: page || 1, page_size: pageSize || 50, search: search || '', include_mapped: includeMapped || false } }
     ),
-  exportUnmappedUrl: (cdmName: string, domain: string) =>
-    `/api/mapping/unmapped/${cdmName}/${domain}/export`,
   suggest: (cdmName: string, domain: string, sourceValue: string, sourceName?: string) =>
     api.post<{ source_value: string; suggestions: import('../types').MappingSuggestion[] }>('/mapping/suggest', {
       cdm_name: cdmName, domain, source_value: sourceValue, source_name: sourceName || '',
