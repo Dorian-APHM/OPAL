@@ -766,6 +766,11 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   } | null>(null);
   const [conceptError, setConceptError] = useState('');
 
+  // Single suggestion state
+  const [suggestions, setSuggestions] = useState<MappingSuggestion[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestRan, setSuggestRan] = useState(false);
+
   // Decision state
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -797,6 +802,62 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       })
       .finally(() => setConceptLoading(false));
   }, [cdmName, conceptIdInput, t]);
+
+  // Generate suggestions for selected source
+  const handleSuggest = useCallback(() => {
+    if (!selectedSource) return;
+    setSuggestLoading(true);
+    setSuggestRan(true);
+    setSuggestions([]);
+    mappingApi.suggest(cdmName, domain, selectedSource.source_value, selectedSource.source_name || '')
+      .then(r => setSuggestions(r.data.suggestions || []))
+      .catch(() => toast.error(t('common.error', 'An error occurred')))
+      .finally(() => setSuggestLoading(false));
+  }, [cdmName, domain, selectedSource, t, toast]);
+
+  // Approve a suggestion
+  const handleApproveSuggestion = async (s: MappingSuggestion, action: 'approved' | 'modified' = 'approved') => {
+    if (!selectedSource) return;
+    setSubmitting(true);
+    try {
+      await mappingApi.decide({
+        cdm_name: cdmName,
+        domain,
+        source_value: selectedSource.source_value,
+        source_name: selectedSource.source_name || '',
+        action,
+        target_concept_id: s.concept_id,
+        target_concept_name: s.concept_name,
+        target_vocabulary_id: s.vocabulary_id,
+        suggestion_source: s.source || 'manual',
+        confidence_score: s.confidence,
+        reason: '',
+      });
+      toast.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${s.concept_name}`);
+      window.dispatchEvent(new Event('opal:badges-refresh'));
+      setSelectedSource(null);
+      setSuggestions([]);
+      setSuggestRan(false);
+      setConceptInfo(null);
+      setConceptIdInput(null);
+      // Refresh search
+      if (search.trim()) {
+        mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
+          .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
+          .catch(() => {});
+      }
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || t('mapping.decision_failed', 'Decision failed'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const confidenceColor = (c: number): 'green' | 'orange' | 'red' => c >= 80 ? 'green' : c >= 50 ? 'orange' : 'red';
+  const sourceLabel = (s: string) => {
+    const labels: Record<string, string> = { exact: 'Exact', relationship: 'Maps to', fuzzy: 'Fuzzy', contextual: 'Context', ingredient: 'Ingredient', synonym: 'Synonym', sapbert: 'SapBERT' };
+    return labels[s] || s;
+  };
 
   // Submit manual mapping
   const handleApprove = async () => {
@@ -893,6 +954,8 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
                   setConceptInfo(null);
                   setConceptIdInput(null);
                   setConceptError('');
+                  setSuggestions([]);
+                  setSuggestRan(false);
                 },
                 className: selectedSource?.source_value === record.source_value ? 'bg-emerald-accent/10' : '',
               })}
@@ -933,6 +996,65 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
                 <div className="font-semibold text-sm text-text-bright">{selectedSource.n_persons.toLocaleString()}</div>
               </div>
             </div>
+          </div>
+
+          {/* Auto-suggestions */}
+          <div className="mb-4">
+            <div className="flex items-center gap-3 mb-2">
+              <Button
+                variant="primary"
+                icon={<Zap className="h-4 w-4" />}
+                onClick={handleSuggest}
+                loading={suggestLoading}
+                size="small"
+              >
+                {t('mapping.generate_suggestions', 'Generate Suggestions')}
+              </Button>
+              {suggestRan && !suggestLoading && (
+                <span className="text-text-muted text-sm">{suggestions.length} {t('mapping.suggestions_found_count', 'suggestion(s)')}</span>
+              )}
+            </div>
+
+            {suggestLoading && (
+              <div className="text-center py-4">
+                <Spinner size="default" />
+                <p className="text-xs text-text-muted mt-2">{t('mapping.loading_suggestions', 'Generating suggestions...')}</p>
+              </div>
+            )}
+
+            {suggestRan && !suggestLoading && suggestions.length > 0 && (
+              <div className="flex flex-col gap-0.5">
+                {suggestions.map((s, i) => (
+                  <div key={s.concept_id} className={`px-2 py-1 rounded flex justify-between items-center ${i === 0 ? 'bg-emerald-500/8' : 'bg-surface-light'}`}>
+                    <div className="flex items-center gap-1">
+                      <Tag color={confidenceColor(s.confidence)} className="text-[10px]">{s.confidence}%</Tag>
+                      <Tag className="text-[10px]">{sourceLabel(s.source)}</Tag>
+                      <span className="text-xs text-text-bright">{s.concept_name}</span>
+                      <span className="text-[10px] text-text-dim">{s.concept_id} · {s.concept_code} · {s.vocabulary_id}</span>
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                      <Tooltip title={t('mapping.approve', 'Approve')}>
+                        <button
+                          className="p-1 text-emerald-400 hover:text-emerald-300 bg-transparent border-none cursor-pointer"
+                          onClick={() => handleApproveSuggestion(s, i === 0 ? 'approved' : 'modified')}
+                          disabled={submitting}
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {suggestRan && !suggestLoading && suggestions.length === 0 && (
+              <span className="text-text-dim text-xs">{t('mapping.no_match', 'No suggestions found')}</span>
+            )}
+          </div>
+
+          <div className="border-t border-glass-border pt-4 mt-2 mb-4">
+            <span className="text-text-muted text-xs">{t('mapping.or_manual', 'Or map manually by concept ID:')}</span>
           </div>
 
           {/* Concept ID input */}

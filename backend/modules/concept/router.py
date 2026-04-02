@@ -22,6 +22,7 @@ from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA
 from utils.sql_safety import safe_identifier
 from utils.csv_safety import csv_safe
+from utils.reference_labels import enrich_source_names
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/concepts", tags=["concepts"])
@@ -502,6 +503,11 @@ def search_source_value(
             for r in rows:
                 r.pop("_total", None)
 
+        # Enrich empty source_names from reference codebooks (FR labels)
+        for d in set(r["domain"] for r in rows):
+            domain_rows = [r for r in rows if r["domain"] == d]
+            enrich_source_names(db, d, domain_rows)
+
         return {"results": rows, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
         logger.exception("Source value search failed")
@@ -656,6 +662,11 @@ def search_source_value_fast(
             )
             results = [dict(r) for r in cur.fetchall()]
 
+        # Enrich empty source_names from reference codebooks (FR labels)
+        for d in set(r["domain"] for r in results):
+            domain_rows = [r for r in results if r["domain"] == d]
+            enrich_source_names(db, d, domain_rows)
+
         return {"results": results}
     except Exception:
         logger.exception("Fast source value search failed")
@@ -793,6 +804,11 @@ def export_source_value_search(
                 rows = [dict(r) for r in cur.fetchall()]
         finally:
             conn.close()
+
+    # Enrich empty source_names from reference codebooks (FR labels)
+    for d in set(r["domain"] for r in rows):
+        domain_rows = [r for r in rows if r["domain"] == d]
+        enrich_source_names(db, d, domain_rows)
 
     output = io.StringIO()
     writer = csv.writer(output)

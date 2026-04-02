@@ -10,6 +10,7 @@ from config import DOMAIN_CONFIG
 from db.app_db import SessionLocal
 from db.models import SourceValueCache, SourceValueCacheStatus
 from utils.cdm_helper import get_domain_config
+from utils.reference_labels import get_reference_label_map
 from utils.sql_safety import safe_identifier
 
 logger = logging.getLogger(__name__)
@@ -111,11 +112,14 @@ def populate_domain(
             rows = cur.fetchmany(_BATCH_SIZE)
             if not rows:
                 break
+            all_svs = []
             for r in rows:
+                sv = str(r["source_value"] or "")
+                all_svs.append(sv)
                 batch.append({
                     "cdm_name": cdm_name,
                     "domain": domain_name,
-                    "source_value": str(r["source_value"] or ""),
+                    "source_value": sv,
                     "source_name": str(r.get("source_name") or ""),
                     "source_atc": str(r.get("source_atc") or ""),
                     "n_records": r["n_records"],
@@ -126,6 +130,16 @@ def populate_domain(
                     "mapped_standard_concept": r.get("mapped_standard_concept"),
                 })
                 row_count += 1
+
+            # Overwrite source_name with FR reference codebook labels when available.
+            # The FR codebook is authoritative for source_name display — CDM values
+            # (e.g. EN translations from Athena) are only kept as fallback.
+            ref_labels = get_reference_label_map(app_db, domain_name, all_svs)
+            if ref_labels:
+                for item in batch:
+                    label = ref_labels.get(item["source_value"])
+                    if label:
+                        item["source_name"] = label
 
             app_db.bulk_insert_mappings(SourceValueCache, batch)
             app_db.flush()
