@@ -4,12 +4,12 @@ import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
   Star, Share2, Globe, Users, UserPlus, X, GitBranch,
-  Hammer, FlaskConical, ChevronDown, ChevronUp, Play, Filter,
+  Hammer, FlaskConical, Play,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
 import {
-  Card, Button, Input, TextArea, Table, Tabs, Tag, Modal, Confirm,
+  Card, Button, Input, Table, Tag, Modal, Confirm,
   Empty, Alert, Spinner, Switch, Select, Statistic, Tooltip,
 } from '../components/ui';
 import { useToast } from '../components/ui';
@@ -145,7 +145,6 @@ export default function CohortPage({ selectedCdm }: Props) {
   }, [selectedCdm]);
 
   const [addMode, setAddMode] = useSessionState<'inclusion' | 'exclusion'>('cohort:addMode', 'inclusion');
-  const [criteriaPanelOpen, setCriteriaPanelOpen] = useSessionState('cohort:criteriaPanelOpen', false);
 
   const handleAddCriterion = (criterion: CohortCriterion) => {
     setCriteria(prev => ({
@@ -431,219 +430,161 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   return (
     <div className="min-h-[calc(100vh-60px)] flex flex-col">
-      {/* ── Top bar: cohort info + actions + export ── */}
-      <div className="flex items-start gap-4 my-4 px-12">
-        {/* Name & Description stacked */}
-        <div className="flex flex-col gap-1.5 w-1/3">
+      {/* ── Top bar: cohort name | description | actions + export — single line, centered ── */}
+      <div className="flex justify-center my-4 px-2">
+        <div className="flex items-center gap-3">
           <Input
             placeholder={t('cohort.cohort_name_placeholder', 'Cohort name...')}
             value={cohortName}
             onChange={e => { setCohortName(e.target.value); setNameError(''); }}
+            className="!w-[180px]"
             required
             error={nameError}
           />
-          <TextArea
+          <Input
             placeholder={t('cohort.description', 'Description')}
             value={cohortDesc}
             onChange={e => setCohortDesc(e.target.value)}
-            rows={2}
+            className="!w-[400px]"
           />
-        </div>
-        {/* Actions stacked */}
-        <div className="flex flex-col gap-1">
-          <Button icon={<Plus className="h-3 w-3" />} size="small" onClick={handleNew} className="w-full hover:-translate-y-0.5">
-            {t('cohort.new', 'New')}
-          </Button>
-          <Button icon={<FolderOpen className="h-3 w-3" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }} className="w-full hover:-translate-y-0.5">
-            <span className="inline-flex items-center gap-1.5">
-              {t('cohort.load', 'Load')} ({cohorts.length})
-              {cohortNotifCount > 0 && (
-                <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
-              )}
-            </span>
-          </Button>
-          <Button icon={<Save className="h-3 w-3" />} variant="primary" size="small" onClick={handleSave} loading={saving} className="w-full">
-            {t('common.save', 'Save')}
-          </Button>
-        </div>
-        {/* Export buttons (was in ResultsPanel) */}
-        {savedCohortId && (
-          <div className="flex items-center gap-1.5 ml-auto">
-            <Button
-              size="small"
-              variant="primary"
-              icon={<Download className="h-3 w-3" />}
-              onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
-            >
-              {criteria.inclusion.sameVisit ? 'CSV (Patient + Visit IDs)' : 'CSV (Patient IDs)'}
-            </Button>
-            <Button
-              size="small"
-              icon={<Download className="h-3 w-3" />}
-              onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
-            >
-              SQL
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-col gap-1">
+              <Button icon={<Plus className="h-3 w-3" />} size="small" onClick={handleNew} className="hover:-translate-y-0.5">
+                {t('cohort.new', 'New')}
+              </Button>
+              <Button icon={<FolderOpen className="h-3 w-3" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }} className="hover:-translate-y-0.5">
+                <span className="inline-flex items-center gap-1.5">
+                  {t('cohort.load', 'Load')} ({cohorts.length})
+                  {cohortNotifCount > 0 && (
+                    <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                  )}
+                </span>
+              </Button>
+            </div>
+            <Button icon={<Save className="h-3 w-3" />} variant="primary" size="small" onClick={handleSave} loading={saving}>
+              {t('common.save', 'Save')}
             </Button>
           </div>
-        )}
+          {/* Export buttons */}
+          {savedCohortId && (
+            <div className="flex flex-col gap-1 shrink-0">
+              <Button
+                size="small"
+                variant="primary"
+                icon={<Download className="h-3 w-3" />}
+                onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
+              >
+                {criteria.inclusion.sameVisit ? 'CSV (Patient + Visit IDs)' : 'CSV (Patient IDs)'}
+              </Button>
+              <Button
+                size="small"
+                icon={<Download className="h-3 w-3" />}
+                onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
+              >
+                SQL
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── Navbar: Cohort Builder (hover → sub-tabs) | Analyse (hover → sub-tabs) ── */}
-      <div className="flex items-center border-b border-glass-border mb-2 px-1">
-        {/* Cohort Builder with dropdown */}
-        <div className="relative group">
+      {/* ── Main tabs: Cohort Builder | Analyse ── */}
+      <div className="flex items-center border-b border-glass-border px-1">
+        {[
+          { key: 'cohort-builder', label: t('cohort.cohort_builder', 'Cohort Builder'), icon: <Hammer className="h-3.5 w-3.5" /> },
+          { key: 'analyse', label: t('cohort.analyse', 'Analyse'), icon: <FlaskConical className="h-3.5 w-3.5" /> },
+        ].map(tab => (
           <button
-            onClick={() => { setMainTab('cohort-builder'); setBuilderSubTab('builder'); }}
+            key={tab.key}
+            onClick={() => setMainTab(tab.key)}
             className={`
               relative flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold transition-colors duration-200
               bg-transparent border-none cursor-pointer
-              ${mainTab === 'cohort-builder' ? 'text-emerald-accent' : 'text-text-dim hover:text-emerald-accent'}
+              ${mainTab === tab.key ? 'text-emerald-accent' : 'text-text-dim hover:text-emerald-accent'}
             `}
           >
-            <Hammer className="h-3.5 w-3.5" />
-            {t('cohort.cohort_builder', 'Cohort Builder')}
-            {mainTab === 'cohort-builder' && (
-              <span className="text-xs font-normal text-emerald-accent/70">
-                · {{ builder: t('cohort.query_builder', 'Query Builder'), characterization: 'Table 1', sql: 'SQL', 'concept-sets': t('app.concept_sets', 'Concept Sets') }[builderSubTab]}
-              </span>
-            )}
-            <ChevronDown className="h-3 w-3 opacity-50" />
-            {mainTab === 'cohort-builder' && (
+            {tab.icon}
+            {tab.label}
+            {mainTab === tab.key && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-accent shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
             )}
           </button>
-          {/* Dropdown on hover */}
-          <div className="absolute left-0 top-full z-50 hidden group-hover:flex flex-col min-w-[180px] py-1 rounded-lg border border-glass-border bg-[#1a1f2e] shadow-xl">
-            {[
+        ))}
+      </div>
+
+      {/* ── Sub-tabs navbar ── */}
+      <div className="flex items-center border-b border-glass-border/50 px-3 bg-[#1a1f2e]/30">
+        {(mainTab === 'cohort-builder'
+          ? [
               { key: 'builder', label: t('cohort.query_builder', 'Query Builder') },
               { key: 'characterization', label: 'Table 1', icon: <Table2 className="h-3.5 w-3.5" /> },
               { key: 'sql', label: 'SQL', icon: <Code className="h-3.5 w-3.5" /> },
               { key: 'concept-sets', label: t('app.concept_sets', 'Concept Sets'), icon: <AppWindow className="h-3.5 w-3.5" /> },
-            ].map(item => (
-              <button
-                key={item.key}
-                onClick={() => { setMainTab('cohort-builder'); setBuilderSubTab(item.key); }}
-                className={`
-                  flex items-center gap-2 px-4 py-2 text-sm text-left transition-colors
-                  bg-transparent border-none cursor-pointer w-full
-                  ${mainTab === 'cohort-builder' && builderSubTab === item.key
-                    ? 'text-emerald-accent bg-emerald-accent/10'
-                    : 'text-text-muted hover:text-emerald-accent hover:bg-surface-dark'}
-                `}
-              >
-                {item.icon}
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Analyse with dropdown */}
-        <div className="relative group">
-          <button
-            onClick={() => { setMainTab('analyse'); setAnalyseSubTab('comparison'); }}
-            className={`
-              relative flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold transition-colors duration-200
-              bg-transparent border-none cursor-pointer
-              ${mainTab === 'analyse' ? 'text-emerald-accent' : 'text-text-dim hover:text-emerald-accent'}
-            `}
-          >
-            <FlaskConical className="h-3.5 w-3.5" />
-            {t('cohort.analyse', 'Analyse')}
-            {mainTab === 'analyse' && (
-              <span className="text-xs font-normal text-emerald-accent/70">
-                · {{ comparison: t('cohort.compare', 'Compare'), pathways: t('cohort.pathways', 'Pathways'), incidence: t('app.incidence', 'Incidence'), estimation: t('app.estimation', 'Estimation') }[analyseSubTab]}
-              </span>
-            )}
-            <ChevronDown className="h-3 w-3 opacity-50" />
-            {mainTab === 'analyse' && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-accent shadow-[0_0_8px_rgba(16,185,129,0.4)]" />
-            )}
-          </button>
-          {/* Dropdown on hover */}
-          <div className="absolute left-0 top-full z-50 hidden group-hover:flex flex-col min-w-[180px] py-1 rounded-lg border border-glass-border bg-[#1a1f2e] shadow-xl">
-            {[
+            ]
+          : [
               { key: 'comparison', label: t('cohort.compare', 'Compare'), icon: <ArrowLeftRight className="h-3.5 w-3.5" /> },
               { key: 'pathways', label: t('cohort.pathways', 'Pathways'), icon: <GitBranch className="h-3.5 w-3.5" /> },
               { key: 'incidence', label: t('app.incidence', 'Incidence'), icon: <BarChart3 className="h-3.5 w-3.5" /> },
               { key: 'estimation', label: t('app.estimation', 'Estimation'), icon: <LineChart className="h-3.5 w-3.5" /> },
-            ].map(item => (
-              <button
-                key={item.key}
-                onClick={() => { setMainTab('analyse'); setAnalyseSubTab(item.key); }}
-                className={`
-                  flex items-center gap-2 px-4 py-2 text-sm text-left transition-colors
-                  bg-transparent border-none cursor-pointer w-full
-                  ${mainTab === 'analyse' && analyseSubTab === item.key
-                    ? 'text-emerald-accent bg-emerald-accent/10'
-                    : 'text-text-muted hover:text-emerald-accent hover:bg-surface-dark'}
-                `}
-              >
-                {item.icon}
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </div>
+            ]
+        ).map(item => {
+          const currentSub = mainTab === 'cohort-builder' ? builderSubTab : analyseSubTab;
+          const setSub = mainTab === 'cohort-builder' ? setBuilderSubTab : setAnalyseSubTab;
+          return (
+            <button
+              key={item.key}
+              onClick={() => setSub(item.key)}
+              className={`
+                relative flex items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors duration-200
+                bg-transparent border-none cursor-pointer
+                ${currentSub === item.key ? 'text-emerald-accent' : 'text-text-dim hover:text-emerald-accent'}
+              `}
+            >
+              {item.icon}
+              {item.label}
+              {currentSub === item.key && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-accent/60" />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Content ── */}
-      <div className="flex flex-col flex-1 overflow-auto">
-        {/* Cohort Builder content */}
+      <div className="flex flex-col flex-1 overflow-auto mt-2">
+        {/* Cohort Builder > Query Builder */}
         {mainTab === 'cohort-builder' && builderSubTab === 'builder' && (
           <>
-            {/* Toggle button — full width above, independent */}
-            <div className={`mb-2 ${criteriaPanelOpen ? 'w-[420px]' : ''}`}>
-              <button
-                onClick={() => setCriteriaPanelOpen(prev => !prev)}
-                className={`
-                  ${criteriaPanelOpen ? 'w-full' : 'inline-flex'} flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-glass-border
-                  transition-colors cursor-pointer
-                  ${criteriaPanelOpen
-                    ? 'bg-emerald-accent/10 text-emerald-accent border-emerald-accent/30'
-                    : 'bg-surface-dark text-text-dim hover:text-emerald-accent hover:border-emerald-accent/20'}
-                `}
-              >
-                <Filter className="h-3.5 w-3.5" />
-                <span>{t('cohort.criteria_panel', 'Inclusion & Exclusion Criteria')}</span>
-                {criteriaPanelOpen
-                  ? <ChevronUp className="h-3.5 w-3.5 ml-auto" />
-                  : <ChevronDown className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-
-            {/* Criteria panel (left) + QueryCanvas (right) side by side */}
+            {/* Criteria panel (left) + QueryCanvas (right) — always open */}
             <div className="flex gap-2">
-              {criteriaPanelOpen && (
-                <div className="w-[420px] shrink-0 border border-glass-border rounded-lg p-3 bg-surface-dark/40">
-                  <div className="flex rounded-lg overflow-hidden border border-glass-border mb-2">
-                    <button
-                      className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none cursor-pointer ${
-                        addMode === 'inclusion'
-                          ? 'bg-emerald-accent/15 text-emerald-accent'
-                          : 'bg-surface-dark text-text-dim hover:text-text-muted'
-                      }`}
-                      onClick={() => setAddMode('inclusion')}
-                    >
-                      + {t('cohort.inclusion', 'Inclusion')}
-                    </button>
-                    <button
-                      className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none border-l border-glass-border cursor-pointer ${
-                        addMode === 'exclusion'
-                          ? 'bg-red-500/15 text-red-400'
-                          : 'bg-surface-dark text-text-dim hover:text-text-muted'
-                      }`}
-                      onClick={() => setAddMode('exclusion')}
-                    >
-                      - {t('cohort.exclusion', 'Exclusion')}
-                    </button>
-                  </div>
-                  <CriteriaPanel
-                    cdmName={selectedCdm}
-                    onAddCriterion={handleAddCriterion}
-                  />
+              <div className="w-[420px] shrink-0 border border-glass-border rounded-lg p-3 bg-surface-dark/40">
+                <div className="flex rounded-lg overflow-hidden border border-glass-border mb-2">
+                  <button
+                    className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none cursor-pointer ${
+                      addMode === 'inclusion'
+                        ? 'bg-emerald-accent/15 text-emerald-accent'
+                        : 'bg-surface-dark text-text-dim hover:text-text-muted'
+                    }`}
+                    onClick={() => setAddMode('inclusion')}
+                  >
+                    + {t('cohort.inclusion', 'Inclusion')}
+                  </button>
+                  <button
+                    className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none border-l border-glass-border cursor-pointer ${
+                      addMode === 'exclusion'
+                        ? 'bg-red-500/15 text-red-400'
+                        : 'bg-surface-dark text-text-dim hover:text-text-muted'
+                    }`}
+                    onClick={() => setAddMode('exclusion')}
+                  >
+                    - {t('cohort.exclusion', 'Exclusion')}
+                  </button>
                 </div>
-              )}
+                <CriteriaPanel
+                  cdmName={selectedCdm}
+                  onAddCriterion={handleAddCriterion}
+                />
+              </div>
 
               <div className="flex-1 min-w-0">
                 <QueryCanvas
