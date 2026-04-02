@@ -1,4 +1,4 @@
-import { type ReactNode, useState, useMemo } from 'react';
+import { type ReactNode, useState, useMemo, useEffect } from 'react';
 import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 
 export interface Column<T> {
@@ -44,6 +44,10 @@ export function Table<T extends Record<string, any>>({
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(1);
+  const externalPage = pagination ? pagination.current : undefined;
+  useEffect(() => {
+    if (externalPage != null && externalPage !== page) setPage(externalPage);
+  }, [externalPage]);
   const pageSize = pagination ? pagination.pageSize : dataSource.length;
 
   const getKey = (record: T): string => {
