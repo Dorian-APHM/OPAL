@@ -13,6 +13,7 @@ from db.app_db import get_db
 from db.models import Cohort, MappingDecision, SavedQuery
 from utils.sql_safety import safe_identifier
 from utils.cdm_helper import get_cdm_connection, get_domain_config
+from utils.reference_labels import enrich_source_names
 from config import DOMAIN_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ def global_search(
                                 sv_sql = psysql.SQL("SELECT * FROM ({}) sub ORDER BY n_records DESC LIMIT %s").format(sv_composed)
                                 sv_params.append(limit)
                                 cur.execute(sv_sql, sv_params)
-                                results["source_values"] = [
+                                sv_results = [
                                     {
                                         "source_value": r["source_value"],
                                         "source_name": r["source_name"] or "",
@@ -160,6 +161,11 @@ def global_search(
                                     }
                                     for r in cur.fetchall()
                                 ]
+                                # Enrich empty source_names from reference codebooks
+                                for d in set(r["domain"] for r in sv_results):
+                                    domain_rows = [r for r in sv_results if r["domain"] == d]
+                                    enrich_source_names(db, d, domain_rows)
+                                results["source_values"] = sv_results
                         except Exception as e:
                             logger.warning("Source value search failed in global search: %s", e)
                 finally:

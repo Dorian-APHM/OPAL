@@ -17,6 +17,7 @@ from modules.quality.domains.person import run_person_analysis
 from modules.quality.domains.observation_period import run_observation_period_analysis
 from modules.quality.domains.dashboard import run_dashboard_analysis
 from modules.quality.domains.clinical import run_clinical_domain_analysis
+from utils.reference_labels import enrich_source_names
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def run_domain_analysis(
         )
 
     if domain_name in DOMAIN_CONFIG:
-        return run_clinical_domain_analysis(
+        result = run_clinical_domain_analysis(
             conn,
             domain_name,
             omop_schema=omop_schema,
@@ -85,5 +86,15 @@ def run_domain_analysis(
             top_concepts=top_concepts,
             max_records_per_person=max_records_per_person,
         )
+        # Enrich empty source_names in top_unmapped_terms from reference codebooks
+        unmapped = result.get("mapping", {}).get("top_unmapped_terms", [])
+        if unmapped:
+            from db.app_db import SessionLocal
+            _db = SessionLocal()
+            try:
+                enrich_source_names(_db, domain_name, unmapped)
+            finally:
+                _db.close()
+        return result
 
     raise ValueError(f"Unknown domain: {domain_name}")

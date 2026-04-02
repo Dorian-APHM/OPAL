@@ -88,10 +88,11 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
   const [domains, setDomains] = useSessionState<{ domain_id: string; count: number }[]>('concepts:domains', []);
   const [vocabs, setVocabs] = useSessionState<{ vocabulary_id: string; count: number }[]>('concepts:vocabs', []);
   const [searchMode, setSearchMode] = useSessionState('concepts:searchMode', 'concept' as 'concept' | 'source');
-  const [sourceResults, setSourceResults] = useSessionState('concepts:sourceResults', [] as SourceValueSearchResult[]);
-  const [sourceTotal, setSourceTotal] = useSessionState('concepts:sourceTotal', 0);
+  const [sourceResults, setSourceResults] = useState<SourceValueSearchResult[]>([]);
+  const [sourceTotal, setSourceTotal] = useState(0);
   const [sourceLoading, setSourceLoading] = useState(false);
-  const [sourcePage, setSourcePage] = useSessionState('concepts:sourcePage', 1);
+  const [sourcePage, setSourcePage] = useState(1);
+  const [sourceSearchKey, setSourceSearchKey] = useState(0);
   const [conceptCounts, setConceptCounts] = useSessionState<Record<number, { n_records: number; n_persons: number }>>('concepts:counts', {});
   const [countsLoading, setCountsLoading] = useState(false);
 
@@ -161,6 +162,10 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setSourceLoading(true);
+    setSourceResults([]);
+    setSourceTotal(0);
+    setSourcePage(1);
+    setSourceSearchKey(k => k + 1);
     try {
       const res = await conceptApi.searchSourceValue(selectedCdm, {
         q: query, domain: domainFilter, limit: 50, offset: (p - 1) * 50,
@@ -622,9 +627,10 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
             />
           ) : (
             <Table<SourceValueSearchResult>
+              key={sourceSearchKey}
               dataSource={sourceResults}
               columns={sourceColumns}
-              rowKey={(r: SourceValueSearchResult, i?: number) => `${r.domain}-${r.source_value}-${r.mapped_concept_id}-${i}`}
+              rowKey={(r: SourceValueSearchResult) => `${r.domain}-${r.source_value}-${r.mapped_concept_id}`}
               loading={sourceLoading}
               size="small"
               scroll={isMobile ? { x: 400 } : undefined}
