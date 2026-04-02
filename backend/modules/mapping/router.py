@@ -556,11 +556,18 @@ def suggest_single(req: SuggestRequest, request: Request, db: Session = Depends(
     source_name = req.source_name or ""
 
     # Enrich from reference codebook if no source_name
+    # Prefer EN codebooks for mapping (needed for fuzzy/keyword match against OMOP EN vocabulary)
     if not source_name:
         ref = db.query(ReferenceCodebook.description).filter(
             ReferenceCodebook.domain == req.domain,
             ReferenceCodebook.code == req.source_value,
+            ReferenceCodebook.name.endswith("_EN"),
         ).first()
+        if not ref:
+            ref = db.query(ReferenceCodebook.description).filter(
+                ReferenceCodebook.domain == req.domain,
+                ReferenceCodebook.code == req.source_value,
+            ).first()
         if ref:
             source_name = ref.description
 
@@ -630,11 +637,17 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     # which terms to process (P46 fix: avoid loading 100K+ rows upfront).
     sapbert_domain = req.domain
 
-    # Pre-fetch reference codebooks
-    ref_rows = db.query(ReferenceCodebook.code, ReferenceCodebook.description).filter(
+    # Pre-fetch reference codebooks — prefer EN for mapping (fuzzy/keyword match against OMOP EN vocab)
+    ref_rows = db.query(ReferenceCodebook.code, ReferenceCodebook.description, ReferenceCodebook.name).filter(
         ReferenceCodebook.domain == req.domain
     ).all()
-    ref_map = {r.code: r.description for r in ref_rows}
+    ref_map: dict[str, str] = {}
+    for r in ref_rows:
+        if r.name.endswith("_EN"):
+            ref_map[r.code] = r.description  # EN always wins
+    for r in ref_rows:
+        if r.code not in ref_map:
+            ref_map[r.code] = r.description  # fallback for codes not in EN
 
     import time as _time
     task_id = str(_uuid.uuid4())[:8]
