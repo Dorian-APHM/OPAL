@@ -155,6 +155,7 @@ class ApplyMappingRequest(BaseModel):
     cdm_name: str = Field(..., min_length=1, max_length=255)
     domain: str = Field(..., min_length=1, max_length=100)
     write_to_cdm: bool = False
+    target_cdms: list[str] = Field(default_factory=list)  # CDMs to apply to. Defaults to [cdm_name].
 
 
 # ──── Helpers ────
@@ -941,78 +942,115 @@ def bulk_decision(req: BulkDecisionRequest, request: Request, db: Session = Depe
 @router.post("/apply")
 def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
     """
-    Generate source_to_concept_map entries from approved decisions.
-    Optionally writes directly to the CDM's source_to_concept_map table.
+    Apply consensus mappings by UPDATE-ing concept_id columns in CDM clinical tables.
+    Logs every UPDATE in MappingApplyLog for rollback.
     """
-    # cdm_name is in the JSON body, so the Keycloak middleware cannot see it — check here.
+    import uuid
+    from db.models import MappingApplyLog
+
     check_cdm_access(request, req.cdm_name)
     username = _get_username(request)
 
-    # Only export consensus decisions (2+ users agree on same mapping)
     decisions = _get_consensus_decisions(db, req.cdm_name, req.domain)
-
     if not decisions:
-        return {"message": "No consensus mappings to apply", "count": 0}
+        return {"message": "No consensus mappings to apply", "count": 0, "rows": []}
 
-    stcm_rows = []
-    for d in decisions:
-        stcm_rows.append({
+    # Build STCM rows for response (always returned for compat / display)
+    stcm_rows = [
+        {
             "source_code": d.source_value,
-            "source_concept_id": 0,
-            "source_vocabulary_id": f"OPAL_{req.domain}",
             "source_code_description": d.source_name or d.source_value,
             "target_concept_id": d.target_concept_id,
             "target_vocabulary_id": d.target_vocabulary_id or "SNOMED",
-            "valid_start_date": "1970-01-01",
-            "valid_end_date": "2099-12-31",
-            "invalid_reason": None,
-        })
+        }
+        for d in decisions
+    ]
 
-    # ── CDM write disabled — CDM connections are strictly read-only ──
-    # To re-enable, remove the guard below and uncomment the write block.
-    if req.write_to_cdm:
-        raise HTTPException(
-            status_code=403,
-            detail="L'écriture dans le CDM est désactivée. Utilisez l'export CSV pour appliquer le mapping manuellement.",
-        )
+    if not req.write_to_cdm:
+        return {"count": len(stcm_rows), "written_to_cdm": False, "rows": stcm_rows}
 
-    # --- Write block (disabled) ---
-    # if req.write_to_cdm:
-    #     cdm, conn = _get_cdm_conn(db, req.cdm_name)
-    #     schema = _get_schema(db, cdm)
-    #     try:
-    #         from psycopg2.extras import execute_values
-    #         with conn.cursor() as cur:
-    #             sql = f"""
-    #                 INSERT INTO {schema}.source_to_concept_map
-    #                     (source_code, source_concept_id, source_vocabulary_id,
-    #                      source_code_description, target_concept_id, target_vocabulary_id,
-    #                      valid_start_date, valid_end_date, invalid_reason)
-    #                 VALUES %s
-    #                 ON CONFLICT (source_code, source_vocabulary_id, target_concept_id) DO UPDATE
-    #                 SET source_code_description = EXCLUDED.source_code_description,
-    #                     target_vocabulary_id = EXCLUDED.target_vocabulary_id
-    #             """
-    #             values = [
-    #                 (row["source_code"], row["source_concept_id"], row["source_vocabulary_id"],
-    #                  row["source_code_description"], row["target_concept_id"], row["target_vocabulary_id"],
-    #                  row["valid_start_date"], row["valid_end_date"], row["invalid_reason"])
-    #                 for row in stcm_rows
-    #             ]
-    #             execute_values(cur, sql, values)
-    #             conn.commit()
-    #     except Exception as e:
-    #         conn.rollback()
-    #         raise HTTPException(status_code=500, detail=f"Write error: {e}")
-    #     finally:
-    #         conn.close()
-    # --- End write block ---
+    # ── Write to CDM(s): UPDATE clinical table directly ──
+    cfg = DOMAIN_CONFIG.get(req.domain)
+    if not cfg:
+        raise HTTPException(status_code=400, detail=f"Unknown domain: {req.domain}")
+    table_name = cfg["table"]
+    sv_col_name = cfg.get("source_value")
+    concept_col_name = cfg["concept_id"]
+    if not sv_col_name:
+        raise HTTPException(status_code=400, detail=f"Domain {req.domain} has no source_value column")
 
-    username = _get_username(request)
+    table = safe_identifier(table_name)
+    sv_col = safe_identifier(sv_col_name)
+    concept_col = safe_identifier(concept_col_name)
+
+    # Targets default to source CDM
+    target_cdms = req.target_cdms or [req.cdm_name]
+    # Check access on all targets
+    for tcdm in target_cdms:
+        check_cdm_access(request, tcdm)
+
+    batch_id = uuid.uuid4().hex
+    per_cdm_results = {}
+
+    for tcdm in target_cdms:
+        try:
+            cdm_obj, conn = _get_cdm_conn(db, tcdm)
+            schema = _get_schema(db, cdm_obj)
+            full_table = f"{schema}.{table}"
+            total_updated = 0
+            try:
+                with conn.cursor() as cur:
+                    for d in decisions:
+                        # Snapshot previous values per (source_value, previous concept_id)
+                        cur.execute(
+                            f"SELECT {concept_col} AS prev_id, COUNT(*) AS n "
+                            f"FROM {full_table} WHERE {sv_col} = %(sv)s "
+                            f"GROUP BY {concept_col}",
+                            {"sv": d.source_value},
+                        )
+                        snapshot = cur.fetchall()
+                        for prev_id, n in snapshot:
+                            log = MappingApplyLog(
+                                batch_id=batch_id,
+                                source_cdm_name=req.cdm_name,
+                                target_cdm_name=tcdm,
+                                domain=req.domain,
+                                table_name=table_name,
+                                column_name=concept_col_name,
+                                source_value=d.source_value,
+                                previous_concept_id=prev_id,
+                                new_concept_id=d.target_concept_id,
+                                row_count=n,
+                                applied_by=username,
+                            )
+                            db.add(log)
+                        # UPDATE all matching rows
+                        cur.execute(
+                            f"UPDATE {full_table} SET {concept_col} = %(target)s "
+                            f"WHERE {sv_col} = %(sv)s",
+                            {"target": d.target_concept_id, "sv": d.source_value},
+                        )
+                        total_updated += cur.rowcount
+                    conn.commit()
+                db.commit()
+                per_cdm_results[tcdm] = {"updated_rows": total_updated, "decisions": len(decisions)}
+            except Exception as e:
+                conn.rollback()
+                db.rollback()
+                logger.exception("Apply mapping failed for CDM %s", tcdm)
+                per_cdm_results[tcdm] = {"error": str(e)}
+            finally:
+                conn.close()
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Cannot connect to CDM %s for apply", tcdm)
+            per_cdm_results[tcdm] = {"error": str(e)}
+
     notify(
         db, username, "mapping_applied",
-        title=f"Mapping exporté : {req.domain}",
-        message=f"{len(stcm_rows)} mappings générés pour {req.domain} ({req.cdm_name}).",
+        title=f"Mapping appliqué : {req.domain}",
+        message=f"Batch {batch_id[:8]} — {len(decisions)} mappings sur {len(target_cdms)} CDM(s).",
         link=f"/mapping?cdm={req.cdm_name}&domain={req.domain}",
         target_role="data-manager",
         item_id=f"{req.cdm_name}:{req.domain}",
@@ -1021,8 +1059,165 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
     return {
         "count": len(stcm_rows),
-        "written_to_cdm": False,
+        "written_to_cdm": True,
+        "batch_id": batch_id,
+        "per_cdm": per_cdm_results,
         "rows": stcm_rows,
+    }
+
+
+@router.post("/apply/rollback/{batch_id}")
+def rollback_apply(batch_id: str, request: Request, db: Session = Depends(get_db)):
+    """Rollback a previous mapping apply by batch_id — restore previous concept_ids."""
+    from db.models import MappingApplyLog
+
+    username = _get_username(request)
+    logs = db.query(MappingApplyLog).filter(
+        MappingApplyLog.batch_id == batch_id,
+        MappingApplyLog.rolled_back == 0,
+    ).all()
+    if not logs:
+        raise HTTPException(status_code=404, detail="Batch not found or already rolled back")
+
+    # Group logs by target CDM
+    per_cdm: dict[str, list] = {}
+    for log in logs:
+        per_cdm.setdefault(log.target_cdm_name, []).append(log)
+
+    per_cdm_results = {}
+    for tcdm, cdm_logs in per_cdm.items():
+        check_cdm_access(request, tcdm)
+        try:
+            cdm_obj, conn = _get_cdm_conn(db, tcdm)
+            schema = _get_schema(db, cdm_obj)
+            try:
+                with conn.cursor() as cur:
+                    restored = 0
+                    for log in cdm_logs:
+                        table = safe_identifier(log.table_name)
+                        col = safe_identifier(log.column_name)
+                        cfg = DOMAIN_CONFIG.get(log.domain, {})
+                        sv_col_name = cfg.get("source_value")
+                        if not sv_col_name:
+                            continue
+                        sv_col = safe_identifier(sv_col_name)
+                        full_table = f"{schema}.{table}"
+                        cur.execute(
+                            f"UPDATE {full_table} SET {col} = %(prev)s "
+                            f"WHERE {sv_col} = %(sv)s AND {col} = %(new)s",
+                            {"prev": log.previous_concept_id, "sv": log.source_value, "new": log.new_concept_id},
+                        )
+                        restored += cur.rowcount
+                        log.rolled_back = 1
+                    conn.commit()
+                db.commit()
+                per_cdm_results[tcdm] = {"restored_rows": restored}
+            except Exception as e:
+                conn.rollback()
+                db.rollback()
+                logger.exception("Rollback failed for CDM %s", tcdm)
+                per_cdm_results[tcdm] = {"error": str(e)}
+            finally:
+                conn.close()
+        except Exception as e:
+            per_cdm_results[tcdm] = {"error": str(e)}
+
+    return {"batch_id": batch_id, "per_cdm": per_cdm_results}
+
+
+@router.get("/apply/batch/{batch_id}")
+def apply_batch_detail(batch_id: str, db: Session = Depends(get_db)):
+    """Return full per-source-value detail of an apply batch."""
+    from db.models import MappingApplyLog
+
+    rows = db.query(MappingApplyLog).filter(
+        MappingApplyLog.batch_id == batch_id,
+    ).order_by(MappingApplyLog.source_value, MappingApplyLog.previous_concept_id).all()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    # Look up concept names from CDM if possible
+    concept_names: dict[int, str] = {}
+    target_cdm = rows[0].target_cdm_name
+    concept_ids = set()
+    for r in rows:
+        if r.previous_concept_id:
+            concept_ids.add(r.previous_concept_id)
+        if r.new_concept_id:
+            concept_ids.add(r.new_concept_id)
+    if concept_ids:
+        try:
+            cdm_obj, conn = _get_cdm_conn(db, target_cdm)
+            schema = _get_schema(db, cdm_obj)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT concept_id, concept_name FROM {schema}.concept "
+                        f"WHERE concept_id = ANY(%(ids)s)",
+                        {"ids": list(concept_ids)},
+                    )
+                    for cid, cname in cur.fetchall():
+                        concept_names[cid] = cname
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("Failed to lookup concept names for batch detail", exc_info=True)
+
+    return {
+        "batch_id": batch_id,
+        "source_cdm_name": rows[0].source_cdm_name,
+        "target_cdm_name": rows[0].target_cdm_name,
+        "domain": rows[0].domain,
+        "table_name": rows[0].table_name,
+        "column_name": rows[0].column_name,
+        "applied_by": rows[0].applied_by,
+        "applied_at": rows[0].applied_at.isoformat() if rows[0].applied_at else None,
+        "rolled_back": bool(rows[0].rolled_back),
+        "entries": [
+            {
+                "source_value": r.source_value,
+                "previous_concept_id": r.previous_concept_id,
+                "previous_concept_name": concept_names.get(r.previous_concept_id, ""),
+                "new_concept_id": r.new_concept_id,
+                "new_concept_name": concept_names.get(r.new_concept_id, ""),
+                "row_count": r.row_count,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/apply/history/{cdm_name}")
+def apply_history(cdm_name: str, db: Session = Depends(get_db)):
+    """List apply batches that touched this CDM (as target)."""
+    from db.models import MappingApplyLog
+
+    rows = db.query(
+        MappingApplyLog.batch_id,
+        MappingApplyLog.domain,
+        MappingApplyLog.applied_by,
+        func.min(MappingApplyLog.applied_at).label("applied_at"),
+        func.sum(MappingApplyLog.row_count).label("total_rows"),
+        func.max(MappingApplyLog.rolled_back).label("rolled_back"),
+    ).filter(
+        MappingApplyLog.target_cdm_name == cdm_name,
+    ).group_by(
+        MappingApplyLog.batch_id, MappingApplyLog.domain, MappingApplyLog.applied_by,
+    ).order_by(desc(func.min(MappingApplyLog.applied_at))).all()
+
+    return {
+        "batches": [
+            {
+                "batch_id": r.batch_id,
+                "domain": r.domain,
+                "applied_by": r.applied_by,
+                "applied_at": r.applied_at.isoformat() if r.applied_at else None,
+                "total_rows": int(r.total_rows or 0),
+                "rolled_back": bool(r.rolled_back),
+            }
+            for r in rows
+        ]
     }
 
 
@@ -1069,31 +1264,132 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
     }
 
 
+_DOMAIN_TO_TABLE = {
+    "Condition": "CONDITION_OCCURRENCE",
+    "Drug": "DRUG_EXPOSURE",
+    "Procedure": "PROCEDURE_OCCURRENCE",
+    "Measurement": "MEASUREMENT",
+    "Observation": "OBSERVATION",
+    "Device": "DEVICE_EXPOSURE",
+    "Visit": "VISIT_OCCURRENCE",
+    "Specimen": "SPECIMEN",
+    "Death": "DEATH",
+    "Note": "NOTE",
+}
+
+_DOMAIN_TO_SOURCE_VOCAB = {
+    "Condition": "CIM-10",
+    "Drug": "ATC",
+    "Procedure": "CCAM",
+}
+
+
 @router.get("/apply/export/{cdm_name}/{domain}")
 def export_stcm(cdm_name: str, domain: str, request: Request, db: Session = Depends(get_db)):
-    """Export approved mappings as source_to_concept_map CSV (per-user)."""
-    username = _get_username(request)
+    """Export approved mappings as Usagi-compatible CSV (consensus only)."""
+    from db.models import SourceValueCache
 
-    # Only export consensus decisions (2+ users agree)
     decisions = _get_consensus_decisions(db, cdm_name, domain)
+
+    # Look up frequency from source value cache
+    freq_map = {}
+    cache_rows = db.query(SourceValueCache.source_value, SourceValueCache.n_records).filter(
+        SourceValueCache.cdm_name == cdm_name,
+        SourceValueCache.domain == domain,
+    ).all()
+    for sv, n_rec in cache_rows:
+        freq_map[sv] = freq_map.get(sv, 0) + (n_rec or 0)
+
+    # Look up all users that approved each consensus pair
+    users_map: dict[tuple, list[str]] = {}
+    if decisions:
+        all_users = db.query(
+            MappingDecision.source_value,
+            MappingDecision.target_concept_id,
+            MappingDecision.user,
+        ).filter(
+            MappingDecision.cdm_name == cdm_name,
+            MappingDecision.domain == domain,
+            MappingDecision.action.in_(["approved", "modified"]),
+        ).all()
+        for sv, tid, user in all_users:
+            key = (sv, tid)
+            if user and user not in users_map.setdefault(key, []):
+                users_map[key].append(user)
+
+    source_vocab = _DOMAIN_TO_SOURCE_VOCAB.get(domain, "")
+
+    # Lookup concept_code and concept_class_id from CDM (not stored in MappingDecision)
+    concept_info: dict[int, dict] = {}
+    target_ids = [d.target_concept_id for d in decisions if d.target_concept_id]
+    if target_ids:
+        try:
+            cdm_obj, conn = _get_cdm_conn(db, cdm_name)
+            schema = _get_schema(db, cdm_obj)
+            try:
+                from psycopg2.extras import DictCursor
+                with conn.cursor(cursor_factory=DictCursor) as cur:
+                    cur.execute(
+                        f"SELECT concept_id, concept_code, concept_class_id "
+                        f"FROM {schema}.concept WHERE concept_id = ANY(%(ids)s)",
+                        {"ids": target_ids},
+                    )
+                    for row in cur.fetchall():
+                        concept_info[row["concept_id"]] = {
+                            "concept_code": row["concept_code"],
+                            "concept_class_id": row["concept_class_id"],
+                        }
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("Failed to lookup target concept info for export", exc_info=True)
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "source_code", "source_concept_id", "source_vocabulary_id",
-        "source_code_description", "target_concept_id", "target_vocabulary_id",
-        "valid_start_date", "valid_end_date", "invalid_reason",
+        "sourceCode", "sourceName", "sourceFrequency", "sourceAutoAssignedConceptIds",
+        "ADD_INFO:source_name_fr", "ADD_INFO:matchScore",
+        "mappingStatus", "equivalence", "statusSetBy", "statusSetOn",
+        "conceptId", "conceptName", "domainId", "mappingType", "comment",
+        "createdBy", "createdOn", "assignedReviewers",
+        "srce_vocabulary", "concept_code", "concept_name", "domain_id",
+        "vocabulary_id", "concept_class_id", "standard_concept",
     ])
     for d in decisions:
+        users = users_map.get((d.source_value, d.target_concept_id), [])
+        users_str = ";".join(users) if users else (d.user or "")
+        created_at = d.created_at.isoformat() if d.created_at else ""
         writer.writerow([
-            csv_safe(d.source_value), 0, f"OPAL_{domain}",
+            csv_safe(d.source_value),
             csv_safe(d.source_name or d.source_value),
-            d.target_concept_id, csv_safe(d.target_vocabulary_id or "SNOMED"),
-            "1970-01-01", "2099-12-31", "",
+            freq_map.get(d.source_value, 0),
+            d.previous_concept_id or 0,
+            csv_safe(d.source_name or ""),
+            d.confidence_score or "",
+            "APPROVED",
+            "EQUAL",
+            csv_safe(users_str),
+            created_at,
+            d.target_concept_id or "",
+            csv_safe(d.target_concept_name or ""),
+            csv_safe(domain),
+            "MAPS_TO",
+            csv_safe(d.reason or ""),
+            csv_safe(d.user or ""),
+            created_at,
+            "",
+            csv_safe(source_vocab),
+            csv_safe(concept_info.get(d.target_concept_id, {}).get("concept_code", "")),
+            csv_safe(d.target_concept_name or ""),
+            csv_safe(domain),
+            csv_safe(d.target_vocabulary_id or ""),
+            csv_safe(concept_info.get(d.target_concept_id, {}).get("concept_class_id", "")),
+            "S",  # OPAL only maps to standard concepts
         ])
     output.seek(0)
 
-    filename = f"source_to_concept_map_{cdm_name}_{domain}.csv"
+    table_suffix = _DOMAIN_TO_TABLE.get(domain, domain.upper())
+    filename = f"_{table_suffix}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",

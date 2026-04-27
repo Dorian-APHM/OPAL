@@ -303,7 +303,7 @@
     "write_confirm_impact_patients": "patients",
     "write_confirm_type_cdm": "Pour confirmer, tapez le nom exact du CDM ci-dessous :",
     "write_confirm_mismatch": "Le nom du CDM ne correspond pas",
-    "write_warning": "Cette action va modifier directement la table source_to_concept_map du CDM. Cette opération est difficilement réversible.",
+    "write_warning": "Cette action va exécuter un UPDATE direct sur la colonne concept_id de la table clinique des CDMs sélectionnés. Un log de rollback est conservé mais l'opération impacte les données de production.",
     "export_stcm_instead": "Exporter en CSV (recommandé)"
   },
   "common": {
