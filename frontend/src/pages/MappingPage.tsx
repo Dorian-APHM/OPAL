@@ -8,14 +8,14 @@ import {
 import type { TabItem, Column } from '../components/ui';
 import {
   BarChart3, Search, Lightbulb, History, Download, Check, X, Edit,
-  Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link, CheckCircle2,
+  Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link, CheckCircle2, Database,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
   ResponsiveContainer, LineChart, Line, Legend, Rectangle,
 } from 'recharts';
-import { mappingApi, authDownload } from '../api/client';
+import { mappingApi, cdmAccessApi, authDownload } from '../api/client';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAuth } from '../auth/KeycloakContext';
 import { useNotifDots } from '../hooks/useNotifDots';
@@ -81,6 +81,11 @@ export default function MappingPage({ selectedCdm }: Props) {
         </span>
       ),
       children: <MappingHistoryTab cdmName={selectedCdm} refreshKey={historyKey} />,
+    },
+    {
+      key: 'apply-log',
+      label: <span className="inline-flex items-center gap-1.5"><Database className="h-4 w-4" /> {t('mapping.apply_log', 'Apply Log')}</span>,
+      children: <ApplyLogTab cdmName={selectedCdm} />,
     },
   ];
 
@@ -775,6 +780,14 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Reason modal state for suggestion approval
+  const [suggReasonModal, setSuggReasonModal] = useState<{
+    open: boolean;
+    suggestion: MappingSuggestion | null;
+    action: 'approved' | 'modified';
+  }>({ open: false, suggestion: null, action: 'approved' });
+  const [suggReasonText, setSuggReasonText] = useState('');
+
   // Search source values
   const handleSearch = useCallback(() => {
     if (!search.trim()) return;
@@ -815,9 +828,17 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       .finally(() => setSuggestLoading(false));
   }, [cdmName, domain, selectedSource, t, toast]);
 
-  // Approve a suggestion
-  const handleApproveSuggestion = async (s: MappingSuggestion, action: 'approved' | 'modified' = 'approved') => {
-    if (!selectedSource) return;
+  // Open the reason modal before approving a suggestion
+  const handleApproveSuggestion = (s: MappingSuggestion, action: 'approved' | 'modified' = 'approved') => {
+    setSuggReasonText('');
+    setSuggReasonModal({ open: true, suggestion: s, action });
+  };
+
+  // Confirm approval after reason modal
+  const handleConfirmSuggestion = async () => {
+    const s = suggReasonModal.suggestion;
+    const action = suggReasonModal.action;
+    if (!selectedSource || !s) return;
     setSubmitting(true);
     try {
       await mappingApi.decide({
@@ -831,10 +852,12 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
         target_vocabulary_id: s.vocabulary_id,
         suggestion_source: s.source || 'manual',
         confidence_score: s.confidence,
-        reason: '',
+        reason: suggReasonText,
       });
       toast.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${s.concept_name}`);
       window.dispatchEvent(new Event('opal:badges-refresh'));
+      setSuggReasonModal({ open: false, suggestion: null, action: 'approved' });
+      setSuggReasonText('');
       setSelectedSource(null);
       setSuggestions([]);
       setSuggestRan(false);
@@ -1123,12 +1146,17 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           {/* Reason + approve button */}
           {conceptInfo && (
             <div className="flex flex-col gap-3 w-full">
-              <TextArea
-                rows={2}
-                placeholder={t('mapping.reason_placeholder', 'Reason (optional)')}
-                value={reason}
-                onChange={e => setReason(e.target.value)}
-              />
+              <div>
+                <label className="block text-text-bright text-sm mb-1">
+                  {t('mapping.reason_label', 'Reason')} <span className="text-text-dim text-xs">({t('common.optional', 'optional')})</span>
+                </label>
+                <TextArea
+                  rows={3}
+                  placeholder={t('mapping.reason_placeholder', 'Why this mapping?')}
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                />
+              </div>
               <Button
                 variant="primary"
                 icon={<Check className="h-4 w-4" />}
@@ -1151,6 +1179,37 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           className="mt-12"
         />
       )}
+
+      {/* Reason modal for suggestion approval */}
+      <Modal
+        open={suggReasonModal.open}
+        onClose={() => setSuggReasonModal({ open: false, suggestion: null, action: 'approved' })}
+        title={t('mapping.approve_reason', 'Approve — Reason')}
+        footer={
+          <>
+            <Button onClick={() => setSuggReasonModal({ open: false, suggestion: null, action: 'approved' })}>
+              {t('common.cancel', 'Cancel')}
+            </Button>
+            <Button variant="primary" onClick={handleConfirmSuggestion} loading={submitting}>
+              {t('mapping.approve', 'Approve')}
+            </Button>
+          </>
+        }
+      >
+        {suggReasonModal.suggestion && selectedSource && (
+          <div className="mb-2 text-sm">
+            <Tag>{selectedSource.source_value}</Tag> → <span className="text-text-bright">{suggReasonModal.suggestion.concept_name}</span>
+            <span className="text-text-dim text-[11px] ml-2">({suggReasonModal.suggestion.concept_id})</span>
+          </div>
+        )}
+        <TextArea
+          rows={3}
+          placeholder={t('mapping.reason_placeholder', 'Reason (optional)')}
+          value={suggReasonText}
+          onChange={e => setSuggReasonText(e.target.value)}
+          autoFocus
+        />
+      </Modal>
     </div>
   );
 }
@@ -1231,6 +1290,13 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const [loading, setLoading] = useState(false);
   const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
   const [applyPreview, setApplyPreview] = useState<{ total_decisions: number; impacted_rows: number; impacted_persons: number } | null>(null);
+  const [accessibleCdms, setAccessibleCdms] = useState<string[]>([]);
+  const [targetCdms, setTargetCdms] = useState<string[]>([cdmName]);
+
+  useEffect(() => {
+    cdmAccessApi.getAccessibleCdms().then(r => setAccessibleCdms(r.data.cdms)).catch(() => setAccessibleCdms([cdmName]));
+  }, [cdmName]);
+  useEffect(() => { setTargetCdms([cdmName]); }, [cdmName]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1305,8 +1371,16 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const handleApply = async (writeToCdm: boolean) => {
     setApplyLoading(true);
     try {
-      const r = await mappingApi.apply(cdmName, applyDomain, writeToCdm);
-      toast.success(`Applied ${r.data.count} mappings${writeToCdm ? ' to CDM' : ''}`);
+      const r = await mappingApi.apply(cdmName, applyDomain, writeToCdm, writeToCdm ? targetCdms : undefined);
+      const data: any = r.data;
+      if (writeToCdm && data.per_cdm) {
+        const summary = Object.entries(data.per_cdm)
+          .map(([c, v]: [string, any]) => v.error ? `${c}: ERROR` : `${c}: ${v.updated_rows} rows`)
+          .join(' · ');
+        toast.success(`Batch ${data.batch_id?.slice(0, 8)} — ${summary}`);
+      } else {
+        toast.success(`Applied ${data.count} mappings${writeToCdm ? ' to CDM' : ''}`);
+      }
       setApplyPreview(null);
       setWriteConfirmOpen(false);
       setWriteConfirmText('');
@@ -1568,7 +1642,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-red-400" />
               <span className="font-semibold text-red-400">
-                {t('mapping.write_warning', 'This action will directly modify the source_to_concept_map table of the CDM. This operation is difficult to reverse.')}
+                {t('mapping.write_warning', 'This action will directly UPDATE the concept_id column in the clinical table of the selected CDMs. A rollback log is kept but the operation impacts production data.')}
               </span>
             </div>
           </div>
@@ -1608,7 +1682,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
                 <Button
                   variant="danger"
                   loading={applyLoading}
-                  disabled={writeConfirmText !== cdmName}
+                  disabled={writeConfirmText !== 'APPLIQUER' || targetCdms.length === 0}
                   onClick={() => handleApply(true)}
                 >
                   {t('mapping.write_confirm_submit')}
@@ -1617,19 +1691,50 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             }
           >
             <div className="mb-4">
-              <span className="text-text-bright">{t('mapping.write_confirm_message_pre', 'You will write')} <strong>{applyPreview.total_decisions} {t('mapping.write_confirm_message_mappings', 'mappings')}</strong> {t('mapping.write_confirm_message_mid', 'to the')} <code>source_to_concept_map</code> {t('mapping.write_confirm_message_post', 'table of CDM')} <strong>{cdmName}</strong>.</span>
+              <span className="text-text-bright">
+                Vous allez appliquer <strong>{applyPreview.total_decisions} mappings</strong> du domaine <strong>{applyDomain}</strong> en faisant un <code>UPDATE</code> direct sur la colonne <code>{applyDomain.toLowerCase()}_concept_id</code> de la table clinique.
+              </span>
             </div>
             <div className="mb-4">
-              <span className="text-text-bright">{t('mapping.write_confirm_impact_pre', 'This will impact')} <strong>{applyPreview.impacted_rows.toLocaleString()} {t('mapping.write_confirm_impact_rows', 'rows')}</strong> {t('mapping.write_confirm_impact_mid', 'and')} <strong>{applyPreview.impacted_persons.toLocaleString()} {t('mapping.write_confirm_impact_patients', 'patients')}</strong>.</span>
+              <span className="text-text-bright">
+                Impact estimé : <strong>{applyPreview.impacted_rows.toLocaleString()} lignes</strong> et <strong>{applyPreview.impacted_persons.toLocaleString()} patients</strong> par CDM.
+              </span>
+            </div>
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-text-muted mb-1">
+                {t('mapping.target_cdms', 'Target CDM(s) to apply mapping to')}
+              </label>
+              <div className="flex flex-wrap gap-1">
+                {accessibleCdms.map(c => {
+                  const checked = targetCdms.includes(c);
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setTargetCdms(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}
+                      className={`px-2 py-1 text-xs rounded border transition-all ${
+                        checked
+                          ? 'bg-emerald-accent/20 border-emerald-accent/40 text-emerald-accent font-medium'
+                          : 'bg-deep-base border-glass-border text-text-dim hover:text-text-muted'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-text-dim text-[11px] mt-1">{targetCdms.length} CDM(s) sélectionné(s)</div>
             </div>
             <div className="bg-yellow-500/10 border border-yellow-500/25 rounded px-3 py-2 mb-4">
-              <span className="text-yellow-400 text-xs">{t('mapping.write_confirm_type_cdm')}</span>
+              <span className="text-yellow-400 text-xs">
+                Tapez <code className="font-mono font-bold">APPLIQUER</code> pour confirmer.
+              </span>
             </div>
             <Input
-              placeholder={cdmName}
+              placeholder="APPLIQUER"
               value={writeConfirmText}
               onChange={e => setWriteConfirmText(e.target.value)}
-              error={writeConfirmText && writeConfirmText !== cdmName ? t('mapping.write_confirm_mismatch') : undefined}
+              error={writeConfirmText && writeConfirmText !== 'APPLIQUER' ? 'Le texte ne correspond pas' : undefined}
             />
           </Modal>
         </Card>
@@ -1642,6 +1747,254 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
         loading={loading}
         pagination={{ pageSize: 50, current: page, total, onChange: setPage }}
         size="small"
+      />
+    </div>
+  );
+}
+
+// ============ TAB: APPLY LOG ============
+
+interface ApplyBatch {
+  batch_id: string;
+  domain: string;
+  applied_by: string;
+  applied_at: string | null;
+  total_rows: number;
+  rolled_back: boolean;
+}
+
+interface BatchDetail {
+  batch_id: string;
+  source_cdm_name: string;
+  target_cdm_name: string;
+  domain: string;
+  table_name: string;
+  column_name: string;
+  applied_by: string;
+  applied_at: string | null;
+  rolled_back: boolean;
+  entries: {
+    source_value: string;
+    previous_concept_id: number | null;
+    previous_concept_name: string;
+    new_concept_id: number;
+    new_concept_name: string;
+    row_count: number;
+  }[];
+}
+
+function ApplyLogTab({ cdmName }: { cdmName: string }) {
+  const toast = useToast();
+  const { roles } = useAuth();
+  const canRollback = roles.includes('admin') || roles.includes('data-manager');
+  const [accessibleCdms, setAccessibleCdms] = useState<string[]>([]);
+  const [filterCdm, setFilterCdm] = useSessionState('mapping:applylog:cdm', cdmName);
+  const [batches, setBatches] = useState<ApplyBatch[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [rollbackId, setRollbackId] = useState<string | null>(null);
+  const [rollbackLoading, setRollbackLoading] = useState(false);
+  const [detailBatch, setDetailBatch] = useState<BatchDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const openDetail = async (batchId: string) => {
+    setDetailLoading(true);
+    setDetailBatch(null);
+    try {
+      const r = await mappingApi.applyBatchDetail(batchId);
+      setDetailBatch(r.data);
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to load batch detail');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    cdmAccessApi.getAccessibleCdms()
+      .then(r => setAccessibleCdms(r.data.cdms))
+      .catch(() => setAccessibleCdms([cdmName]));
+  }, [cdmName]);
+
+  const load = useCallback(() => {
+    if (!filterCdm) return;
+    setLoading(true);
+    mappingApi.applyHistory(filterCdm)
+      .then(r => setBatches(r.data.batches))
+      .catch(() => setBatches([]))
+      .finally(() => setLoading(false));
+  }, [filterCdm]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleRollback = async () => {
+    if (!rollbackId) return;
+    setRollbackLoading(true);
+    try {
+      const r = await mappingApi.applyRollback(rollbackId);
+      const data: any = r.data;
+      const summary = Object.entries(data.per_cdm || {})
+        .map(([c, v]: [string, any]) => v.error ? `${c}: ERROR` : `${c}: ${v.restored_rows} rows restaurées`)
+        .join(' · ');
+      toast.success(summary || 'Rollback effectué');
+      setRollbackId(null);
+      load();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Rollback failed');
+    } finally {
+      setRollbackLoading(false);
+    }
+  };
+
+  const columns: Column<ApplyBatch>[] = [
+    {
+      key: 'batch_id', title: 'Batch', dataIndex: 'batch_id',
+      render: (v: string) => <code className="text-xs font-mono">{v.slice(0, 8)}</code>,
+      width: 100,
+    },
+    { key: 'domain', title: 'Domain', dataIndex: 'domain', width: 130, render: (v: string) => <Tag>{v}</Tag> },
+    { key: 'applied_by', title: 'Par', dataIndex: 'applied_by', width: 150 },
+    {
+      key: 'applied_at', title: 'Date', dataIndex: 'applied_at',
+      render: (v: string) => v ? new Date(v).toLocaleString() : '—',
+      width: 180,
+    },
+    {
+      key: 'total_rows', title: 'Lignes modifiées', dataIndex: 'total_rows',
+      render: (v: number) => v.toLocaleString(),
+      width: 130,
+    },
+    {
+      key: 'status', title: 'Status', dataIndex: 'rolled_back',
+      render: (v: boolean) => v ? <Tag color="orange">Rolled back</Tag> : <Tag color="green">Active</Tag>,
+      width: 110,
+    },
+    {
+      key: 'actions', title: '', width: 200,
+      render: (_: any, r: ApplyBatch) => (
+        <div className="flex items-center gap-1">
+          <Button size="small" icon={<Search className="h-3.5 w-3.5" />} onClick={() => openDetail(r.batch_id)}>
+            Détails
+          </Button>
+          {!r.rolled_back && canRollback && (
+            <Button size="small" variant="danger" icon={<Undo2 className="h-3.5 w-3.5" />} onClick={() => setRollbackId(r.batch_id)}>
+              Rollback
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <Card size="small" className="mb-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-text-bright text-sm">CDM cible :</span>
+          <Select
+            value={filterCdm}
+            onChange={v => setFilterCdm(v)}
+            options={accessibleCdms.map(c => ({ value: c, label: c }))}
+            className="w-full sm:w-[280px]"
+          />
+          <Button icon={<RefreshCw className="h-4 w-4" />} size="small" onClick={load} loading={loading} />
+          <span className="text-text-muted text-sm">{batches.length} batch(es)</span>
+        </div>
+      </Card>
+
+      <Table<ApplyBatch>
+        dataSource={batches}
+        columns={columns}
+        rowKey="batch_id"
+        size="small"
+        loading={loading}
+        pagination={{ pageSize: 25 }}
+        emptyText="Aucune modification appliquée sur ce CDM"
+      />
+
+      <Modal
+        open={detailBatch !== null || detailLoading}
+        onClose={() => setDetailBatch(null)}
+        title={detailBatch ? `Batch ${detailBatch.batch_id.slice(0, 8)}` : 'Chargement...'}
+        width="max-w-4xl"
+      >
+        {detailLoading && <Spinner size="default" />}
+        {detailBatch && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3 text-xs">
+              <div>
+                <span className="text-text-dim">Source CDM</span>
+                <div className="text-text-bright font-mono">{detailBatch.source_cdm_name}</div>
+              </div>
+              <div>
+                <span className="text-text-dim">Target CDM</span>
+                <div className="text-text-bright font-mono">{detailBatch.target_cdm_name}</div>
+              </div>
+              <div>
+                <span className="text-text-dim">Table modifiée</span>
+                <div className="text-text-bright font-mono">{detailBatch.table_name}.{detailBatch.column_name}</div>
+              </div>
+              <div>
+                <span className="text-text-dim">Domaine</span>
+                <div><Tag>{detailBatch.domain}</Tag></div>
+              </div>
+              <div>
+                <span className="text-text-dim">Par</span>
+                <div className="text-text-bright">{detailBatch.applied_by}</div>
+              </div>
+              <div>
+                <span className="text-text-dim">Date</span>
+                <div className="text-text-bright">{detailBatch.applied_at ? new Date(detailBatch.applied_at).toLocaleString() : '—'}</div>
+              </div>
+              <div>
+                <span className="text-text-dim">Status</span>
+                <div>{detailBatch.rolled_back ? <Tag color="orange">Rolled back</Tag> : <Tag color="green">Active</Tag>}</div>
+              </div>
+              <div>
+                <span className="text-text-dim">Total entries</span>
+                <div className="text-text-bright font-bold">{detailBatch.entries.length}</div>
+              </div>
+            </div>
+            <div className="max-h-[450px] overflow-auto">
+              <Table
+                dataSource={detailBatch.entries}
+                rowKey={(r: any) => `${r.source_value}-${r.previous_concept_id}`}
+                size="small"
+                pagination={{ pageSize: 50 }}
+                columns={[
+                  { key: 'source_value', title: 'Source code', dataIndex: 'source_value', width: 120 },
+                  {
+                    key: 'previous', title: 'Avant',
+                    dataIndex: 'previous_concept_id',
+                    render: (v: number | null, r: any) => v === null || v === 0
+                      ? <span className="text-text-dim">— (non mappé)</span>
+                      : <div><span className="font-mono text-xs">{v}</span>{r.previous_concept_name && <div className="text-[11px] text-text-dim">{r.previous_concept_name}</div>}</div>,
+                  },
+                  {
+                    key: 'new', title: 'Après',
+                    dataIndex: 'new_concept_id',
+                    render: (v: number, r: any) => <div><span className="font-mono text-xs text-emerald-accent">{v}</span>{r.new_concept_name && <div className="text-[11px] text-text-bright">{r.new_concept_name}</div>}</div>,
+                  },
+                  {
+                    key: 'row_count', title: 'Lignes',
+                    dataIndex: 'row_count',
+                    render: (v: number) => v.toLocaleString(),
+                    width: 110,
+                  },
+                ] as Column<any>[]}
+              />
+            </div>
+          </>
+        )}
+      </Modal>
+
+      <Confirm
+        open={rollbackId !== null}
+        onClose={() => setRollbackId(null)}
+        onConfirm={handleRollback}
+        title="Rollback du batch"
+        description={`Restaurer les concept_id précédents pour le batch ${rollbackId?.slice(0, 8)} ? Cette action restaure les valeurs originales dans la table clinique.`}
+        confirmText={rollbackLoading ? 'Rollback...' : 'Rollback'}
+        danger
       />
     </div>
   );
