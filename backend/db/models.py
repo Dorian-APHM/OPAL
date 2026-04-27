@@ -426,3 +426,30 @@ class LineageDoc(Base):
     lineage_json = Column(JSON, nullable=False)
     uploaded_by = Column(String(255), default="system")
     uploaded_at = Column(DateTime, default=_utcnow)
+
+
+class MappingApplyLog(Base):
+    """
+    Tracks each mapping application (UPDATE) on a CDM clinical table.
+    Allows rollback by batch_id.
+    """
+    __tablename__ = "mapping_apply_log"
+    __table_args__ = (
+        Index("ix_mapping_apply_batch", "batch_id"),
+        Index("ix_mapping_apply_cdm_domain", "target_cdm_name", "domain"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(64), nullable=False, index=True)
+    source_cdm_name = Column(String(255), nullable=False)
+    target_cdm_name = Column(String(255), nullable=False)
+    domain = Column(String(100), nullable=False)
+    table_name = Column(String(100), nullable=False)
+    column_name = Column(String(100), nullable=False)
+    source_value = Column(String(1000), nullable=False)
+    previous_concept_id = Column(Integer, nullable=True)
+    new_concept_id = Column(Integer, nullable=False)
+    row_count = Column(Integer, nullable=False, default=0)
+    applied_by = Column(String(255), nullable=False, default="system")
+    applied_at = Column(DateTime, default=_utcnow)
+    rolled_back = Column(Integer, nullable=False, default=0)  # 0=active, 1=rolled back

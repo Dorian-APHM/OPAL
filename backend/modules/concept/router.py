@@ -380,11 +380,12 @@ def search_source_value(
     ).first()
 
     if cache_exists:
+        # Prefix on source_value (index-friendly), substring on source_name (keyword search)
         search_clauses = [
             SourceValueCache.source_value.ilike(f"{q}%"),
-            SourceValueCache.source_name.ilike(f"{q}%"),
+            SourceValueCache.source_name.ilike(f"%{q}%"),
         ]
-        # ATC only exists for Drug domain
+        # ATC only exists for Drug domain (prefix on ATC codes)
         if not domain or domain == "Drug":
             search_clauses.append(
                 and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
@@ -542,7 +543,7 @@ def search_source_value_fast(
         from sqlalchemy import and_
         search_clauses = [
             SourceValueCache.source_value.ilike(f"{q}%"),
-            SourceValueCache.source_name.ilike(f"{q}%"),
+            SourceValueCache.source_name.ilike(f"%{q}%"),
         ]
         if not domain or domain == "Drug":
             search_clauses.append(
@@ -698,7 +699,7 @@ def export_source_value_search(
     if cache_exists:
         search_clauses = [
             SourceValueCache.source_value.ilike(f"{q}%"),
-            SourceValueCache.source_name.ilike(f"{q}%"),
+            SourceValueCache.source_name.ilike(f"%{q}%"),
         ]
         if not domain or domain == "Drug":
             search_clauses.append(

@@ -375,8 +375,22 @@ export const mappingApi = {
     target_vocabulary_id?: string; suggestion_source?: string; confidence_score?: number;
     reason?: string;
   }) => api.post('/mapping/decide', data),
-  apply: (cdmName: string, domain: string, writeToCdm?: boolean) =>
-    api.post('/mapping/apply', { cdm_name: cdmName, domain, write_to_cdm: writeToCdm || false }),
+  apply: (cdmName: string, domain: string, writeToCdm?: boolean, targetCdms?: string[]) =>
+    api.post('/mapping/apply', { cdm_name: cdmName, domain, write_to_cdm: writeToCdm || false, target_cdms: targetCdms || [] }),
+  applyRollback: (batchId: string) =>
+    api.post(`/mapping/apply/rollback/${batchId}`),
+  applyHistory: (cdmName: string) =>
+    api.get<{ batches: { batch_id: string; domain: string; applied_by: string; applied_at: string | null; total_rows: number; rolled_back: boolean }[] }>(
+      `/mapping/apply/history/${cdmName}`
+    ),
+  applyBatchDetail: (batchId: string) =>
+    api.get<{
+      batch_id: string; source_cdm_name: string; target_cdm_name: string;
+      domain: string; table_name: string; column_name: string;
+      applied_by: string; applied_at: string | null; rolled_back: boolean;
+      entries: { source_value: string; previous_concept_id: number | null; previous_concept_name: string;
+                 new_concept_id: number; new_concept_name: string; row_count: number }[];
+    }>(`/mapping/apply/batch/${batchId}`),
   applyPreview: (cdmName: string, domain: string) =>
     api.post<{ total_decisions: number; impacted_rows: number; impacted_persons: number }>(
       '/mapping/apply/preview', { cdm_name: cdmName, domain }
