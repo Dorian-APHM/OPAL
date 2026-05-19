@@ -20,9 +20,29 @@ def _safe(name: str) -> str:
     return name
 
 
-def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
+# Steps for progress tracking (label, total_steps)
+_CONFORMITY_STEPS = [
+    "structure",
+    "person",
+    "observation_period",
+    "condition_occurrence",
+    "drug_exposure",
+    "measurement",
+    "procedure_occurrence",
+    "observation",
+    "visit_occurrence",
+]
+
+
+def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None) -> dict:
     """
     Run CDM conformity validation checks.
+
+    Args:
+        conn: psycopg2 connection to the OMOP CDM.
+        omop_schema: Schema name for the OMOP CDM.
+        on_progress: Optional callback ``(step_name, completed, total)`` called
+            after each major step completes.
 
     Returns:
         {
@@ -45,6 +65,14 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
     """
     schema = _safe(omop_schema)
     checks = []
+    total_steps = len(_CONFORMITY_STEPS)
+    completed = 0
+
+    def _progress(step_name):
+        nonlocal completed
+        completed += 1
+        if on_progress:
+            on_progress(step_name, completed, total_steps)
 
     with conn.cursor() as cur:
         # ── 1. Required tables exist ──
@@ -69,6 +97,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "detail": "" if present else f"Missing required table: {table}",
                 "value": present,
             })
+
+        _progress("structure")
 
         # ── 2. Person table checks ──
         if "person" in existing_tables:
@@ -130,6 +160,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "value": {"count": unmapped_gender, "pct": pct_gender},
             })
 
+        _progress("person")
+
         # ── 3. Observation period checks ──
         if "observation_period" in existing_tables:
             # Merge both obs period checks into one query (P14 fix)
@@ -166,6 +198,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 "value": future_obs,
             })
 
+        _progress("observation_period")
+
         # ── 4/5/6. Clinical tables: merged concept_id, date, and visit FK checks (P14 fix) ──
         # Unified config: each clinical table with its concept_col, date_col, visit_fk_col
         clinical_checks_config = {
@@ -199,6 +233,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
 
         for table, cfg in clinical_checks_config.items():
             if table not in existing_tables:
+                _progress(table)
                 continue
 
             concept_col = cfg["concept_col"]
@@ -256,6 +291,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                         "detail": f"Table {table} is empty",
                         "value": {"count": 0, "pct": 0, "total": 0},
                     })
+                    _progress(table)
                     continue
 
                 # Concept check
@@ -298,6 +334,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
             except Exception as e:
                 logger.warning("Conformity check failed for %s: %s", table, e)
 
+            _progress(table)
+
         # ── Visit occurrence future dates (standalone, no concept/FK checks) ──
         if "visit_occurrence" in existing_tables:
             try:
@@ -316,6 +354,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm") -> dict:
                 })
             except Exception as e:
                 logger.warning("Date check failed for visit_occurrence: %s", e)
+
+        _progress("visit_occurrence")
 
     # Calculate score
     total_checks = len(checks)
