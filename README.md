@@ -374,6 +374,24 @@ Lancement et supervision de conteneurs Docker OHDSI.
 - Navigateur de fichiers de sortie avec telechargement
 - Statuts : idle, running, done, error
 
+#### Installation des images OHDSI
+
+Les 4 outils sont construits depuis [ohdsi-tools/](ohdsi-tools/) (Dockerfile + scripts R + packages OHDSI vendores + driver JDBC PostgreSQL). Le repertoire est autonome : aucun telechargement externe au build.
+
+```bash
+# Sans proxy
+docker compose -f ohdsi-tools/docker-compose.yml build
+
+# Derriere proxy APHM (corporate-proxy sur localhost:3128)
+docker compose -f ohdsi-tools/docker-compose.yml build \
+  --build-arg HTTP_PROXY=http://localhost:3128 \
+  --build-arg HTTPS_PROXY=http://localhost:3128 \
+  --build-arg PROXY_CA_HOST=127.0.0.1 \
+  --build-arg PROXY_CA_PORT=3128
+```
+
+Les images sont nommees `ohdsi-docker-{achilles,achilles-export,dqd,cdmonboarding}` (prefixe par defaut `OHDSI_IMAGE_PREFIX=ohdsi-docker`). Les conteneurs sont lances a la demande par le backend via le socket Docker — voir [ohdsi-tools/README.md](ohdsi-tools/README.md).
+
 ---
 
 ### 7. Parametres

@@ -1,0 +1,63 @@
+# OHDSI quality tools for OPAL (Achilles, Achilles-export, DQD, CDM Onboarding).
+#
+# These services are NOT brought up with `docker compose up`. They are launched
+# on-demand by the OPAL backend (see backend/modules/ohdsi/router.py) via the
+# Docker SDK. This file exists to (a) build the images and (b) document the
+# runtime contract.
+#
+# Build (no proxy):
+#   docker compose -f ohdsi-tools/docker-compose.yml build
+#
+# Build (behind APHM corporate-proxy proxy):
+#   docker compose -f ohdsi-tools/docker-compose.yml build \
+#     --build-arg HTTP_PROXY=http://localhost:3128 \
+#     --build-arg HTTPS_PROXY=http://localhost:3128 \
+#     --build-arg PROXY_CA_HOST=127.0.0.1 \
+#     --build-arg PROXY_CA_PORT=3128
+#
+# Image names are explicit (`ohdsi-docker-<svc>`) so the OPAL backend's
+# OHDSI_IMAGE_PREFIX=ohdsi-docker default keeps working.
+
+x-common: &common
+  build:
+    context: .
+  env_file: .env
+  network_mode: host
+
+services:
+  achilles:
+    <<: *common
+    image: ohdsi-docker-achilles
+    command: ["Rscript", "scripts/run_achilles.R"]
+    volumes:
+      - ./scripts:/app/scripts
+      - ./output/achilles:/output
+      - ./drivers:/drivers:ro
+
+  achilles-export:
+    <<: *common
+    image: ohdsi-docker-achilles-export
+    command: ["Rscript", "scripts/run_achilles_export.R"]
+    volumes:
+      - ./scripts:/app/scripts
+      - ./output/achilles:/output
+      - ./drivers:/drivers:ro
+
+  dqd:
+    <<: *common
+    image: ohdsi-docker-dqd
+    command: ["Rscript", "scripts/run_dqd.R"]
+    volumes:
+      - ./scripts:/app/scripts
+      - ./output/dqd:/output
+      - ./drivers:/drivers:ro
+
+  cdmonboarding:
+    <<: *common
+    image: ohdsi-docker-cdmonboarding
+    command: ["Rscript", "scripts/run_cdmonboarding.R"]
+    volumes:
+      - ./scripts:/app/scripts
+      - ./output/cdmonboarding:/output
+      - ./output/dqd:/input/dqd:ro
+      - ./drivers:/drivers:ro

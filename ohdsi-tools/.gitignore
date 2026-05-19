@@ -1,0 +1,5 @@
+.env
+output/
+.RData
+.Rhistory
+build.log
