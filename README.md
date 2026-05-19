@@ -98,7 +98,43 @@ Keycloak est accessible sur **http://localhost:8080** (admin/admin par defaut).
 4. Tester la connexion
 5. Enregistrer le CDM
 6. Selectionner le CDM dans la barre de navigation superieure (TopNav)
-7. Lancer une analyse qualite, construire une cohorte, explorer les mappings ou les concepts
+7. **Charger les referentiels de reference** (voir [Bootstrap des referentiels](#bootstrap-des-referentiels) ci-dessous)
+8. Lancer une analyse qualite, construire une cohorte, explorer les mappings ou les concepts
+
+### Bootstrap des referentiels
+
+Pour que la recherche par mot-cle en francais fonctionne dans **Concept Explorer** (mode Source value), il faut charger les codebooks FR **avant** de peupler la SourceValueCache. Les labels FR ecrasent les `source_name` du CDM lors de la population — c'est ce qui permet de trouver "tumeur", "diabete", etc.
+
+Trois references actives :
+
+| Fichier (dans le repo) | Cible | Domaine | Usage |
+|---|---|---|---|
+| `scripts/ccam_fr.csv` | `reference_codebooks` | Procedure | Labels FR CCAM (recherche par mot-cle + mapping) |
+| `scripts/cim10_fr.csv` | `reference_codebooks` | Condition | Labels FR CIM-10 (recherche par mot-cle + mapping) |
+| `data/sapbert_results.csv` | `sapbert_mappings` | Procedure | Top-5 suggestions SapBERT pre-calculees (mapping auto) |
+
+Le script [scripts/reload_codebooks.sh](scripts/reload_codebooks.sh) fait toute la sequence :
+
+```bash
+# Bootstrap codebooks + SapBERT (apres au moins un CDM enregistre)
+./scripts/reload_codebooks.sh
+
+# Bootstrap + rebuild de la SourceValueCache pour un CDM specifique
+./scripts/reload_codebooks.sh --cdm <nom_cdm>
+
+# Avec auth Keycloak active
+AUTH_TOKEN=<token_bearer> ./scripts/reload_codebooks.sh --cdm <nom_cdm>
+```
+
+**Ordre critique** : `reload_codebooks.sh` charge les codebooks puis declenche le rebuild du cache. Si tu charges les codebooks **apres** avoir peuple le cache, il faut re-lancer la population (les labels FR ne sont appliques qu'au moment de la population). Le populate est asynchrone (background worker) — poll l'etat :
+
+```bash
+curl --noproxy '*' "http://localhost:8000/api/concepts/source-value-cache/status?cdm_name=<nom_cdm>"
+```
+
+Chaque domaine est commite independamment : tu peux tester Procedure des qu'il est `done`, meme si Condition est encore `running`.
+
+**Equivalent UI** : page Mapping → "Charger un referentiel" pour les CSV ; page Settings ou Concept Explorer → bouton "Populate source value cache". Resultat identique.
 
 ### Arret
 
