@@ -6,6 +6,7 @@ Extracted from main.py to keep the entry point lean.
 import logging
 import os
 import secrets
+import string
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -17,6 +18,29 @@ from utils.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
+
+def _generate_temp_password(length: int = 20) -> str:
+    """Generate a temporary password that satisfies common Keycloak password policies.
+
+    Guarantees at least 1 uppercase, 1 digit, and 1 special character.
+    """
+    specials = "!@#$%&*"
+    # Guarantee required character classes
+    mandatory = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(specials),
+    ]
+    alphabet = string.ascii_letters + string.digits + specials
+    remaining = [secrets.choice(alphabet) for _ in range(length - len(mandatory))]
+    chars = mandatory + remaining
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+# Cache LDAP detection result for 60s to avoid hitting Keycloak on every request
+_ldap_cache: dict = {"value": None, "ts": 0.0}
+_LDAP_CACHE_TTL = 60.0
 
 
 class AssignRoleRequest(BaseModel):
@@ -69,6 +93,40 @@ def _get_keycloak_admin_token() -> str | None:
     except Exception as e:
         logger.warning("Failed to get Keycloak admin token: %s", e)
         return None
+
+
+def _has_ldap_federation(token: str) -> bool:
+    """Detect if a UserStorageProvider (LDAP) is configured in the Keycloak realm.
+
+    Queries the Keycloak components API and caches the result for 60s.
+    Falls back to the KEYCLOAK_LDAP_ENABLED env var if the API call fails.
+    """
+    import time
+    import requests as http_requests
+
+    now = time.monotonic()
+    if _ldap_cache["value"] is not None and (now - _ldap_cache["ts"]) < _LDAP_CACHE_TTL:
+        return _ldap_cache["value"]
+
+    try:
+        base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+        resp = http_requests.get(
+            f"{base}/components?type=org.keycloak.storage.UserStorageProvider",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        components = resp.json()
+        has_ldap = any(
+            c.get("providerId") == "ldap" and c.get("config", {}).get("enabled", ["true"])[0] == "true"
+            for c in components
+        )
+        _ldap_cache["value"] = has_ldap
+        _ldap_cache["ts"] = now
+        return has_ldap
+    except Exception as e:
+        logger.warning("Failed to detect LDAP federation, falling back to env var: %s", e)
+        return os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
 
 
 # ──── Admin: User Management (Keycloak proxy) ────
@@ -296,7 +354,7 @@ def approve_access_request(request_id: int, request: Request, admin_user=Depends
     base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    use_ldap = os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
+    use_ldap = _has_ldap_federation(token)
     kc_user_id = None
 
     try:
@@ -309,7 +367,7 @@ def approve_access_request(request_id: int, request: Request, admin_user=Depends
     except Exception:
         pass
 
-    temp_password = secrets.token_urlsafe(16)
+    temp_password = _generate_temp_password()
     if not kc_user_id:
         user_payload = {
             "username": ar.username,
@@ -331,6 +389,17 @@ def approve_access_request(request_id: int, request: Request, admin_user=Depends
             kc_user_id = location.rsplit("/", 1)[-1] if location else None
         except Exception as e:
             return JSONResponse(status_code=500, content={"detail": f"Failed to create Keycloak user: {e}"})
+    elif not use_ldap:
+        # User already exists — force reset password so the displayed temp password is valid
+        try:
+            http_requests.put(
+                f"{base}/users/{kc_user_id}/reset-password",
+                headers=headers,
+                json={"type": "password", "value": temp_password, "temporary": True},
+                timeout=5,
+            ).raise_for_status()
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"detail": f"Failed to reset password: {e}"})
 
     if kc_user_id and ar.requested_role:
         try:
@@ -393,7 +462,7 @@ async def add_user_direct(request: Request, admin_user=Depends(_require_admin)):
 
     base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    use_ldap = os.environ.get("KEYCLOAK_LDAP_ENABLED", "false").lower() == "true"
+    use_ldap = _has_ldap_federation(token)
     kc_user_id = None
 
     try:
@@ -406,9 +475,8 @@ async def add_user_direct(request: Request, admin_user=Depends(_require_admin)):
     except Exception:
         pass
 
-    temp_password = None
+    temp_password = _generate_temp_password()
     if not kc_user_id:
-        temp_password = secrets.token_urlsafe(16)
         user_payload = {"username": username, "enabled": True}
         if not use_ldap:
             user_payload["credentials"] = [{"type": "password", "value": temp_password, "temporary": True}]
@@ -419,6 +487,17 @@ async def add_user_direct(request: Request, admin_user=Depends(_require_admin)):
             kc_user_id = location.rsplit("/", 1)[-1] if location else None
         except Exception as e:
             return JSONResponse(status_code=500, content={"detail": f"Impossible de creer l'utilisateur: {e}"})
+    elif not use_ldap:
+        # User already exists — force reset password so the displayed temp password is valid
+        try:
+            http_requests.put(
+                f"{base}/users/{kc_user_id}/reset-password",
+                headers=headers,
+                json={"type": "password", "value": temp_password, "temporary": True},
+                timeout=5,
+            ).raise_for_status()
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"detail": f"Impossible de reinitialiser le mot de passe: {e}"})
 
     if not kc_user_id:
         return JSONResponse(status_code=500, content={"detail": "Impossible de trouver ou creer l'utilisateur"})
@@ -436,7 +515,7 @@ async def add_user_direct(request: Request, admin_user=Depends(_require_admin)):
         return JSONResponse(status_code=500, content={"detail": f"Utilisateur cree mais echec assignation role: {e}"})
 
     result = {"status": "ok", "username": username, "role": role, "keycloak_user_id": kc_user_id}
-    if temp_password and not use_ldap:
+    if not use_ldap:
         result["temporary_password"] = temp_password
     return result
 

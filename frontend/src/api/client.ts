@@ -243,7 +243,7 @@ export const qualityApi = {
   cancelAnalysis: (analysisId: string) =>
     api.post(`/quality/analyze/cancel/${analysisId}`),
   activeAnalyses: () =>
-    api.get<{ active: { analysis_id: string; cancelled: boolean; cdm_name: string; type: string; domains: string[]; completed: number; total: number; domain_status: { domain: string; status: string }[] }[] }>('/quality/analyze/active'),
+    api.get<{ active: { analysis_id: string; cancelled: boolean; cdm_name: string; type: string; domains: string[]; completed: number; total: number; domain_status: { domain: string; status: string }[]; current_step?: string }[] }>('/quality/analyze/active'),
   timeline: (cdmName: string, domain?: string) =>
     api.get<{ cdm_name: string; timelines: Record<string, any[]> }>(
       `/quality/timeline/${cdmName}`, { params: domain ? { domain } : {} }
