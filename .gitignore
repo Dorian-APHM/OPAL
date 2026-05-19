@@ -34,6 +34,10 @@ opal_data/
 .env.local
 .env.*.local
 
+# Local Keycloak LDAP setup (contains bind credentials / site-specific DNs)
+# Use scripts/setup_keycloak.example.sh as a template.
+scripts/setup_keycloak.sh
+
 # Data / reference CSV files (loaded via API, not tracked)
 *.csv
 
