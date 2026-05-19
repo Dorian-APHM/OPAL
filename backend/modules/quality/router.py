@@ -495,6 +495,7 @@ def list_active_analyses():
                 "completed": info.get("completed", 0),
                 "total": info.get("total", 0),
                 "domain_status": info.get("domain_status", []),
+                "current_step": info.get("current_step", ""),
             }
             for aid, info in items
         ]
@@ -532,7 +533,11 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
 
     analysis_id = f"conf-{_uuid.uuid4().hex[:8]}"
     with _active_analyses_lock:
-        _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": ["Conformity"], "username": trigger_username}
+        _active_analyses[analysis_id] = {
+            "cancelled": False, "conn": None, "cdm_name": cdm_name,
+            "domains": ["Conformity"], "username": trigger_username,
+            "completed": 0, "total": 9, "current_step": "",
+        }
 
     def _worker():
         from modules.quality.conformity import run_conformity_checks
@@ -548,12 +553,20 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
         with _active_analyses_lock:
             _active_analyses[analysis_id]["conn"] = conn
 
+        def _on_progress(step_name, step_completed, step_total):
+            with _active_analyses_lock:
+                entry = _active_analyses.get(analysis_id)
+                if entry:
+                    entry["completed"] = step_completed
+                    entry["total"] = step_total
+                    entry["current_step"] = step_name
+
         try:
             with _active_analyses_lock:
                 if _active_analyses.get(analysis_id, {}).get("cancelled"):
                     return
 
-            report = run_conformity_checks(conn, omop_schema=omop_schema)
+            report = run_conformity_checks(conn, omop_schema=omop_schema, on_progress=_on_progress)
 
             with _active_analyses_lock:
                 if _active_analyses.get(analysis_id, {}).get("cancelled"):

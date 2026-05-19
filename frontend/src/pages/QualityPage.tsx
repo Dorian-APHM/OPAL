@@ -53,6 +53,9 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
   const [result, setResult] = useSessionState<ConformityResult | null>('quality:conformityResult', null);
   const [snapshotMeta, setSnapshotMeta] = useSessionState<{ version?: number; created_at?: string } | null>('quality:conformityMeta', null);
   const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState<{ completed: number; total: number; step: string } | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
 
@@ -101,6 +104,7 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
     return () => {
       mountedRef.current = false;
       if (pollRef.current) clearInterval(pollRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [selectedCdm]);
 
@@ -110,10 +114,16 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
       qualityApi.activeAnalyses()
         .then(activeRes => {
           if (!mountedRef.current) return;
-          const stillRunning = activeRes.data.active.some(
-            a => a.analysis_id === id && !a.cancelled
+          const entry = activeRes.data.active.find(
+            (a: any) => a.analysis_id === id && !a.cancelled
           );
-          if (!stillRunning) {
+          if (entry) {
+            setProgress({
+              completed: entry.completed || 0,
+              total: entry.total || 9,
+              step: entry.current_step || '',
+            });
+          } else {
             loadResult().then(() => {
               if (mountedRef.current) {
                 toast.success(t('common.success', 'Conformity check complete'));
@@ -121,6 +131,8 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
             });
             setRunning(false);
             setAnalysisId(null);
+            setProgress(null);
+            if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
           }
@@ -129,10 +141,26 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
     }, 2000);
   }, [selectedCdm, t, toast, loadResult]);
 
+  const STEP_LABELS: Record<string, string> = {
+    structure: 'Tables requises',
+    person: 'Person',
+    observation_period: 'Observation Period',
+    condition_occurrence: 'Condition Occurrence',
+    drug_exposure: 'Drug Exposure',
+    measurement: 'Measurement',
+    procedure_occurrence: 'Procedure Occurrence',
+    observation: 'Observation',
+    visit_occurrence: 'Visit Occurrence',
+  };
+
   const runConformity = async () => {
     setRunning(true);
     setResult(null);
     setSnapshotMeta(null);
+    setProgress({ completed: 0, total: 9, step: '' });
+    setElapsed(0);
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed(prev => prev + 1), 1000);
     try {
       const res = await conformityApi.run(selectedCdm);
       const id = res.data.analysis_id;
@@ -154,6 +182,7 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
     }
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     setRunning(false);
     setAnalysisId(null);
   };
@@ -231,7 +260,27 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
           </Button>
         )}
         {running && <Spinner size="small" />}
-        {running && <span className="text-sm text-text-muted">{t('quality.conformity_running', 'Running conformity checks...')}</span>}
+        {running && progress && (
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-text-muted truncate">
+                  {progress.step ? STEP_LABELS[progress.step] || progress.step : t('quality.conformity_running', 'Running conformity checks...')}
+                </span>
+                <span className="text-xs text-text-dim shrink-0 ml-2">
+                  {progress.completed}/{progress.total} — {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-glass-border overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-all duration-500 ease-out"
+                  style={{ width: `${progress.total > 0 ? (progress.completed / progress.total) * 100 : 0}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {running && !progress && <span className="text-sm text-text-muted">{t('quality.conformity_running', 'Running conformity checks...')}</span>}
         {snapshotMeta && !running && (
           <span className="text-xs text-text-dim ml-auto">
             v{snapshotMeta.version} — {snapshotMeta.created_at ? new Date(snapshotMeta.created_at).toLocaleString() : ''}

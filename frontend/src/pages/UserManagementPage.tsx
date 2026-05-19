@@ -5,7 +5,7 @@ import {
 } from '../components/ui';
 import type { Column } from '../components/ui';
 import {
-  User, RefreshCw, CheckCircle, Ban, Plus, XCircle, UserPlus, Users, Trash2, Edit,
+  User, RefreshCw, CheckCircle, Ban, Plus, XCircle, UserPlus, Users, Trash2, Edit, Copy, Key,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { adminApi, groupApi, usersApi } from '../api/client';
@@ -45,6 +45,9 @@ export default function UserManagementPage() {
   const [approveConfirm, setApproveConfirm] = useState<number | null>(null);
   const [rejectConfirm, setRejectConfirm] = useState<number | null>(null);
 
+  // Temporary password modal (shown when no LDAP)
+  const [tempPasswordInfo, setTempPasswordInfo] = useState<{ username: string; password: string } | null>(null);
+
   // Groups state
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
@@ -80,10 +83,15 @@ export default function UserManagementPage() {
     }
     setAddUserLoading(true);
     try {
-      await adminApi.addUser(addUsername, addRole);
-      toast.success(`Utilisateur ${addUsername} ajoute avec le role ${addRole}`);
+      const resp = await adminApi.addUser(addUsername, addRole);
+      const data = resp.data;
       setAddUserOpen(false);
       resetAddForm();
+      if (data.temporary_password) {
+        setTempPasswordInfo({ username: data.username, password: data.temporary_password });
+      } else {
+        toast.success(`Utilisateur ${addUsername} ajoute avec le role ${addRole}`);
+      }
       fetchUsers();
     } catch (e: any) {
       const detail = e?.response?.data?.detail || 'Echec';
@@ -183,8 +191,13 @@ export default function UserManagementPage() {
 
   const handleApproveRequest = async (id: number) => {
     try {
-      await adminApi.approveRequest(id);
-      toast.success("Demande approuvee. L'utilisateur peut se connecter avec ses identifiants APHM.");
+      const resp = await adminApi.approveRequest(id);
+      const data = resp.data;
+      if (data.temporary_password) {
+        setTempPasswordInfo({ username: data.username, password: data.temporary_password });
+      } else {
+        toast.success("Demande approuvee. L'utilisateur peut se connecter avec ses identifiants LDAP.");
+      }
       fetchRequests();
       fetchUsers();
     } catch (e: any) {
@@ -659,7 +672,7 @@ export default function UserManagementPage() {
           if (approveConfirm !== null) handleApproveRequest(approveConfirm);
         }}
         title={t('admin.confirm_approve', 'Approve this access request?')}
-        description="Le role sera assigne et l'utilisateur pourra se connecter avec ses identifiants APHM."
+        description="Le role sera assigne et l'utilisateur pourra se connecter."
         confirmText={t('admin.approve', 'Approve')}
       />
 
@@ -688,6 +701,47 @@ export default function UserManagementPage() {
         confirmText={t('common.delete', 'Delete')}
         danger
       />
+
+      {/* Temporary password modal (shown when no LDAP) */}
+      <Modal
+        open={!!tempPasswordInfo}
+        onClose={() => setTempPasswordInfo(null)}
+        title={
+          <div className="flex items-center gap-2">
+            <Key className="h-4 w-4 text-amber-400" />
+            Mot de passe temporaire
+          </div>
+        }
+        width="max-w-md"
+      >
+        {tempPasswordInfo && (
+          <div className="space-y-4">
+            <p className="text-sm text-text-muted">
+              Aucun annuaire LDAP n'est configure. Un mot de passe temporaire a ete genere pour{' '}
+              <span className="font-semibold text-text-bright">{tempPasswordInfo.username}</span>.
+              L'utilisateur devra le changer a sa premiere connexion.
+            </p>
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-glass-bg border border-glass-border">
+              <code className="flex-1 text-sm font-mono text-emerald-accent break-all select-all">
+                {tempPasswordInfo.password}
+              </code>
+              <Button
+                size="small"
+                icon={<Copy className="h-3.5 w-3.5" />}
+                onClick={() => {
+                  navigator.clipboard.writeText(tempPasswordInfo.password);
+                  toast.success('Mot de passe copie');
+                }}
+              >
+                Copier
+              </Button>
+            </div>
+            <p className="text-xs text-amber-400">
+              Transmettez ce mot de passe a l'utilisateur de maniere securisee. Il ne sera plus affiche.
+            </p>
+          </div>
+        )}
+      </Modal>
 
       {/* User detail modal */}
       <Modal
