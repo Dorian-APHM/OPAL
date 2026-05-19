@@ -801,7 +801,8 @@ opal/
     ├── sapbert_mapping.py    # Generation des embeddings SapBERT
     ├── scrape_athena_ccam.py # Scraping vocabulaire CCAM depuis Athena
     ├── reload_codebooks.sh   # Chargement des codebooks de reference
-    └── setup_keycloak.sh     # Configuration LDAP Keycloak
+    └── setup_keycloak.example.sh  # Modele de configuration LDAP Keycloak
+                                    # (copier en setup_keycloak.sh et adapter — voir l'en-tete du script)
 ```
 
 ### Developpement local (sans Docker)
