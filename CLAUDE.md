@@ -76,7 +76,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - `cohort/router.py` + `cohort/sql_builder.py` + `cohort/pathways.py` — Visual cohort builder, JSON criteria → SQL generation, attrition analysis, pathways analysis (`/api/cohorts/`)
 - `mapping/router.py` + `mapping/suggest.py` — Mapping workflow with 6 suggestion strategies (SapBERT, exact, relationship, keyword, fuzzy, contextual), audit trail (`/api/mapping/`)
 - `concept/router.py` + `concept/source_value_cache.py` — Concept search, hierarchy navigation, source value lookup with pre-computed cache, ATC code search (Drug domain), CSV export from cached results (`/api/concepts/`)
-- `ohdsi/router.py` — OHDSI Docker container orchestration (`/api/ohdsi/`)
+- `ohdsi/router.py` — OHDSI Docker container orchestration (`/api/ohdsi/`). Images built from `ohdsi-tools/` (self-contained: Dockerfile, R scripts, vendored OHDSI packages, JDBC driver). Image prefix configurable via `OHDSI_IMAGE_PREFIX` (default `ohdsi-docker`).
 - `concept_set/router.py` — Concept set CRUD with dual storage: OMOP concepts and/or source codes. Source code sets integrate with cohort builder as source_code criteria (`/api/concept-sets/`)
 - `incidence/router.py` — Incidence rate analysis (`/api/incidence/`)
 - `estimation/router.py` — Population-level estimation (`/api/estimation/`)
