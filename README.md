@@ -103,30 +103,42 @@ Keycloak est accessible sur **http://localhost:8080** (admin/admin par defaut).
 
 ### Bootstrap des referentiels
 
-Pour que la recherche par mot-cle en francais fonctionne dans **Concept Explorer** (mode Source value), il faut charger les codebooks FR **avant** de peupler la SourceValueCache. Les labels FR ecrasent les `source_name` du CDM lors de la population — c'est ce qui permet de trouver "tumeur", "diabete", etc.
+Pour que la recherche par mot-cle en francais fonctionne dans **Concept Explorer** (mode Source value), il faut charger des codebooks FR **avant** de peupler la SourceValueCache. Les labels FR ecrasent les `source_name` du CDM lors de la population du cache — c'est ce qui permet de trouver "tumeur", "diabete", etc.
 
-Trois references actives :
+**OPAL ne fournit pas les fichiers de reference** (questions de licences / mises a jour). A toi de fournir :
 
-| Fichier (dans le repo) | Cible | Domaine | Usage |
+| Reference | Domaine | Source typique | Effet |
 |---|---|---|---|
-| `scripts/ccam_fr.csv` | `reference_codebooks` | Procedure | Labels FR CCAM (recherche par mot-cle + mapping) |
-| `scripts/cim10_fr.csv` | `reference_codebooks` | Condition | Labels FR CIM-10 (recherche par mot-cle + mapping) |
-| `data/sapbert_results.csv` | `sapbert_mappings` | Procedure | Top-5 suggestions SapBERT pre-calculees (mapping auto) |
+| CCAM FR | Procedure | Ameliorez la securite, base ATIH, etc. | Labels FR CCAM (mot-cle + mapping) |
+| CIM-10 FR | Condition | ATIH | Labels FR CIM-10 (mot-cle + mapping) |
+| SapBERT (Procedure) | — | Genere via [scripts/sapbert_mapping.py](scripts/sapbert_mapping.py) | Top-5 suggestions auto-mapping |
 
-Le script [scripts/reload_codebooks.sh](scripts/reload_codebooks.sh) fait toute la sequence :
+**Format CSV attendu** pour les codebooks : 2 colonnes minimum (code, description). Le delimiteur (`,` ou `;`) et les noms d'en-tete sont auto-detectes :
+- Colonne code : `ccam` | `code_ccam` | `code_cim` | `cim` | `code_acte` | `code`
+- Colonne description : `description` | `libelle` | `label` | `nom` | `designation`
+- Si rien ne matche, les deux premieres colonnes sont prises (code, description) dans l'ordre.
+
+Le script [scripts/reload_codebooks.sh](scripts/reload_codebooks.sh) fait toute la sequence en une commande :
 
 ```bash
-# Bootstrap codebooks + SapBERT (apres au moins un CDM enregistre)
-./scripts/reload_codebooks.sh
-
-# Bootstrap + rebuild de la SourceValueCache pour un CDM specifique
-./scripts/reload_codebooks.sh --cdm <nom_cdm>
-
-# Avec auth Keycloak active
-AUTH_TOKEN=<token_bearer> ./scripts/reload_codebooks.sh --cdm <nom_cdm>
+./scripts/reload_codebooks.sh \
+  --ccam-fr  /chemin/vers/ccam_fr.csv \
+  --cim10-fr /chemin/vers/cim10_fr.csv \
+  --sapbert  /chemin/vers/sapbert_results.csv \
+  --cdm      <nom_cdm>
 ```
 
-**Ordre critique** : `reload_codebooks.sh` charge les codebooks puis declenche le rebuild du cache. Si tu charges les codebooks **apres** avoir peuple le cache, il faut re-lancer la population (les labels FR ne sont appliques qu'au moment de la population). Le populate est asynchrone (background worker) — poll l'etat :
+Tous les arguments sont optionnels — les fichiers manquants sont skippes. Sans `--cdm`, le rebuild de la SourceValueCache n'est pas declenche.
+
+```bash
+# Codebooks seuls (CCAM + CIM-10), sans rebuild cache
+./scripts/reload_codebooks.sh --ccam-fr ccam.csv --cim10-fr cim10.csv
+
+# Avec auth Keycloak active
+AUTH_TOKEN=<token_bearer> ./scripts/reload_codebooks.sh --ccam-fr ccam.csv --cdm mon_cdm
+```
+
+**Ordre critique** : le script charge les codebooks **puis** declenche le rebuild du cache. Si tu charges les codebooks **apres** avoir peuple le cache, il faut re-lancer la population (les labels FR ne sont appliques qu'au moment de la population). Le populate est asynchrone — poll l'etat :
 
 ```bash
 curl --noproxy '*' "http://localhost:8000/api/concepts/source-value-cache/status?cdm_name=<nom_cdm>"
