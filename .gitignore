@@ -49,6 +49,12 @@ scripts/setup_keycloak.sh
 demo*.html
 preview*.html
 
+# Personal / site-specific lineage scratch files
+/eds5_*.html
+/scripts/lineage_eds5_*.json
+/scripts/lineage_viewer.html
+/scripts/parse_etl_lineage.py
+
 # Misc
 *.png
 .claude/
