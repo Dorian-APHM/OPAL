@@ -236,6 +236,7 @@
   },
   "mapping": {
     "title": "Workflow de Mapping",
+    "already_decided": "Déjà décidé dans OPAL (pas encore appliqué au CDM)",
     "select_cdm": "Sélectionnez une connexion CDM pour explorer les mappings",
     "dashboard": "Tableau de bord",
     "explore": "Non mappés",
@@ -344,7 +345,9 @@
     "by_concept": "Concept",
     "by_source_code": "Code source",
     "search_source_placeholder": "Rechercher par code source (ex: FGLF671, E11.9)...",
-    "mapped_concept": "Concept mappé"
+    "mapped_concept": "Concept mappé",
+    "pending_mapping": "en attente",
+    "pending_mapping_tooltip": "Mapping décidé dans OPAL mais pas encore appliqué au CDM"
   },
   "ohdsi": {
     "title": "Outils Qualité OHDSI",

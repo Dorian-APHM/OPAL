@@ -87,6 +87,43 @@ def _get_consensus_decisions(db: Session, cdm_name: str, domain: str) -> list:
     return results
 
 
+def _annotate_pending_decisions(db: Session, cdm_name: str, domain: str, items: list[dict]) -> None:
+    """For each item, attach the most recent approved/modified MappingDecision (if any)
+    as `pending_*` fields so the UI can show that the source value has already been
+    decided in OPAL but not yet applied to the CDM.
+    """
+    if not items:
+        return
+    source_values = [r["source_value"] for r in items]
+    rows = (
+        db.query(MappingDecision)
+        .filter(
+            MappingDecision.cdm_name == cdm_name,
+            MappingDecision.domain == domain,
+            MappingDecision.action.in_(["approved", "modified"]),
+            MappingDecision.target_concept_id.isnot(None),
+            MappingDecision.source_value.in_(source_values),
+        )
+        .order_by(MappingDecision.created_at.desc())
+        .all()
+    )
+    latest: dict[str, MappingDecision] = {}
+    for d in rows:
+        if d.source_value not in latest:
+            latest[d.source_value] = d
+    for r in items:
+        d = latest.get(r["source_value"])
+        if d:
+            r["pending"] = True
+            r["pending_concept_id"] = d.target_concept_id
+            r["pending_concept_name"] = d.target_concept_name or ""
+            r["pending_vocabulary_id"] = d.target_vocabulary_id or ""
+            r["pending_user"] = d.user
+            r["pending_at"] = d.created_at.isoformat() if d.created_at else None
+        else:
+            r["pending"] = False
+
+
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 
 # Background suggestion tasks — survive page navigation
@@ -395,6 +432,7 @@ def list_unmapped(
              "n_records": int(r.n_records), "n_persons": int(r.n_persons)}
             for r in rows_q
         ]
+        _annotate_pending_decisions(db, cdm_name, domain, rows)
         return {"items": rows, "total": total, "page": page, "page_size": page_size, "cached": True}
 
     # ── Fallback: direct CDM query ──
@@ -468,6 +506,8 @@ def list_unmapped(
         raise HTTPException(status_code=500, detail="An internal error occurred while listing unmapped terms")
     finally:
         conn.close()
+
+    _annotate_pending_decisions(db, cdm_name, domain, rows)
 
     return {
         "domain": domain,
@@ -1407,6 +1447,8 @@ def mapping_history(
     user_filter: str | None = Query(default=None, alias="user"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    sort_by: str | None = Query(default=None),
+    sort_dir: str = Query(default="asc"),
     db: Session = Depends(get_db),
 ):
     """Paginated mapping decision history with filters (shared across all users)."""
@@ -1419,9 +1461,27 @@ def mapping_history(
     if user_filter:
         query = query.filter(MappingDecision.user == user_filter)
 
+    sort_columns = {
+        "domain": MappingDecision.domain,
+        "source": MappingDecision.source_name,
+        "source_value": MappingDecision.source_value,
+        "action": MappingDecision.action,
+        "target": MappingDecision.target_concept_name,
+        "confidence": MappingDecision.confidence_score,
+        "reason": MappingDecision.reason,
+        "user": MappingDecision.user,
+        "date": MappingDecision.created_at,
+    }
+    sort_col = sort_columns.get(sort_by) if sort_by else None
+    if sort_col is not None:
+        ordering = desc(sort_col) if sort_dir.lower() == "desc" else sort_col
+        query = query.order_by(ordering, MappingDecision.source_value, MappingDecision.domain)
+    else:
+        query = query.order_by(MappingDecision.source_value, MappingDecision.domain, desc(MappingDecision.created_at))
+
     total = query.count()
     offset = (page - 1) * page_size
-    decisions = query.order_by(MappingDecision.source_value, MappingDecision.domain, desc(MappingDecision.created_at)).offset(offset).limit(page_size).all()
+    decisions = query.offset(offset).limit(page_size).all()
 
     # Distinct users for this CDM (for filter dropdown)
     distinct_users = [

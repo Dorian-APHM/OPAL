@@ -65,6 +65,7 @@ interface SourceValueSearchResult {
   mapped_concept_name: string | null;
   mapped_vocabulary_id: string | null;
   mapped_standard_concept: string | null;
+  pending?: boolean;
 }
 
 const DOMAIN_NOMENCLATURE: Record<string, string> = {
@@ -309,7 +310,16 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
               standard_concept: r.mapped_standard_concept,
             })}
           >
-            {name} {r.mapped_standard_concept === 'S' && <Tag color="green" className="ml-1">S</Tag>}
+            <span className="text-xs opacity-70 mr-1">#{r.mapped_concept_id}</span>
+            {name}
+            {r.mapped_standard_concept === 'S' && <Tag color="green" className="ml-1">S</Tag>}
+            {r.pending && (
+              <Tooltip title={t('concept.pending_mapping_tooltip')}>
+                <Tag color="orange" className="ml-1">
+                  {t('concept.pending_mapping')}
+                </Tag>
+              </Tooltip>
+            )}
           </a>
         );
       },
