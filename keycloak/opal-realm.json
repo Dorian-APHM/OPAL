@@ -127,7 +127,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "Admin@2026!",
+          "value": "changeme",
           "temporary": true
         }
       ],

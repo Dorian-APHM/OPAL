@@ -1154,7 +1154,7 @@ Historique pagine des decisions. **Partage entre tous les utilisateurs** (affich
 ```json
 {
   "total": 45,
-  "users": ["a159230", "medecin"],
+  "users": ["jdupont", "medecin"],
   "items": [...]
 }
 ```

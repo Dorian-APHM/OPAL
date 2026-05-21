@@ -1,7 +1,7 @@
 FROM rocker/r-ver:4.3.2
 
 # Proxy passed at build-time via --build-arg (empty by default for clean networks).
-# Behind a MITM corporate proxy (e.g. APHM), also set PROXY_CA_HOST so the CA can be extracted.
+# Behind a MITM corporate proxy, also set PROXY_CA_HOST so the CA can be extracted.
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG PROXY_CA_HOST=
@@ -31,8 +31,9 @@ RUN if [ -n "$PROXY_CA_HOST" ] && [ -n "$PROXY_CA_PORT" ]; then \
       rm -f /tmp/all_certs.pem /tmp/cert_* ; \
     fi
 
-# CRAN: use a fast EU mirror + wget (libcurl can fail on big files through corporate proxies).
-RUN echo 'options(repos = c(CRAN = "https://pbil.univ-lyon1.fr/CRAN"))' >> /usr/local/lib/R/etc/Rprofile.site && \
+# CRAN: default mirror + wget (libcurl can fail on big files through corporate proxies).
+ARG CRAN_REPO="https://cloud.r-project.org"
+RUN echo "options(repos = c(CRAN = \"${CRAN_REPO}\"))" >> /usr/local/lib/R/etc/Rprofile.site && \
     echo 'options(download.file.method = "wget")' >> /usr/local/lib/R/etc/Rprofile.site && \
     echo 'options(timeout = 600)' >> /usr/local/lib/R/etc/Rprofile.site && \
     R -e "install.packages('remotes')" && \
