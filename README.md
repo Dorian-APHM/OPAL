@@ -101,6 +101,28 @@ Keycloak est accessible sur **http://localhost:8080** (admin/admin par defaut).
 7. **Charger les referentiels de reference** (voir [Bootstrap des referentiels](#bootstrap-des-referentiels) ci-dessous)
 8. Lancer une analyse qualite, construire une cohorte, explorer les mappings ou les concepts
 
+### Configuration LDAP (optionnel)
+
+Si vos utilisateurs s'authentifient via un annuaire LDAP / Active Directory, configurez la federation Keycloak :
+
+1. Copier le modele et l'editer avec vos valeurs LDAP :
+   ```bash
+   cp scripts/setup_keycloak.example.sh scripts/setup_keycloak.sh
+   chmod +x scripts/setup_keycloak.sh
+   ```
+   Remplacer les `CHANGEME_*` (URL LDAP, Bind DN, Users DN). Demandez a votre equipe annuaire.
+
+2. Lancer le script en passant les secrets via variables d'environnement :
+   ```bash
+   set -a && source .env && set +a
+   LDAP_BIND_PASSWORD='votre_mot_de_passe_ldap' ./scripts/setup_keycloak.sh
+   ```
+   Le `source .env` charge `KEYCLOAK_ADMIN_PASSWORD` (necessaire pour l'API admin Keycloak).
+
+3. Verifier dans Keycloak admin → realm `opal` → User federation que le provider apparait.
+
+> **Securite** : ne jamais commiter `setup_keycloak.sh` (il est git-ignore). Ne jamais passer le mot de passe LDAP en argument CLI (visible dans `ps` / historique). Preferer un compte de service read-only dedie.
+
 ### Bootstrap des referentiels
 
 Pour que la recherche par mot-cle en francais fonctionne dans **Concept Explorer** (mode Source value), il faut charger des codebooks FR **avant** de peupler la SourceValueCache. Les labels FR ecrasent les `source_name` du CDM lors de la population du cache — c'est ce qui permet de trouver "tumeur", "diabete", etc.
@@ -109,36 +131,42 @@ Pour que la recherche par mot-cle en francais fonctionne dans **Concept Explorer
 
 | Reference | Domaine | Source typique | Effet |
 |---|---|---|---|
-| CCAM FR | Procedure | Ameliorez la securite, base ATIH, etc. | Labels FR CCAM (mot-cle + mapping) |
+| CCAM FR | Procedure | Base ATIH | Labels FR CCAM (mot-cle + mapping) |
 | CIM-10 FR | Condition | ATIH | Labels FR CIM-10 (mot-cle + mapping) |
-| SapBERT (Procedure) | — | Genere via [scripts/sapbert_mapping.py](scripts/sapbert_mapping.py) | Top-5 suggestions auto-mapping |
+| SapBERT | Procedure, Condition… | Genere via [scripts/sapbert_mapping.py](scripts/sapbert_mapping.py) | Top-5 suggestions auto-mapping |
 
 **Format CSV attendu** pour les codebooks : 2 colonnes minimum (code, description). Le delimiteur (`,` ou `;`) et les noms d'en-tete sont auto-detectes :
 - Colonne code : `ccam` | `code_ccam` | `code_cim` | `cim` | `code_acte` | `code`
 - Colonne description : `description` | `libelle` | `label` | `nom` | `designation`
 - Si rien ne matche, les deux premieres colonnes sont prises (code, description) dans l'ordre.
 
-Le script [scripts/reload_codebooks.sh](scripts/reload_codebooks.sh) fait toute la sequence en une commande :
+Le script [scripts/reload_codebooks.sh](scripts/reload_codebooks.sh) upload un referentiel ou un mapping SapBERT. Il prend exactement un mode (`--referentiel` ou `--mapping`) avec un `--domaine` obligatoire :
 
 ```bash
-./scripts/reload_codebooks.sh \
-  --ccam-fr  /chemin/vers/ccam_fr.csv \
-  --cim10-fr /chemin/vers/cim10_fr.csv \
-  --sapbert  /chemin/vers/sapbert_results.csv \
-  --cdm      <nom_cdm>
+# Upload d'un referentiel (ex: CCAM FR pour le domaine Procedure)
+OPAL_USER='admin' OPAL_PASSWORD='Admin@2026!' KEYCLOAK_CLIENT_ID='opal-cli' \
+  ./scripts/reload_codebooks.sh \
+  --referentiel /chemin/vers/ccam_fr.csv \
+  --domaine Procedure \
+  --nom CCAM_FR
+
+# Upload d'un mapping SapBERT
+OPAL_USER='admin' OPAL_PASSWORD='Admin@2026!' KEYCLOAK_CLIENT_ID='opal-cli' \
+  ./scripts/reload_codebooks.sh \
+  --mapping /chemin/vers/sapbert_results.csv \
+  --domaine Procedure
 ```
 
-Tous les arguments sont optionnels — les fichiers manquants sont skippes. Sans `--cdm`, le rebuild de la SourceValueCache n'est pas declenche.
+| Argument | Obligatoire | Description |
+|----------|-------------|-------------|
+| `--referentiel <fichier>` | oui (ou `--mapping`) | CSV de codebook de reference |
+| `--mapping <fichier>` | oui (ou `--referentiel`) | CSV de mapping SapBERT |
+| `--domaine <domaine>` | oui | Domaine OMOP : `Procedure`, `Condition`, `Drug`, etc. |
+| `--nom <nom>` | non | Nom du referentiel (defaut : nom du fichier en majuscules). Re-uploader avec le meme `--nom` remplace les lignes precedentes |
 
-```bash
-# Codebooks seuls (CCAM + CIM-10), sans rebuild cache
-./scripts/reload_codebooks.sh --ccam-fr ccam.csv --cim10-fr cim10.csv
+> **Important — authentification** : le script s'authentifie via le client Keycloak `opal-cli` (Direct Access Grants). Si vous avez fait `source .env`, la variable `KEYCLOAK_CLIENT_ID` vaut `opal-frontend` (qui n'a pas les Direct Access Grants). Il faut donc **forcer** `KEYCLOAK_CLIENT_ID='opal-cli'` dans la commande, comme dans les exemples ci-dessus. Alternativement, passez un token pre-fetche via `AUTH_TOKEN`.
 
-# Avec auth Keycloak active
-AUTH_TOKEN=<token_bearer> ./scripts/reload_codebooks.sh --ccam-fr ccam.csv --cdm mon_cdm
-```
-
-**Ordre critique** : le script charge les codebooks **puis** declenche le rebuild du cache. Si tu charges les codebooks **apres** avoir peuple le cache, il faut re-lancer la population (les labels FR ne sont appliques qu'au moment de la population). Le populate est asynchrone — poll l'etat :
+**Ordre critique** : charger les codebooks **avant** de peupler la SourceValueCache. Si les codebooks sont charges apres, il faut relancer la population (les labels FR ne sont appliques qu'a ce moment). Le populate est asynchrone — poll l'etat :
 
 ```bash
 curl --noproxy '*' "http://localhost:8000/api/concepts/source-value-cache/status?cdm_name=<nom_cdm>"
