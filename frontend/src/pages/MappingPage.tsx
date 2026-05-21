@@ -304,6 +304,23 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
       render: (v: number) => v.toLocaleString(), sorter: (a: UnmappedItem, b: UnmappedItem) => a.n_records - b.n_records },
     { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
       render: (v: number) => v.toLocaleString() },
+    {
+      title: t('concept.mapped_concept', 'Mapped Concept'),
+      dataIndex: 'pending_concept_id' as any,
+      key: 'pending',
+      ellipsis: true,
+      render: (_: any, r: UnmappedItem) => {
+        if (!r.pending || !r.pending_concept_id) return <span className="text-text-dim">—</span>;
+        const tooltip = `${t('concept.pending_mapping_tooltip', 'Mapping decided in OPAL but not yet applied to the CDM')}${r.pending_user ? ` — ${r.pending_user}` : ''}`;
+        return (
+          <span title={tooltip}>
+            <span className="text-xs opacity-70 mr-1">#{r.pending_concept_id}</span>
+            <span className="text-text-bright">{r.pending_concept_name}</span>
+            <Tag color="orange" className="ml-1">{t('concept.pending_mapping', 'pending')}</Tag>
+          </span>
+        );
+      },
+    },
   ];
 
   return (
@@ -933,6 +950,23 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       render: (v: number) => v.toLocaleString() },
     { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
       render: (v: number) => v.toLocaleString() },
+    {
+      title: t('concept.mapped_concept', 'Mapped Concept'),
+      dataIndex: 'pending_concept_id' as any,
+      key: 'pending',
+      ellipsis: true,
+      render: (_: any, r: UnmappedItem) => {
+        if (!r.pending || !r.pending_concept_id) return <span className="text-text-dim">—</span>;
+        const tooltip = `${t('concept.pending_mapping_tooltip', 'Mapping decided in OPAL but not yet applied to the CDM')}${r.pending_user ? ` — ${r.pending_user}` : ''}`;
+        return (
+          <span title={tooltip}>
+            <span className="text-xs opacity-70 mr-1">#{r.pending_concept_id}</span>
+            <span className="text-text-bright">{r.pending_concept_name}</span>
+            <Tag color="orange" className="ml-1">{t('concept.pending_mapping', 'pending')}</Tag>
+          </span>
+        );
+      },
+    },
   ];
 
   return (
@@ -1020,6 +1054,20 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
               </div>
             </div>
           </div>
+
+          {selectedSource.pending && selectedSource.pending_concept_id && (
+            <Alert
+              type="warning"
+              className="mb-4"
+              message={
+                <span>
+                  <Tag color="orange" className="mr-2">{t('concept.pending_mapping', 'pending')}</Tag>
+                  {t('mapping.already_decided', 'Already decided in OPAL')}: <span className="font-semibold">#{selectedSource.pending_concept_id} — {selectedSource.pending_concept_name}</span>
+                  {selectedSource.pending_user && <span className="text-text-muted ml-1">({selectedSource.pending_user})</span>}
+                </span>
+              }
+            />
+          )}
 
           {/* Auto-suggestions */}
           <div className="mb-4">
@@ -1286,6 +1334,8 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const [filterDomain, setFilterDomain] = useSessionState('mapping:history:filterDomain', '');
   const [filterAction, setFilterAction] = useSessionState('mapping:history:filterAction', '');
   const [filterUser, setFilterUser] = useSessionState('mapping:history:filterUser', '');
+  const [sortKey, setSortKey] = useSessionState<string | null>('mapping:history:sortKey', null);
+  const [sortDir, setSortDir] = useSessionState<'asc' | 'desc'>('mapping:history:sortDir', 'asc');
   const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
@@ -1300,11 +1350,11 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
 
   const load = useCallback(() => {
     setLoading(true);
-    mappingApi.history(cdmName, filterDomain || undefined, filterAction || undefined, page, undefined, filterUser || undefined)
+    mappingApi.history(cdmName, filterDomain || undefined, filterAction || undefined, page, undefined, filterUser || undefined, sortKey, sortDir)
       .then(r => { setItems(r.data.items); setTotal(r.data.total); if (r.data.users) setAvailableUsers(r.data.users); })
       .catch(() => { setItems([]); setTotal(0); })
       .finally(() => setLoading(false));
-  }, [cdmName, filterDomain, filterAction, filterUser, page]);
+  }, [cdmName, filterDomain, filterAction, filterUser, page, sortKey, sortDir]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
 
@@ -1490,17 +1540,33 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
       // Non-mapped groups (rejected, rolled_back) stay 'single'
     }
 
-    // 3. Sort by source_value (grouped), then domain
+    // 3. Sort grouped rows. When the user has chosen a sort, follow it so that
+    //    grouping doesn't override server ordering. Otherwise group by source_value.
+    const mul = sortDir === 'desc' ? -1 : 1;
+    const cmpStr = (a?: string | null, b?: string | null) => (a || '').localeCompare(b || '') * mul;
+    const cmpNum = (a?: number | null, b?: number | null) => ((a ?? 0) - (b ?? 0)) * mul;
     groups.sort((a, b) => {
-      const sv = a.source_value.localeCompare(b.source_value);
-      if (sv !== 0) return sv;
-      const dom = a.domain.localeCompare(b.domain);
-      if (dom !== 0) return dom;
-      return (a.target_concept_id ?? 0) - (b.target_concept_id ?? 0);
+      switch (sortKey) {
+        case 'domain': return cmpStr(a.domain, b.domain) || a.source_value.localeCompare(b.source_value);
+        case 'source': return cmpStr(a.source_name || a.source_value, b.source_name || b.source_value);
+        case 'action': return cmpStr(a.action, b.action) || a.source_value.localeCompare(b.source_value);
+        case 'target': return cmpStr(a.target_concept_name, b.target_concept_name);
+        case 'confidence': return cmpNum(a.confidence_score, b.confidence_score);
+        case 'reason': return cmpStr(a.reason, b.reason);
+        case 'user': return cmpStr(a.users[0], b.users[0]);
+        case 'date': return cmpStr(a.created_at, b.created_at);
+        default: {
+          const sv = a.source_value.localeCompare(b.source_value);
+          if (sv !== 0) return sv;
+          const dom = a.domain.localeCompare(b.domain);
+          if (dom !== 0) return dom;
+          return (a.target_concept_id ?? 0) - (b.target_concept_id ?? 0);
+        }
+      }
     });
 
     return groups;
-  }, [items]);
+  }, [items, sortKey, sortDir]);
 
   const columns: Column<GroupedRow>[] = [
     { title: '', key: 'status', width: 45,
@@ -1515,36 +1581,36 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
           </div>
         );
       } },
-    { title: t('mapping.domain', 'Domain'), dataIndex: 'domain', key: 'd', width: 100 },
-    { title: 'Source', key: 'sv', width: 200,
+    { title: t('mapping.domain', 'Domain'), dataIndex: 'domain', key: 'domain', width: 100, sorter: true },
+    { title: 'Source', key: 'source', width: 200, sorter: true,
       render: (_: any, r: GroupedRow) => r.source_name
         ? <span title={r.source_value}>{r.source_name} <span className="text-text-muted text-[10px]">({r.source_value})</span></span>
         : <span>{r.source_value}</span> },
-    { title: t('mapping.action', 'Action'), key: 'a', width: 100,
+    { title: t('mapping.action', 'Action'), key: 'action', width: 100, sorter: true,
       render: (_: any, r: GroupedRow) => {
         const isPending = (r.action === 'approved' || r.action === 'modified') && r.users.length < 2;
         const label = isPending ? 'pending' : r.action;
         const color = isPending ? 'orange' as const : actionColor(r.action);
         return <Tag color={color}>{label}</Tag>;
       } },
-    { title: t('mapping.target', 'Target'), key: 'target', width: 200,
+    { title: t('mapping.target', 'Target'), key: 'target', width: 200, sorter: true,
       render: (_: any, r: GroupedRow) => r.target_concept_id
         ? <span>{r.target_concept_name} <span className="text-text-muted text-[10px]">({r.target_concept_id})</span></span>
         : <span className="text-text-dim">—</span> },
-    { title: t('mapping.confidence', 'Confidence'), dataIndex: 'confidence_score', key: 'c', width: 80,
+    { title: t('mapping.confidence', 'Confidence'), dataIndex: 'confidence_score', key: 'confidence', width: 80, sorter: true,
       render: (v: number | null) => v != null ? <Tag>{v}%</Tag> : '—' },
-    { title: t('mapping.reason', 'Reason'), dataIndex: 'reason', key: 'reason', width: 140, ellipsis: true,
+    { title: t('mapping.reason', 'Reason'), dataIndex: 'reason', key: 'reason', width: 140, ellipsis: true, sorter: true,
       render: (v: string) => v
         ? <ReasonCell value={v} />
         : <span className="text-text-dim">—</span> },
-    { title: t('mapping.users', 'Users'), key: 'users', width: 130,
+    { title: t('mapping.users', 'Users'), key: 'user', width: 130, sorter: true,
       render: (_: any, r: GroupedRow) => (
         <div className="flex flex-wrap gap-1">
           {r.users.map(u => <Tag key={u}>{u}</Tag>)}
           {r.users.length > 1 && <span className="text-[10px] text-emerald-400 font-medium ml-1">×{r.users.length}</span>}
         </div>
       ) },
-    { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 110,
+    { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 110, sorter: true,
       render: (v: string) => v?.substring(0, 16).replace('T', ' ') },
     { title: '', key: 'actions', width: 110,
       render: (_: any, r: GroupedRow) => {
@@ -1746,6 +1812,11 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
         rowKey="key"
         loading={loading}
         pagination={{ pageSize: 50, current: page, total, onChange: setPage }}
+        serverSort={{
+          key: sortKey,
+          dir: sortDir,
+          onChange: (k, d) => { setSortKey(k); setSortDir(d); setPage(1); },
+        }}
         size="small"
       />
     </div>

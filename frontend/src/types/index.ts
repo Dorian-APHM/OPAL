@@ -651,8 +651,15 @@ export interface MappingEvolutionPoint {
 export interface UnmappedItem {
   source_value: string;
   source_name: string;
+  source_atc?: string;
   n_records: number;
   n_persons: number;
+  pending?: boolean;
+  pending_concept_id?: number;
+  pending_concept_name?: string;
+  pending_vocabulary_id?: string;
+  pending_user?: string;
+  pending_at?: string;
 }
 
 /** Mapping suggestion */

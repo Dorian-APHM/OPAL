@@ -16,7 +16,7 @@ from psycopg2.extras import RealDictCursor
 from psycopg2 import sql as psysql
 
 from db.app_db import get_db
-from db.models import CdmConfig, AnalysisSettings
+from db.models import CdmConfig, AnalysisSettings, MappingDecision
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from config import DEFAULT_OMOP_SCHEMA
@@ -51,6 +51,50 @@ def _cache_set(key: tuple, data: dict) -> None:
             oldest_key = min(_concept_cache, key=lambda k: _concept_cache[k][0])
             del _concept_cache[oldest_key]
         _concept_cache[key] = (time.monotonic(), data)
+
+
+def _annotate_pending_mappings(db: Session, cdm_name: str, results: list[dict]) -> None:
+    """Fill `mapped_concept_*` from OPAL mapping decisions for source values
+    still unmapped in the CDM, and tag them with `pending=True`.
+
+    A source_value is considered "pending" when it has at least one approved or
+    modified MappingDecision in OPAL but the CDM clinical table still has
+    concept_id=0 (i.e., the mapping hasn't been applied yet).
+    """
+    targets = [r for r in results if not r.get("mapped_concept_id")]
+    if not targets:
+        return
+    by_key: dict[tuple[str, str], list[dict]] = {}
+    for r in targets:
+        key = (r["domain"], r["source_value"])
+        by_key.setdefault(key, []).append(r)
+
+    rows = (
+        db.query(MappingDecision)
+        .filter(
+            MappingDecision.cdm_name == cdm_name,
+            MappingDecision.action.in_(["approved", "modified"]),
+            MappingDecision.target_concept_id.isnot(None),
+            MappingDecision.domain.in_({k[0] for k in by_key}),
+            MappingDecision.source_value.in_({k[1] for k in by_key}),
+        )
+        .order_by(MappingDecision.created_at.desc())
+        .all()
+    )
+    # Keep only the most recent decision per (domain, source_value)
+    latest: dict[tuple[str, str], MappingDecision] = {}
+    for d in rows:
+        key = (d.domain, d.source_value)
+        if key not in latest:
+            latest[key] = d
+
+    for key, decision in latest.items():
+        for r in by_key.get(key, []):
+            r["mapped_concept_id"] = decision.target_concept_id
+            r["mapped_concept_name"] = decision.target_concept_name or ""
+            r["mapped_vocabulary_id"] = decision.target_vocabulary_id or ""
+            r["mapped_standard_concept"] = None
+            r["pending"] = True
 
 
 def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
@@ -411,9 +455,11 @@ def search_source_value(
                 "mapped_concept_name": r.mapped_concept_name,
                 "mapped_vocabulary_id": r.mapped_vocabulary_id,
                 "mapped_standard_concept": r.mapped_standard_concept,
+                "pending": False,
             }
             for r in rows
         ]
+        _annotate_pending_mappings(db, cdm_name, results)
         return {"results": results, "total": total, "limit": limit, "offset": offset, "cached": True}
 
     # ── Fallback: direct CDM query ──
@@ -508,6 +554,8 @@ def search_source_value(
         for d in set(r["domain"] for r in rows):
             domain_rows = [r for r in rows if r["domain"] == d]
             enrich_source_names(db, d, domain_rows)
+
+        _annotate_pending_mappings(db, cdm_name, rows)
 
         return {"results": rows, "total": total, "limit": limit, "offset": offset}
     except Exception as e:
