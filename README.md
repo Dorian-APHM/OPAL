@@ -144,14 +144,14 @@ Le script [scripts/reload_codebooks.sh](scripts/reload_codebooks.sh) upload un r
 
 ```bash
 # Upload d'un referentiel (ex: CCAM FR pour le domaine Procedure)
-OPAL_USER='admin' OPAL_PASSWORD='changeme' KEYCLOAK_CLIENT_ID='opal-cli' \
+OPAL_USER='admin' OPAL_PASSWORD='<your-password>' KEYCLOAK_CLIENT_ID='opal-cli' \
   ./scripts/reload_codebooks.sh \
   --referentiel /chemin/vers/ccam_fr.csv \
   --domaine Procedure \
   --nom CCAM_FR
 
 # Upload d'un mapping SapBERT
-OPAL_USER='admin' OPAL_PASSWORD='changeme' KEYCLOAK_CLIENT_ID='opal-cli' \
+OPAL_USER='admin' OPAL_PASSWORD='<your-password>' KEYCLOAK_CLIENT_ID='opal-cli' \
   ./scripts/reload_codebooks.sh \
   --mapping /chemin/vers/sapbert_results.csv \
   --domaine Procedure
@@ -205,7 +205,7 @@ docker compose down -v       # Arret + suppression des volumes (reset complet)
 | `APP_DB_MAX_OVERFLOW` | `20` | Connexions supplementaires sous charge |
 | `APP_DB_POOL_RECYCLE` | `1800` | Recyclage des connexions app (secondes) |
 | `ENVIRONMENT` | `development` | Mode d'execution (`development` ou `production`) |
-| `OMOP_STATEMENT_TIMEOUT_MS` | `300000` | Timeout requetes OMOP en millisecondes |
+| `OMOP_STATEMENT_TIMEOUT_MS` | `1800000` | Timeout requetes OMOP en millisecondes (30 min) |
 | `MAX_WORKER_THREADS` | `16` | Threads max pour taches background |
 | `KEYCLOAK_ISSUER_URL` | *(vide)* | URL issuer Keycloak (si different de `KEYCLOAK_URL`) |
 
@@ -458,12 +458,12 @@ Les 4 outils sont construits depuis [ohdsi-tools/](ohdsi-tools/) (Dockerfile + s
 # Sans proxy
 docker compose -f ohdsi-tools/docker-compose.yml build
 
-# Derriere proxy APHM (cntlm sur localhost:3128)
+# Derriere un proxy corporate avec interception SSL
 docker compose -f ohdsi-tools/docker-compose.yml build \
   --build-arg HTTP_PROXY=http://localhost:3128 \
   --build-arg HTTPS_PROXY=http://localhost:3128 \
-  --build-arg PROXY_CA_HOST=127.0.0.1 \
-  --build-arg PROXY_CA_PORT=3128
+  --build-arg PROXY_CA_HOST=<proxy-ip> \
+  --build-arg PROXY_CA_PORT=<proxy-port>
 ```
 
 Les images sont nommees `ohdsi-docker-{achilles,achilles-export,dqd,cdmonboarding}` (prefixe par defaut `OHDSI_IMAGE_PREFIX=ohdsi-docker`). Les conteneurs sont lances a la demande par le backend via le socket Docker — voir [ohdsi-tools/README.md](ohdsi-tools/README.md).

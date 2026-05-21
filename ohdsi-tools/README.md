@@ -9,7 +9,7 @@ Self-contained build of the four OHDSI R-based quality tools that OPAL orchestra
 | `dqd`            | DataQualityDashboard | Data quality checks (CDMv5.4 rules)  |
 | `cdmonboarding`  | CdmOnboarding        | Onboarding report (incl. DQD input)  |
 
-All three OHDSI packages are **vendored** as tarballs under `vendor/` because corporate proxies (APHM) block GitHub. The PostgreSQL JDBC driver is vendored under `drivers/`.
+All three OHDSI packages are **vendored** as tarballs under `vendor/` because corporate proxies may block GitHub. The PostgreSQL JDBC driver is vendored under `drivers/`.
 
 ## Build
 
@@ -19,14 +19,14 @@ All three OHDSI packages are **vendored** as tarballs under `vendor/` because co
 docker compose -f ohdsi-tools/docker-compose.yml build
 ```
 
-### Behind APHM proxy (cntlm on localhost:3128)
+### Behind a corporate proxy with SSL interception
 
 ```bash
 docker compose -f ohdsi-tools/docker-compose.yml build \
   --build-arg HTTP_PROXY=http://localhost:3128 \
   --build-arg HTTPS_PROXY=http://localhost:3128 \
-  --build-arg PROXY_CA_HOST=127.0.0.1 \
-  --build-arg PROXY_CA_PORT=3128
+  --build-arg PROXY_CA_HOST=<proxy-ip> \
+  --build-arg PROXY_CA_PORT=<proxy-port>
 ```
 
 `PROXY_CA_HOST` / `PROXY_CA_PORT` trigger the MITM-CA extraction step (only needed if the proxy intercepts SSL).

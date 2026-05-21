@@ -34,10 +34,10 @@ Bienvenue dans OPAL (OMOP Platform for Analytics & Lineage). Ce guide vous accom
 Si vous n'avez pas de compte :
 
 1. Cliquer sur l'onglet **Inscription**
-2. Remplir le formulaire : **matricule** (identifiant APHM) et **role souhaite**
+2. Remplir le formulaire : **identifiant professionnel** et **role souhaite**
 3. Soumettre la demande
 4. Attendre la validation par un administrateur
-5. Vous vous connecterez ensuite avec vos identifiants APHM une fois approuve
+5. Vous vous connecterez ensuite avec vos identifiants une fois approuve
 
 #### Sans authentification
 

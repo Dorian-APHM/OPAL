@@ -3,8 +3,8 @@ services:
     build:
       context: ./backend
       args:
-        HTTP_PROXY: http://${HOST_IP:-10.64.32.229}:3128
-        HTTPS_PROXY: http://${HOST_IP:-10.64.32.229}:3128
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
     container_name: opal-backend
     ports:
       - "8000:8000"
@@ -57,8 +57,8 @@ services:
     build:
       context: ./frontend
       args:
-        HTTP_PROXY: http://${HOST_IP:-10.64.32.229}:3128
-        HTTPS_PROXY: http://${HOST_IP:-10.64.32.229}:3128
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
     container_name: opal-frontend
     ports:
       - "3000:80"

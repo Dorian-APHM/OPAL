@@ -1,4 +1,5 @@
 """Tests for the ETL lineage parser."""
+import os
 import pytest
 from modules.lineage.parser import (
     parse_transformation_block,
@@ -142,7 +143,7 @@ def test_split_repertoires():
 # build_lineage (integration — uses the real HTML doc if available)
 # ---------------------------------------------------------------------------
 
-ETL_DOC_PATH = "/path/to/apps/OPAL/opal/eds5_aphm.html"
+ETL_DOC_PATH = os.environ.get("ETL_DOC_PATH", os.path.join(os.path.dirname(__file__), "fixtures", "etl_doc.html"))
 
 
 @pytest.fixture

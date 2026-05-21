@@ -37,8 +37,8 @@ cdmSchema <- Sys.getenv("CDM_SCHEMA")
 resultsSchema <- Sys.getenv("RESULTS_SCHEMA")
 
 # Details specific to the database:
-databaseId <- "APHM"
-authors <- c('Vanessa Pauly', 'Dorian Grousset') # used on the title page
+databaseId <- Sys.getenv("CDM_SOURCE_NAME", "OPAL")
+authors <- strsplit(Sys.getenv("CDM_ONBOARDING_AUTHORS", "OPAL Team"), ",")[[1]] # used on the title page
 
 # (optional) URL to the WebAPI that your local Atlas instance uses, e.g. http://localhost:8080/WebAPI
 baseUrl <- Sys.getenv("WEBAPI_BASEURL")

@@ -33,7 +33,7 @@ npm run build     # Production build via Vite
 
 ### Testing
 ```bash
-# Backend (51 test files)
+# Backend (53 test files)
 cd backend
 pytest tests/ -v              # Run all backend tests
 pytest tests/test_api.py -v   # Run a single test file
@@ -66,10 +66,10 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Database layer** (`db/`):
 - `app_db.py` — SQLAlchemy engine/session for the internal app database (pool_size, max_overflow, pool_recycle configurable via env vars)
-- `models.py` — 22 models with composite indexes on frequently-filtered columns: `AnalysisSnapshot(cdm_name, domain, version)`, `CohortVersion(cohort_id, version)`, `MappingDecision(cdm_name, domain, source_value)`, `Notification(username, read)`, `NotificationPreference(username, type)`
+- `models.py` — 26 models with composite indexes on frequently-filtered columns: `AnalysisSnapshot(cdm_name, domain, version)`, `CohortVersion(cohort_id, version)`, `MappingDecision(cdm_name, domain, source_value)`, `Notification(username, read)`, `NotificationPreference(username, type)`
 - `omop_connector.py` — Per-CDM `ThreadedConnectionPool` for external OMOP CDM connections. `PooledConnection` wrapper makes `close()` return to pool transparently. Pools auto-evicted after 30min idle, invalidated on CDM update/delete.
 
-**Modules** (`modules/`) — 19 routers:
+**Modules** (`modules/`) — 21 routers:
 - `admin_router.py` — User management, access requests (`/api/admin/`)
 - `cdm_router.py` — CDM registration CRUD, connection testing, settings management (`/api/cdm/`)
 - `quality/router.py` + `quality/engine.py` — Quality analysis with Achilles-like metrics, snapshot versioning, comparison, CSV export (`/api/quality/`)
@@ -89,6 +89,8 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - `search_router.py` — Global search across entities (`/api/search/`)
 - `cohort_sharing_router.py` — Cohort sharing between users (`/api/cohorts/`)
 - `groups_router.py` — User groups management (`/api/groups/`)
+- `lineage/router.py` + `lineage/parser.py` — ETL lineage documentation upload, parsing and visualization (`/api/lineage/`)
+- `recent_router.py` — Recent user activity feed (`/api/recent/`)
 
 **Security**:
 - `utils/crypto.py` — Fernet encryption for stored CDM passwords using `SECRET_KEY`
@@ -109,7 +111,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **API client**: `src/api/client.ts` — Axios-based client organized by module (`cdmApi`, `qualityApi`, `cohortApi`, `mappingApi`, `conceptApi`). All requests go to `/api` prefix.
 
-**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`
+**Pages** (`src/pages/`): `HomePage`, `QualityPage`, `CohortPage`, `DataManagementPage`, `MappingPage`, `CdmManagementPage`, `SettingsPage`, `ConceptExplorerPage`, `OhdsiPage`, `AuditPage`, `UserManagementPage`, `LoginPage`, `IncidencePage`, `EstimationPage`, `ConceptSetPage`, `LineagePage`
 
 **UI Components** (`src/components/ui/`): Neumorphic design system + `AnimatedList` (Framer Motion animations), `SkeletonPatterns` (contextual loaders), `ErrorState` (5 error variants), `Empty` (11 empty state variants), `Toast` (animated notifications)
 
@@ -132,4 +134,5 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - **Source value cache** (`SourceValueCache` model) pre-computes distinct source values with counts per CDM/domain into the app DB. Includes `source_atc` column for Drug domain ATC codes. Cache is used by concept search, cohort builder autocomplete, mapping explorer, and CSV exports. Populated via SSE endpoint with progress tracking.
 - **Concept sets** store both OMOP concepts (`concepts` array) and source codes (`source_codes` array) in `concepts_json`. When added to cohort builder, source code sets create `source_codes`-based criteria (match by `source_value`), while concept sets create `concepts`-based criteria (match by `concept_id`). CriteriaPanel auto-refreshes via `opal:concept-sets-changed` custom event.
 - **ATC code support**: Drug domain config includes optional `source_atc` column (`drug_source_atc`). Searched in concept explorer (restricted to Drug domain via `and_` clause), cohort SQL builder, mapping explorer, and source value cache. `get_domain_config()` strips the column if absent from the CDM.
-- Schema migrations managed by **Alembic** (initial migration covers 22 tables).
+- **ETL Lineage** visualization: HTML ETL documentation is uploaded, parsed into a graph of source/target tables with transformations, and rendered as an interactive lineage diagram.
+- Schema migrations managed by **Alembic** (initial migration covers 26 models).
