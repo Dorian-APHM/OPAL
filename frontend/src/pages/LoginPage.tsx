@@ -25,7 +25,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
 
   const handleSignUp = async () => {
     const errs: Record<string, string> = {};
-    if (!username) errs.username = 'Matricule requis';
+    if (!username) errs.username = 'Identifiant requis';
     else if (!/^[a-zA-Z0-9._-]+$/.test(username)) errs.username = 'Lettres, chiffres, . - _ uniquement';
     if (!role) errs.role = 'Choisissez un rôle';
     setErrors(errs);
@@ -95,9 +95,9 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
               ) : (
                 <div className="space-y-4">
                   <Input
-                    label="Matricule APHM"
+                    label="Identifiant"
                     prefix={<IdCard className="h-4 w-4" />}
-                    placeholder="ex: redacted"
+                    placeholder="ex: jdupont"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     error={errors.username}
@@ -117,7 +117,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                     Demander l'accès
                   </Button>
                   <p className="text-xs text-text-dim text-center">
-                    Utilisez votre matricule APHM. Vous vous connecterez avec vos identifiants APHM une fois approuvé.
+                    Utilisez votre identifiant professionnel. Vous vous connecterez avec vos identifiants une fois approuvé.
                   </p>
                 </div>
               ),

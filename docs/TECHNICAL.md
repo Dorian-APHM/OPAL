@@ -1019,7 +1019,7 @@ Les endpoints `apply`, `apply/preview` et `apply/export` utilisent cette fonctio
 #### Vue groupee (frontend)
 
 L'historique regroupe les decisions par `(source_value, domain, target_concept_id, action)` :
-- Meme mapping par 2 users → une seule ligne avec `users: ["redacted", "medecin"]`
+- Meme mapping par 2 users → une seule ligne avec `users: ["jdupont", "medecin"]`
 - Un `userIdMap` (user → decision_id) permet le withdraw du bon ID
 - Statut : `consensus` (2+ users, meme cible), `conflict` (cibles differentes), `single` (1 user)
 - Les decisions `rejected` sont exclues du calcul consensus/conflit

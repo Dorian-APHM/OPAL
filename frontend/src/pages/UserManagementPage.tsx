@@ -74,7 +74,7 @@ export default function UserManagementPage() {
 
   const handleAddUser = async () => {
     const errors: { username?: string; role?: string } = {};
-    if (!addUsername) errors.username = 'Matricule requis';
+    if (!addUsername) errors.username = 'Identifiant requis';
     else if (!/^[a-zA-Z0-9._-]+$/.test(addUsername)) errors.username = 'Lettres, chiffres, . - _ uniquement';
     if (!addRole) errors.role = 'Choisissez un role';
     if (Object.keys(errors).length > 0) {
@@ -821,9 +821,9 @@ export default function UserManagementPage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-text-muted mb-1.5">Matricule APHM</label>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">Identifiant</label>
             <Input
-              placeholder="ex: redacted"
+              placeholder="ex: jdupont"
               prefix={<User className="h-3.5 w-3.5" />}
               value={addUsername}
               onChange={e => { setAddUsername(e.target.value); setAddErrors(prev => ({ ...prev, username: undefined })); }}

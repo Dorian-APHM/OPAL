@@ -8,12 +8,12 @@
 # Build (no proxy):
 #   docker compose -f ohdsi-tools/docker-compose.yml build
 #
-# Build (behind APHM corporate-proxy proxy):
+# Build (behind a corporate proxy with MITM interception):
 #   docker compose -f ohdsi-tools/docker-compose.yml build \
 #     --build-arg HTTP_PROXY=http://localhost:3128 \
 #     --build-arg HTTPS_PROXY=http://localhost:3128 \
-#     --build-arg PROXY_CA_HOST=127.0.0.1 \
-#     --build-arg PROXY_CA_PORT=3128
+#     --build-arg PROXY_CA_HOST=<proxy-ip> \
+#     --build-arg PROXY_CA_PORT=<proxy-port>
 #
 # Image names are explicit (`ohdsi-docker-<svc>`) so the OPAL backend's
 # OHDSI_IMAGE_PREFIX=ohdsi-docker default keeps working.

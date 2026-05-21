@@ -112,7 +112,7 @@ docker cp frontend/dist/. opal-frontend:/usr/share/nginx/html/
 Si le hotfix ne suffit pas (nouveau package pip/npm, modification du Dockerfile) :
 
 ```bash
-# Avec proxy (réseau APHM via corporate-proxy sur port 3128)
+# Avec proxy (ex: corporate-proxy sur port 3128)
 docker compose build \
   --build-arg HTTP_PROXY=http://localhost:3128 \
   --build-arg HTTPS_PROXY=http://localhost:3128 \

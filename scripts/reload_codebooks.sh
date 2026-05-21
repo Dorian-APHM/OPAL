@@ -5,11 +5,11 @@
 #
 # Usage:
 #   # Upload a reference codebook (CCAM_FR, CIM10_FR, custom...)
-#   OPAL_USER=admin OPAL_PASSWORD='changeme' \
+#   OPAL_USER=admin OPAL_PASSWORD='<your-password>' \
 #   ./scripts/reload_codebooks.sh --referentiel /path/to/ccam_fr.csv --domaine Procedure [--nom CCAM_FR]
 #
 #   # Upload a SapBERT mapping file
-#   OPAL_USER=admin OPAL_PASSWORD='changeme' \
+#   OPAL_USER=admin OPAL_PASSWORD='<your-password>' \
 #   ./scripts/reload_codebooks.sh --mapping /path/to/sapbert_results.csv --domaine Procedure
 #
 # Notes:
