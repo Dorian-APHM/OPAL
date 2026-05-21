@@ -19,7 +19,7 @@ Each line is a JSON object:
     "status": 200,
     "duration_ms": 1234,
     "detail": {"cdm": "my_cdm", "domain": "Condition"},
-    "ip": "10.64.48.1"
+    "ip": "192.0.2.1"
 }
 """
 import json
