@@ -6,7 +6,7 @@ export interface Column<T> {
   title: ReactNode;
   dataIndex?: string;
   render?: (value: any, record: T, index: number) => ReactNode;
-  sorter?: (a: T, b: T) => number;
+  sorter?: ((a: T, b: T) => number) | boolean;
   width?: string | number;
   ellipsis?: boolean;
   align?: 'left' | 'center' | 'right';
@@ -22,6 +22,7 @@ interface TableProps<T> {
   onRow?: (record: T) => { onClick?: () => void; className?: string };
   emptyText?: ReactNode;
   pagination?: false | { pageSize: number; current?: number; total?: number; onChange?: (page: number) => void };
+  serverSort?: { key: string | null; dir: 'asc' | 'desc'; onChange: (key: string, dir: 'asc' | 'desc') => void };
   className?: string;
 }
 
@@ -39,16 +40,21 @@ export function Table<T extends Record<string, any>>({
   onRow,
   emptyText = 'No data',
   pagination,
+  serverSort,
   className = '',
 }: TableProps<T>) {
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [internalSortKey, setInternalSortKey] = useState<string | null>(null);
+  const [internalSortDir, setInternalSortDir] = useState<'asc' | 'desc'>('asc');
+  const sortKey = serverSort ? serverSort.key : internalSortKey;
+  const sortDir = serverSort ? serverSort.dir : internalSortDir;
   const [page, setPage] = useState(1);
   const externalPage = pagination ? pagination.current : undefined;
   useEffect(() => {
     if (externalPage != null && externalPage !== page) setPage(externalPage);
   }, [externalPage]);
   const pageSize = pagination ? pagination.pageSize : dataSource.length;
+  // Server-side pagination: parent provides onChange → don't slice client-side.
+  const isServerPaginated = !!(pagination && pagination.onChange);
 
   const getKey = (record: T): string => {
     if (typeof rowKey === 'function') return rowKey(record);
@@ -56,28 +62,35 @@ export function Table<T extends Record<string, any>>({
   };
 
   const sortedData = useMemo(() => {
+    if (serverSort) return dataSource; // server handles ordering
     if (!sortKey) return dataSource;
     const col = columns.find((c) => c.key === sortKey);
-    if (!col?.sorter) return dataSource;
+    if (!col?.sorter || typeof col.sorter !== 'function') return dataSource;
     const sorted = [...dataSource].sort(col.sorter);
     return sortDir === 'desc' ? sorted.reverse() : sorted;
-  }, [dataSource, sortKey, sortDir, columns]);
+  }, [dataSource, sortKey, sortDir, columns, serverSort]);
 
   const paginatedData = useMemo(() => {
     if (pagination === false || !pagination) return sortedData;
+    if (isServerPaginated) return sortedData;
     const start = (page - 1) * pageSize;
     return sortedData.slice(start, start + pageSize);
-  }, [sortedData, page, pageSize, pagination]);
+  }, [sortedData, page, pageSize, pagination, isServerPaginated]);
 
   const totalPages = pagination ? Math.ceil((pagination.total ?? dataSource.length) / pageSize) : 1;
 
   const handleSort = (col: Column<T>) => {
     if (!col.sorter) return;
-    if (sortKey === col.key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    const nextDir: 'asc' | 'desc' = sortKey === col.key ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+    if (serverSort) {
+      serverSort.onChange(col.key, nextDir);
     } else {
-      setSortKey(col.key);
-      setSortDir('asc');
+      if (sortKey === col.key) {
+        setInternalSortDir(nextDir);
+      } else {
+        setInternalSortKey(col.key);
+        setInternalSortDir('asc');
+      }
     }
   };
 
