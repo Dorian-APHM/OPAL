@@ -644,6 +644,9 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
               loading={sourceLoading}
               size="small"
               scroll={isMobile ? { x: 400 } : undefined}
+              onRow={(r: SourceValueSearchResult) => ({
+                className: r.pending ? 'bg-orange-500/8 hover:bg-orange-500/12' : '',
+              })}
               pagination={{
                 current: sourcePage,
                 total: sourceTotal,

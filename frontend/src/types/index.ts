@@ -654,10 +654,11 @@ export interface UnmappedItem {
   source_atc?: string;
   n_records: number;
   n_persons: number;
+  mapped_concept_id?: number | null;
+  mapped_concept_name?: string | null;
+  mapped_vocabulary_id?: string | null;
+  mapped_standard_concept?: string | null;
   pending?: boolean;
-  pending_concept_id?: number;
-  pending_concept_name?: string;
-  pending_vocabulary_id?: string;
   pending_user?: string;
   pending_at?: string;
 }

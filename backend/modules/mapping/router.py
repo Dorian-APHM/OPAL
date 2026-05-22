@@ -88,13 +88,21 @@ def _get_consensus_decisions(db: Session, cdm_name: str, domain: str) -> list:
 
 
 def _annotate_pending_decisions(db: Session, cdm_name: str, domain: str, items: list[dict]) -> None:
-    """For each item, attach the most recent approved/modified MappingDecision (if any)
-    as `pending_*` fields so the UI can show that the source value has already been
-    decided in OPAL but not yet applied to the CDM.
+    """Fill `mapped_concept_*` from OPAL mapping decisions for source values
+    still unmapped in the CDM, and tag them with `pending=True`.
+
+    Mirrors `_annotate_pending_mappings` in concept explorer: CDM mapping wins,
+    OPAL pending decisions only fill the gaps. `pending_user`/`pending_at` are
+    kept as extras for the Manual-tab "Already decided in OPAL" banner.
     """
     if not items:
         return
-    source_values = [r["source_value"] for r in items]
+    for r in items:
+        r.setdefault("pending", False)
+    targets = [r for r in items if not r.get("mapped_concept_id")]
+    if not targets:
+        return
+    source_values = [r["source_value"] for r in targets]
     rows = (
         db.query(MappingDecision)
         .filter(
@@ -111,17 +119,16 @@ def _annotate_pending_decisions(db: Session, cdm_name: str, domain: str, items: 
     for d in rows:
         if d.source_value not in latest:
             latest[d.source_value] = d
-    for r in items:
+    for r in targets:
         d = latest.get(r["source_value"])
         if d:
+            r["mapped_concept_id"] = d.target_concept_id
+            r["mapped_concept_name"] = d.target_concept_name or ""
+            r["mapped_vocabulary_id"] = d.target_vocabulary_id or ""
+            r["mapped_standard_concept"] = None
             r["pending"] = True
-            r["pending_concept_id"] = d.target_concept_id
-            r["pending_concept_name"] = d.target_concept_name or ""
-            r["pending_vocabulary_id"] = d.target_vocabulary_id or ""
             r["pending_user"] = d.user
             r["pending_at"] = d.created_at.isoformat() if d.created_at else None
-        else:
-            r["pending"] = False
 
 
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
@@ -404,6 +411,10 @@ def list_unmapped(
             SourceValueCache.source_atc,
             sa_func.sum(SourceValueCache.n_records).label("n_records"),
             sa_func.sum(SourceValueCache.n_persons).label("n_persons"),
+            SourceValueCache.mapped_concept_id,
+            SourceValueCache.mapped_concept_name,
+            SourceValueCache.mapped_vocabulary_id,
+            SourceValueCache.mapped_standard_concept,
         ).filter(
             SourceValueCache.cdm_name == cdm_name,
             SourceValueCache.domain == domain,
@@ -419,7 +430,11 @@ def list_unmapped(
                 SourceValueCache.source_atc.ilike(f"%{search}%"),
             ]
             query = query.filter(or_(*search_clauses))
-        query = query.group_by(SourceValueCache.source_value, SourceValueCache.source_name, SourceValueCache.source_atc)
+        query = query.group_by(
+            SourceValueCache.source_value, SourceValueCache.source_name, SourceValueCache.source_atc,
+            SourceValueCache.mapped_concept_id, SourceValueCache.mapped_concept_name,
+            SourceValueCache.mapped_vocabulary_id, SourceValueCache.mapped_standard_concept,
+        )
 
         total_q = query.subquery()
         total = db.query(sa_func.count()).select_from(total_q).scalar() or 0
@@ -429,7 +444,11 @@ def list_unmapped(
         rows = [
             {"source_value": r.source_value, "source_name": r.source_name or "",
              "source_atc": r.source_atc or "",
-             "n_records": int(r.n_records), "n_persons": int(r.n_persons)}
+             "n_records": int(r.n_records), "n_persons": int(r.n_persons),
+             "mapped_concept_id": r.mapped_concept_id,
+             "mapped_concept_name": r.mapped_concept_name,
+             "mapped_vocabulary_id": r.mapped_vocabulary_id,
+             "mapped_standard_concept": r.mapped_standard_concept}
             for r in rows_q
         ]
         _annotate_pending_decisions(db, cdm_name, domain, rows)
@@ -459,6 +478,12 @@ def list_unmapped(
                 select_cols.append(f"MAX(t.{atc_col}) AS source_atc")
             else:
                 select_cols.append("'' AS source_atc")
+            select_cols.extend([
+                f"t.{concept_col} AS mapped_concept_id",
+                "c.concept_name AS mapped_concept_name",
+                "c.vocabulary_id AS mapped_vocabulary_id",
+                "c.standard_concept AS mapped_standard_concept",
+            ])
 
             wheres: list[str] = []
             if not include_mapped:
@@ -494,13 +519,22 @@ def list_unmapped(
                        COUNT(*) AS n_records,
                        COUNT(DISTINCT t.person_id) AS n_persons
                 FROM {full_table} t
+                LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
                 WHERE {where_clause}
-                GROUP BY t.{sv_col}
+                GROUP BY t.{sv_col}, t.{concept_col}, c.concept_name, c.vocabulary_id, c.standard_concept
                 ORDER BY COUNT(*) DESC
                 LIMIT %(lim)s OFFSET %(off)s
             """
             cur.execute(data_sql, params)
-            rows = [dict(r) for r in cur.fetchall()]
+            rows = []
+            for r in cur.fetchall():
+                d = dict(r)
+                if not d.get("mapped_concept_id"):
+                    d["mapped_concept_id"] = None
+                    d["mapped_concept_name"] = None
+                    d["mapped_vocabulary_id"] = None
+                    d["mapped_standard_concept"] = None
+                rows.append(d)
     except Exception as e:
         logger.exception("Unmapped listing failed")
         raise HTTPException(status_code=500, detail="An internal error occurred while listing unmapped terms")
