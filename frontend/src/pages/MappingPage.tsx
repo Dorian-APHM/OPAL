@@ -784,7 +784,11 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchPage, setSearchPage] = useState(1);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [selectedSource, setSelectedSource] = useState<UnmappedItem | null>(null);
+  const [selectedMap, setSelectedMap] = useState<Record<string, UnmappedItem>>({});
+  const selectedSources = useMemo(() => Object.values(selectedMap), [selectedMap]);
+  const selectionSize = selectedSources.length;
+  const firstSelected = selectedSources[0] ?? null;
+  const isSelected = (sv: string) => sv in selectedMap;
   const SEARCH_PAGE_SIZE = 50;
 
   // Concept lookup state
@@ -814,15 +818,30 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   }>({ open: false, suggestion: null, action: 'approved' });
   const [suggReasonText, setSuggReasonText] = useState('');
 
+  const resetMappingForm = () => {
+    setConceptInfo(null);
+    setConceptIdInput(null);
+    setConceptError('');
+    setSuggestions([]);
+    setSuggestRan(false);
+  };
+  const toggleSelect = (r: UnmappedItem) => {
+    setSelectedMap(prev => {
+      const next = { ...prev };
+      if (r.source_value in next) delete next[r.source_value];
+      else next[r.source_value] = r;
+      return next;
+    });
+    resetMappingForm();
+  };
+  const clearSelection = () => { setSelectedMap({}); resetMappingForm(); };
+
   // Search source values
   const handleSearch = useCallback((p: number = 1) => {
     if (!search.trim()) return;
     setSearchLoading(true);
     if (p === 1) {
-      setSelectedSource(null);
-      setConceptInfo(null);
-      setConceptIdInput(null);
-      setConceptError('');
+      clearSelection();
     }
     mappingApi.unmapped(cdmName, domain, p, SEARCH_PAGE_SIZE, search, true)
       .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); setSearchPage(p); })
@@ -844,17 +863,17 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       .finally(() => setConceptLoading(false));
   }, [cdmName, conceptIdInput, t]);
 
-  // Generate suggestions for selected source
+  // Generate suggestions for selected source (only when a single source is selected)
   const handleSuggest = useCallback(() => {
-    if (!selectedSource) return;
+    if (selectionSize !== 1 || !firstSelected) return;
     setSuggestLoading(true);
     setSuggestRan(true);
     setSuggestions([]);
-    mappingApi.suggest(cdmName, domain, selectedSource.source_value, selectedSource.source_name || '')
+    mappingApi.suggest(cdmName, domain, firstSelected.source_value, firstSelected.source_name || '')
       .then(r => setSuggestions(r.data.suggestions || []))
       .catch(() => toast.error(t('common.error', 'An error occurred')))
       .finally(() => setSuggestLoading(false));
-  }, [cdmName, domain, selectedSource, t, toast]);
+  }, [cdmName, domain, firstSelected, selectionSize, t, toast]);
 
   // Open the reason modal before approving a suggestion
   const handleApproveSuggestion = (s: MappingSuggestion, action: 'approved' | 'modified' = 'approved') => {
@@ -862,35 +881,36 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     setSuggReasonModal({ open: true, suggestion: s, action });
   };
 
-  // Confirm approval after reason modal
+  // Confirm approval after reason modal — iterates over all selected sources
   const handleConfirmSuggestion = async () => {
     const s = suggReasonModal.suggestion;
     const action = suggReasonModal.action;
-    if (!selectedSource || !s) return;
+    if (selectionSize === 0 || !s) return;
     setSubmitting(true);
     try {
-      await mappingApi.decide({
-        cdm_name: cdmName,
-        domain,
-        source_value: selectedSource.source_value,
-        source_name: selectedSource.source_name || '',
-        action,
-        target_concept_id: s.concept_id,
-        target_concept_name: s.concept_name,
-        target_vocabulary_id: s.vocabulary_id,
-        suggestion_source: s.source || 'manual',
-        confidence_score: s.confidence,
-        reason: suggReasonText,
-      });
-      toast.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${s.concept_name}`);
+      const results = await Promise.allSettled(selectedSources.map(src =>
+        mappingApi.decide({
+          cdm_name: cdmName,
+          domain,
+          source_value: src.source_value,
+          source_name: src.source_name || '',
+          action,
+          target_concept_id: s.concept_id,
+          target_concept_name: s.concept_name,
+          target_vocabulary_id: s.vocabulary_id,
+          suggestion_source: s.source || 'manual',
+          confidence_score: s.confidence,
+          reason: suggReasonText,
+        })
+      ));
+      const ok = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.length - ok;
+      if (ok > 0) toast.success(`${t('mapping.approved', 'Approved')}: ${ok} → ${s.concept_name}`);
+      if (failed > 0) toast.error(t('mapping.decision_failed', 'Decision failed') + ` (${failed})`);
       window.dispatchEvent(new Event('opal:badges-refresh'));
       setSuggReasonModal({ open: false, suggestion: null, action: 'approved' });
       setSuggReasonText('');
-      setSelectedSource(null);
-      setSuggestions([]);
-      setSuggestRan(false);
-      setConceptInfo(null);
-      setConceptIdInput(null);
+      clearSelection();
       // Refresh search
       if (search.trim()) {
         mappingApi.unmapped(cdmName, domain, searchPage, SEARCH_PAGE_SIZE, search, true)
@@ -910,31 +930,32 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     return labels[s] || s;
   };
 
-  // Submit manual mapping
+  // Submit manual mapping — iterates over all selected sources to the same concept
   const handleApprove = async () => {
-    if (!selectedSource || !conceptInfo) return;
+    if (selectionSize === 0 || !conceptInfo) return;
     setSubmitting(true);
     try {
-      await mappingApi.decide({
-        cdm_name: cdmName,
-        domain,
-        source_value: selectedSource.source_value,
-        source_name: selectedSource.source_name || '',
-        action: 'approved',
-        target_concept_id: conceptInfo.concept_id,
-        target_concept_name: conceptInfo.concept_name,
-        target_vocabulary_id: conceptInfo.vocabulary_id,
-        suggestion_source: 'manual',
-        confidence_score: 100,
-        reason: reason || '',
-      });
-      toast.success(`${t('mapping.approved', 'Approved')}: ${selectedSource.source_value} → ${conceptInfo.concept_name}`);
+      const results = await Promise.allSettled(selectedSources.map(src =>
+        mappingApi.decide({
+          cdm_name: cdmName,
+          domain,
+          source_value: src.source_value,
+          source_name: src.source_name || '',
+          action: 'approved',
+          target_concept_id: conceptInfo.concept_id,
+          target_concept_name: conceptInfo.concept_name,
+          target_vocabulary_id: conceptInfo.vocabulary_id,
+          suggestion_source: 'manual',
+          confidence_score: 100,
+          reason: reason || '',
+        })
+      ));
+      const ok = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.length - ok;
+      if (ok > 0) toast.success(`${t('mapping.approved', 'Approved')}: ${ok} → ${conceptInfo.concept_name}`);
+      if (failed > 0) toast.error(t('mapping.decision_failed', 'Decision failed') + ` (${failed})`);
       window.dispatchEvent(new Event('opal:badges-refresh'));
-      // Reset form
-      setSelectedSource(null);
-      setConceptInfo(null);
-      setConceptIdInput(null);
-      setConceptError('');
+      clearSelection();
       setReason('');
       // Refresh search results to remove mapped item
       if (search.trim()) {
@@ -949,7 +970,41 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
     }
   };
 
+  const allOnPageSelected = searchResults.length > 0 && searchResults.every(r => isSelected(r.source_value));
+  const someOnPageSelected = !allOnPageSelected && searchResults.some(r => isSelected(r.source_value));
+  const toggleAllOnPage = () => {
+    if (allOnPageSelected) {
+      setSelectedMap(prev => {
+        const next = { ...prev };
+        for (const r of searchResults) delete next[r.source_value];
+        return next;
+      });
+    } else {
+      setSelectedMap(prev => {
+        const next = { ...prev };
+        for (const r of searchResults) next[r.source_value] = r;
+        return next;
+      });
+    }
+    resetMappingForm();
+  };
+
   const searchColumns: Column<UnmappedItem>[] = [
+    {
+      title: (
+        <Checkbox
+          checked={allOnPageSelected}
+          indeterminate={someOnPageSelected}
+          onChange={toggleAllOnPage}
+        />
+      ) as any,
+      dataIndex: '__select' as any,
+      key: 'select',
+      width: 40,
+      render: (_: any, r: UnmappedItem) => (
+        <Checkbox checked={isSelected(r.source_value)} onChange={() => toggleSelect(r)} />
+      ),
+    },
     {
       title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true,
       render: (_: string, r: UnmappedItem) => {
@@ -995,7 +1050,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
         <div className="flex items-center gap-3 mb-3">
           <Select
             value={domain}
-            onChange={v => { setDomain(v); setSearchResults([]); setSelectedSource(null); }}
+            onChange={v => { setDomain(v); setSearchResults([]); clearSelection(); }}
             options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
             className="w-full sm:w-[150px]"
           />
@@ -1021,73 +1076,112 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
               pagination={{ pageSize: SEARCH_PAGE_SIZE, current: searchPage, total: searchTotal, onChange: (p: number) => handleSearch(p) }}
               columns={searchColumns}
               onRow={(record) => ({
-                onClick: () => {
-                  setSelectedSource(record);
-                  setConceptInfo(null);
-                  setConceptIdInput(null);
-                  setConceptError('');
-                  setSuggestions([]);
-                  setSuggestRan(false);
-                },
+                onClick: () => toggleSelect(record),
                 className: [
-                  selectedSource?.source_value === record.source_value ? 'bg-emerald-accent/10' : '',
-                  record.pending && selectedSource?.source_value !== record.source_value ? 'bg-orange-500/8 hover:bg-orange-500/12' : '',
+                  isSelected(record.source_value) ? 'bg-emerald-accent/10' : '',
+                  record.pending && !isSelected(record.source_value) ? 'bg-orange-500/8 hover:bg-orange-500/12' : '',
                 ].filter(Boolean).join(' '),
               })}
             />
-            <span className="text-text-muted text-sm mt-2 block">{searchTotal} {t('mapping.results_found', 'results found')} — {t('mapping.click_to_select', 'click a row to select')}</span>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-text-muted text-sm">
+                {searchTotal} {t('mapping.results_found', 'results found')} — {t('mapping.click_or_check_to_select', 'click a row or use the checkbox to select')}
+              </span>
+              {selectionSize > 0 && (
+                <span className="text-emerald-accent text-sm">
+                  {selectionSize} {t('mapping.selected', 'selected')}
+                  <button onClick={clearSelection} className="ml-2 text-xs text-text-muted hover:text-text-bright bg-transparent border-none cursor-pointer underline">
+                    {t('common.clear', 'clear')}
+                  </button>
+                </span>
+              )}
+            </div>
           </>
         )}
       </Card>
 
       {/* Step 2: Selected source info + concept ID input */}
-      {selectedSource && (
+      {selectionSize > 0 && (
         <Card
           size="small"
-          title={<span className="inline-flex items-center gap-1.5"><Link className="h-4 w-4" />{t('mapping.manual_step2', 'Step 2 — Map to a concept')}</span>}
+          title={<span className="inline-flex items-center gap-1.5"><Link className="h-4 w-4" />{t('mapping.manual_step2', 'Step 2 — Map to a concept')}{selectionSize > 1 && <Tag color="blue" className="ml-2">{selectionSize} {t('mapping.codes', 'codes')}</Tag>}</span>}
           className="mb-3"
         >
           {/* Selected source summary */}
-          <div className="bg-blue-500/8 border border-blue-500/25 rounded-lg px-4 py-2.5 mb-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div>
-                <span className="text-text-dim text-[11px]">{t('mapping.source_value', 'Source Value')}</span>
-                <div className="font-semibold text-sm text-text-bright">{selectedSource.source_value}</div>
-              </div>
-              <div>
-                <span className="text-text-dim text-[11px]">{t('mapping.source_name', 'Source Name')}</span>
-                <div className="text-sm text-text-bright">{selectedSource.source_name || '—'}</div>
-              </div>
-              {(selectedSource as any).source_atc && <div>
-                <span className="text-text-dim text-[11px]">ATC</span>
-                <div className="text-sm text-blue-400 font-medium">{(selectedSource as any).source_atc}</div>
-              </div>}
-              <div>
-                <span className="text-text-dim text-[11px]">{t('mapping.n_records', 'Records')}</span>
-                <div className="font-semibold text-sm text-text-bright">{selectedSource.n_records.toLocaleString()}</div>
-              </div>
-              <div>
-                <span className="text-text-dim text-[11px]">{t('mapping.n_persons', 'Persons')}</span>
-                <div className="font-semibold text-sm text-text-bright">{selectedSource.n_persons.toLocaleString()}</div>
+          {selectionSize === 1 && firstSelected ? (
+            <div className="bg-blue-500/8 border border-blue-500/25 rounded-lg px-4 py-2.5 mb-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <span className="text-text-dim text-[11px]">{t('mapping.source_value', 'Source Value')}</span>
+                  <div className="font-semibold text-sm text-text-bright">{firstSelected.source_value}</div>
+                </div>
+                <div>
+                  <span className="text-text-dim text-[11px]">{t('mapping.source_name', 'Source Name')}</span>
+                  <div className="text-sm text-text-bright">{firstSelected.source_name || '—'}</div>
+                </div>
+                {firstSelected.source_atc && <div>
+                  <span className="text-text-dim text-[11px]">ATC</span>
+                  <div className="text-sm text-blue-400 font-medium">{firstSelected.source_atc}</div>
+                </div>}
+                <div>
+                  <span className="text-text-dim text-[11px]">{t('mapping.n_records', 'Records')}</span>
+                  <div className="font-semibold text-sm text-text-bright">{firstSelected.n_records.toLocaleString()}</div>
+                </div>
+                <div>
+                  <span className="text-text-dim text-[11px]">{t('mapping.n_persons', 'Persons')}</span>
+                  <div className="font-semibold text-sm text-text-bright">{firstSelected.n_persons.toLocaleString()}</div>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="bg-blue-500/8 border border-blue-500/25 rounded-lg px-4 py-2.5 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-text-bright font-semibold text-sm">
+                  {selectionSize} {t('mapping.codes_selected', 'codes selected')}
+                </span>
+                <button onClick={clearSelection} className="text-xs text-text-muted hover:text-text-bright bg-transparent border-none cursor-pointer underline">
+                  {t('common.clear', 'clear')}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                {selectedSources.map(src => (
+                  <Tag key={src.source_value} className="flex items-center gap-1">
+                    <span>{src.source_value}</span>
+                    {src.source_name && <span className="text-text-dim text-[10px]">— {src.source_name.length > 30 ? src.source_name.slice(0, 30) + '…' : src.source_name}</span>}
+                    <button onClick={() => toggleSelect(src)} className="ml-1 text-text-dim hover:text-text-bright bg-transparent border-none cursor-pointer leading-none" title={t('common.remove', 'remove')}>×</button>
+                  </Tag>
+                ))}
+              </div>
+            </div>
+          )}
 
-          {selectedSource.pending && selectedSource.mapped_concept_id && (
+          {selectionSize === 1 && firstSelected?.pending && firstSelected.mapped_concept_id && (
             <Alert
               type="warning"
               className="mb-4"
               message={
                 <span>
                   <Tag color="orange" className="mr-2">{t('concept.pending_mapping', 'pending')}</Tag>
-                  {t('mapping.already_decided', 'Already decided in OPAL')}: <span className="font-semibold">#{selectedSource.mapped_concept_id} — {selectedSource.mapped_concept_name}</span>
-                  {selectedSource.pending_user && <span className="text-text-muted ml-1">({selectedSource.pending_user})</span>}
+                  {t('mapping.already_decided', 'Already decided in OPAL')}: <span className="font-semibold">#{firstSelected.mapped_concept_id} — {firstSelected.mapped_concept_name}</span>
+                  {firstSelected.pending_user && <span className="text-text-muted ml-1">({firstSelected.pending_user})</span>}
+                </span>
+              }
+            />
+          )}
+          {selectionSize > 1 && selectedSources.some(s => s.pending) && (
+            <Alert
+              type="warning"
+              className="mb-4"
+              message={
+                <span>
+                  {selectedSources.filter(s => s.pending).length} {t('mapping.codes_already_decided', 'selected codes already have a pending mapping in OPAL — their decision will be overwritten.')}
                 </span>
               }
             />
           )}
 
-          {/* Auto-suggestions */}
+          {/* Auto-suggestions — only available when exactly 1 source is selected */}
+          {selectionSize === 1 && (
           <div className="mb-4">
             <div className="flex items-center gap-3 mb-2">
               <Button
@@ -1141,10 +1235,13 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
               <span className="text-text-dim text-xs">{t('mapping.no_match', 'No suggestions found')}</span>
             )}
           </div>
+          )}
 
-          <div className="border-t border-glass-border pt-4 mt-2 mb-4">
-            <span className="text-text-muted text-xs">{t('mapping.or_manual', 'Or map manually by concept ID:')}</span>
-          </div>
+          {selectionSize === 1 && (
+            <div className="border-t border-glass-border pt-4 mt-2 mb-4">
+              <span className="text-text-muted text-xs">{t('mapping.or_manual', 'Or map manually by concept ID:')}</span>
+            </div>
+          )}
 
           {/* Concept ID input */}
           <div className="flex items-center gap-3 mb-3">
@@ -1231,7 +1328,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
                 size="large"
                 block
               >
-                {t('mapping.approve_mapping', 'Approve Mapping')}: {selectedSource.source_value} → {conceptInfo.concept_name} ({conceptInfo.concept_id})
+                {t('mapping.approve_mapping', 'Approve Mapping')}: {selectionSize === 1 && firstSelected ? firstSelected.source_value : `${selectionSize} ${t('mapping.codes', 'codes')}`} → {conceptInfo.concept_name} ({conceptInfo.concept_id})
               </Button>
             </div>
           )}
@@ -1239,7 +1336,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       )}
 
       {/* Empty state */}
-      {!selectedSource && searchResults.length === 0 && !searchLoading && (
+      {selectionSize === 0 && searchResults.length === 0 && !searchLoading && (
         <Empty
           description={t('mapping.manual_description', 'Search for a local code, then enter a target concept ID to create a manual mapping.')}
           className="mt-12"
@@ -1262,9 +1359,9 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
           </>
         }
       >
-        {suggReasonModal.suggestion && selectedSource && (
+        {suggReasonModal.suggestion && selectionSize > 0 && (
           <div className="mb-2 text-sm">
-            <Tag>{selectedSource.source_value}</Tag> → <span className="text-text-bright">{suggReasonModal.suggestion.concept_name}</span>
+            <Tag>{selectionSize === 1 && firstSelected ? firstSelected.source_value : `${selectionSize} ${t('mapping.codes', 'codes')}`}</Tag> → <span className="text-text-bright">{suggReasonModal.suggestion.concept_name}</span>
             <span className="text-text-dim text-[11px] ml-2">({suggReasonModal.suggestion.concept_id})</span>
           </div>
         )}
