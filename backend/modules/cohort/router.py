@@ -178,7 +178,7 @@ def search_concepts(req: ConceptSearchRequest, request: Request, db: Session = D
                 }
             else:
                 wheres = [
-                    "(c.concept_name ILIKE %(q)s OR c.concept_code ILIKE %(code_q)s)"
+                    "(unaccent(c.concept_name) ILIKE unaccent(%(q)s) OR unaccent(c.concept_code) ILIKE unaccent(%(code_q)s))"
                 ]
                 params: dict = {
                     "q": f"%{req.query}%",

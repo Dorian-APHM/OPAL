@@ -424,10 +424,11 @@ def list_unmapped(
                 or_(SourceValueCache.mapped_concept_id == 0, SourceValueCache.mapped_concept_id.is_(None))
             )
         if search:
+            from utils.text_search import iaccent_ilike
             search_clauses = [
-                SourceValueCache.source_value.ilike(f"%{search}%"),
-                SourceValueCache.source_name.ilike(f"%{search}%"),
-                SourceValueCache.source_atc.ilike(f"%{search}%"),
+                iaccent_ilike(SourceValueCache.source_value, f"%{search}%"),
+                iaccent_ilike(SourceValueCache.source_name, f"%{search}%"),
+                iaccent_ilike(SourceValueCache.source_atc, f"%{search}%"),
             ]
             query = query.filter(or_(*search_clauses))
         query = query.group_by(
@@ -491,11 +492,11 @@ def list_unmapped(
             params: dict = {}
 
             if search:
-                search_parts = [f"t.{sv_col} ILIKE %(search)s"]
+                search_parts = [f"unaccent(t.{sv_col}) ILIKE unaccent(%(search)s)"]
                 if sn_col:
-                    search_parts.append(f"t.{sn_col} ILIKE %(search)s")
+                    search_parts.append(f"unaccent(t.{sn_col}) ILIKE unaccent(%(search)s)")
                 if atc_col:
-                    search_parts.append(f"t.{atc_col} ILIKE %(search)s")
+                    search_parts.append(f"unaccent(t.{atc_col}) ILIKE unaccent(%(search)s)")
                 wheres.append(f"({' OR '.join(search_parts)})")
                 params["search"] = f"%{search}%"
 

@@ -431,7 +431,7 @@ def _form_order_clause(form_keywords: list[str], alias: str = "c") -> str:
     if not form_keywords:
         return "0+0"
     conditions = " OR ".join(
-        f"{alias}.concept_name ILIKE %({_form_param(i)})s"
+        f"unaccent({alias}.concept_name) ILIKE unaccent(%({_form_param(i)})s)"
         for i in range(len(form_keywords))
     )
     return f"CASE WHEN {conditions} THEN 0 ELSE 1 END"
@@ -478,7 +478,7 @@ def _ingredient_match(
 
     # Brand name ordering: concepts with [BrandName] ranked higher
     if brand:
-        brand_order = "CASE WHEN c.concept_name ILIKE %(brand_pat)s THEN 0 ELSE 1 END"
+        brand_order = "CASE WHEN unaccent(c.concept_name) ILIKE unaccent(%(brand_pat)s) THEN 0 ELSE 1 END"
         fparams["brand_pat"] = f"%{brand}%"
     else:
         brand_order = "0+0"
@@ -516,7 +516,7 @@ def _ingredient_match(
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
                 FROM {schema}.{table} c
-                WHERE c.concept_name ILIKE %(term)s
+                WHERE unaccent(c.concept_name) ILIKE unaccent(%(term)s)
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
                 ORDER BY
@@ -557,7 +557,7 @@ def _ingredient_match(
                        c.vocabulary_id, c.domain_id, c.standard_concept
                 FROM {schema}.{syn_table} cs
                 JOIN {schema}.{concept} c ON cs.concept_id = c.concept_id
-                WHERE cs.concept_synonym_name ILIKE %(term)s
+                WHERE unaccent(cs.concept_synonym_name) ILIKE unaccent(%(term)s)
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
                 GROUP BY c.concept_id, c.concept_name, c.concept_code,
@@ -643,7 +643,7 @@ def _fuzzy_match(
                     SELECT c.concept_id, c.concept_name, c.concept_code,
                            c.vocabulary_id, c.domain_id, c.standard_concept
                     FROM {schema}.{concept} c
-                    WHERE c.concept_name ILIKE %(term)s
+                    WHERE unaccent(c.concept_name) ILIKE unaccent(%(term)s)
                       AND c.standard_concept = 'S'
                       AND c.invalid_reason IS NULL
                     UNION
@@ -651,7 +651,7 @@ def _fuzzy_match(
                            c.vocabulary_id, c.domain_id, c.standard_concept
                     FROM {schema}.{syn_table} cs
                     JOIN {schema}.{concept2} c ON cs.concept_id = c.concept_id
-                    WHERE cs.concept_synonym_name ILIKE %(term)s
+                    WHERE unaccent(cs.concept_synonym_name) ILIKE unaccent(%(term)s)
                       AND c.standard_concept = 'S'
                       AND c.invalid_reason IS NULL
                 ) sub
@@ -716,7 +716,7 @@ def _keyword_match(
             params = {"domain": domain, "lim": limit}
             for i, kw in enumerate(keywords[:4]):
                 pname = f"kw{i}"
-                where_parts.append(f"c.concept_name ILIKE %({pname})s")
+                where_parts.append(f"unaccent(c.concept_name) ILIKE unaccent(%({pname})s)")
                 params[pname] = f"%{kw}%"
 
             where_sql = psysql.SQL(' AND ').join(psysql.SQL(wp) for wp in where_parts)
@@ -758,7 +758,7 @@ def _keyword_match(
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
                 FROM {schema}.{table} c
-                WHERE c.concept_name ILIKE %(kw)s
+                WHERE unaccent(c.concept_name) ILIKE unaccent(%(kw)s)
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
                 ORDER BY
@@ -812,7 +812,7 @@ def _contextual_match(cur, source_value: str, domain: str, schema: str) -> list[
                 CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END AS domain_rank
             FROM {schema}.{stcm} stcm
             JOIN {schema}.{concept} c ON stcm.target_concept_id = c.concept_id
-            WHERE stcm.source_code LIKE %(prefix)s
+            WHERE unaccent(stcm.source_code) ILIKE unaccent(%(prefix)s)
               AND c.standard_concept = 'S'
               AND c.invalid_reason IS NULL
               AND stcm.target_concept_id != 0
