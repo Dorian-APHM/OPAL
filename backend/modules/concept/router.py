@@ -146,12 +146,12 @@ def search_concepts(
                 # Support searching by concept_id (integer), concept_code, or text
                 if q.isdigit():
                     conditions.append(
-                        "(c.concept_id = %s OR c.concept_code = %s OR c.concept_code ILIKE %s)"
+                        "(c.concept_id = %s OR c.concept_code = %s OR unaccent(c.concept_code) ILIKE unaccent(%s))"
                     )
                     params.extend([int(q), q, f"%{q}%"])
                 else:
                     conditions.append(
-                        "(c.concept_name ILIKE %s OR c.concept_code ILIKE %s)"
+                        "(unaccent(c.concept_name) ILIKE unaccent(%s) OR unaccent(c.concept_code) ILIKE unaccent(%s))"
                     )
                     params.extend([f"%{q}%", f"%{q}%"])
 
@@ -418,6 +418,7 @@ def search_source_value(
     # ── Try cache first ──
     from db.models import SourceValueCache
     from sqlalchemy import or_, and_, func
+    from utils.text_search import iaccent_ilike
 
     cache_exists = db.query(SourceValueCache.id).filter(
         SourceValueCache.cdm_name == cdm_name,
@@ -426,13 +427,13 @@ def search_source_value(
     if cache_exists:
         # Prefix on source_value (index-friendly), substring on source_name (keyword search)
         search_clauses = [
-            SourceValueCache.source_value.ilike(f"{q}%"),
-            SourceValueCache.source_name.ilike(f"%{q}%"),
+            iaccent_ilike(SourceValueCache.source_value, f"{q}%"),
+            iaccent_ilike(SourceValueCache.source_name, f"%{q}%"),
         ]
         # ATC only exists for Drug domain (prefix on ATC codes)
         if not domain or domain == "Drug":
             search_clauses.append(
-                and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
+                and_(SourceValueCache.domain == "Drug", iaccent_ilike(SourceValueCache.source_atc, f"{q}%"))
             )
         query = db.query(SourceValueCache).filter(
             SourceValueCache.cdm_name == cdm_name,
@@ -482,19 +483,19 @@ def search_source_value(
                 source_col = safe_identifier(cfg["source_value"])
                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
                 source_atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
-                # Index-friendly search: exact/prefix on source_value, source_name, source_atc
+                # Case- and accent-insensitive prefix search via unaccent + ILIKE
                 where_clause = psysql.SQL(
-                    "t.{} LIKE %s"
+                    "unaccent(t.{}) ILIKE unaccent(%s)"
                 ).format(_ident(source_col))
                 query_params = [domain_name, f"{q}%"]
                 if source_name_col:
                     where_clause = psysql.SQL(
-                        "{} OR t.{} LIKE %s"
+                        "{} OR unaccent(t.{}) ILIKE unaccent(%s)"
                     ).format(where_clause, _ident(source_name_col))
                     query_params.append(f"{q}%")
                 if source_atc_col:
                     where_clause = psysql.SQL(
-                        "{} OR t.{} LIKE %s"
+                        "{} OR unaccent(t.{}) ILIKE unaccent(%s)"
                     ).format(where_clause, _ident(source_atc_col))
                     query_params.append(f"{q}%")
                 source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
@@ -589,13 +590,14 @@ def search_source_value_fast(
 
     if cache_exists:
         from sqlalchemy import and_
+        from utils.text_search import iaccent_ilike
         search_clauses = [
-            SourceValueCache.source_value.ilike(f"{q}%"),
-            SourceValueCache.source_name.ilike(f"%{q}%"),
+            iaccent_ilike(SourceValueCache.source_value, f"{q}%"),
+            iaccent_ilike(SourceValueCache.source_name, f"%{q}%"),
         ]
         if not domain or domain == "Drug":
             search_clauses.append(
-                and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
+                and_(SourceValueCache.domain == "Drug", iaccent_ilike(SourceValueCache.source_atc, f"{q}%"))
             )
         query = db.query(
             SourceValueCache.domain,
@@ -644,7 +646,7 @@ def search_source_value_fast(
                            {source_name_select} AS source_name,
                            {source_atc_select} AS source_atc
                     FROM {schema}.{table} t
-                    WHERE t.{source_col} LIKE %s
+                    WHERE unaccent(t.{source_col}) ILIKE unaccent(%s)
                     GROUP BY t.{source_col}, {source_name_select}, {source_atc_select}
                     LIMIT %s
                 )""").format(
@@ -664,7 +666,7 @@ def search_source_value_fast(
                                t.{source_name_col} AS source_name,
                                {source_atc_select} AS source_atc
                         FROM {schema}.{table} t
-                        WHERE t.{source_name_col} LIKE %s
+                        WHERE unaccent(t.{source_name_col}) ILIKE unaccent(%s)
                         GROUP BY t.{source_col}, t.{source_name_col}, {source_atc_select}
                         LIMIT %s
                     )""").format(
@@ -684,7 +686,7 @@ def search_source_value_fast(
                                {source_name_select} AS source_name,
                                t.{source_atc_col} AS source_atc
                         FROM {schema}.{table} t
-                        WHERE t.{source_atc_col} LIKE %s
+                        WHERE unaccent(t.{source_atc_col}) ILIKE unaccent(%s)
                         GROUP BY t.{source_col}, {source_name_select}, t.{source_atc_col}
                         LIMIT %s
                     )""").format(
@@ -745,13 +747,14 @@ def export_source_value_search(
     ).first()
 
     if cache_exists:
+        from utils.text_search import iaccent_ilike
         search_clauses = [
-            SourceValueCache.source_value.ilike(f"{q}%"),
-            SourceValueCache.source_name.ilike(f"%{q}%"),
+            iaccent_ilike(SourceValueCache.source_value, f"{q}%"),
+            iaccent_ilike(SourceValueCache.source_name, f"%{q}%"),
         ]
         if not domain or domain == "Drug":
             search_clauses.append(
-                and_(SourceValueCache.domain == "Drug", SourceValueCache.source_atc.ilike(f"{q}%"))
+                and_(SourceValueCache.domain == "Drug", iaccent_ilike(SourceValueCache.source_atc, f"{q}%"))
             )
         cache_query = db.query(SourceValueCache).filter(
             SourceValueCache.cdm_name == cdm_name,
@@ -796,19 +799,19 @@ def export_source_value_search(
                     source_atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
 
                     where_clause = psysql.SQL(
-                        "LOWER(t.{}) LIKE %s"
+                        "unaccent(t.{}) ILIKE unaccent(%s)"
                     ).format(_ident(source_col))
-                    query_params = [domain_name, f"{q.lower()}%"]
+                    query_params = [domain_name, f"{q}%"]
                     if source_name_col:
                         where_clause = psysql.SQL(
-                            "{} OR LOWER(t.{}) LIKE %s"
+                            "{} OR unaccent(t.{}) ILIKE unaccent(%s)"
                         ).format(where_clause, _ident(source_name_col))
-                        query_params.append(f"{q.lower()}%")
+                        query_params.append(f"{q}%")
                     if source_atc_col:
                         where_clause = psysql.SQL(
-                            "{} OR LOWER(t.{}) LIKE %s"
+                            "{} OR unaccent(t.{}) ILIKE unaccent(%s)"
                         ).format(where_clause, _ident(source_atc_col))
-                        query_params.append(f"{q.lower()}%")
+                        query_params.append(f"{q}%")
                     source_name_select = psysql.SQL("t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("NULL")
                     source_name_group = psysql.SQL(", t.{}").format(_ident(source_name_col)) if source_name_col else psysql.SQL("")
                     source_atc_select = psysql.SQL("t.{}").format(_ident(source_atc_col)) if source_atc_col else psysql.SQL("NULL")

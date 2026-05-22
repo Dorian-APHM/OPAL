@@ -14,6 +14,7 @@ from db.models import Cohort, MappingDecision, SavedQuery
 from utils.sql_safety import safe_identifier
 from utils.cdm_helper import get_cdm_connection, get_domain_config
 from utils.reference_labels import enrich_source_names
+from utils.text_search import iaccent_ilike
 from config import DOMAIN_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ def global_search(
 
     # 1. Search cohorts
     cohort_q = db.query(Cohort).filter(
-        Cohort.name.ilike(f"%{escaped_term}%")
+        iaccent_ilike(Cohort.name, f"%{escaped_term}%")
     )
     if cdm_name:
         cohort_q = cohort_q.filter(Cohort.cdm_name == cdm_name)
@@ -87,7 +88,8 @@ def global_search(
                                 SELECT concept_id, concept_name, concept_code,
                                        vocabulary_id, domain_id, standard_concept
                                 FROM {}.{}
-                                WHERE concept_name ILIKE %s OR concept_code ILIKE %s
+                                WHERE unaccent(concept_name) ILIKE unaccent(%s)
+                                   OR unaccent(concept_code) ILIKE unaccent(%s)
                                 ORDER BY
                                     CASE WHEN standard_concept = 'S' THEN 0 ELSE 1 END,
                                     LENGTH(concept_name)
@@ -118,10 +120,10 @@ def global_search(
                                 table = safe_identifier(cfg["table"])
                                 source_col = safe_identifier(cfg["source_value"])
                                 source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                                where_clause = psysql.SQL("t.{} ILIKE %s").format(psysql.Identifier(source_col))
+                                where_clause = psysql.SQL("unaccent(t.{}) ILIKE unaccent(%s)").format(psysql.Identifier(source_col))
                                 query_params = [domain_name, f"%{escaped_term}%"]
                                 if source_name_col:
-                                    where_clause = psysql.SQL("t.{} ILIKE %s OR t.{} ILIKE %s").format(
+                                    where_clause = psysql.SQL("unaccent(t.{}) ILIKE unaccent(%s) OR unaccent(t.{}) ILIKE unaccent(%s)").format(
                                         psysql.Identifier(source_col), psysql.Identifier(source_name_col)
                                     )
                                     query_params.append(f"%{escaped_term}%")
@@ -174,7 +176,7 @@ def global_search(
             logger.warning("Concept search failed in global search: %s", e)
 
     # 3. Search saved queries
-    sq_q = db.query(SavedQuery).filter(SavedQuery.name.ilike(f"%{escaped_term}%"))
+    sq_q = db.query(SavedQuery).filter(iaccent_ilike(SavedQuery.name, f"%{escaped_term}%"))
     if cdm_name:
         sq_q = sq_q.filter(SavedQuery.cdm_name == cdm_name)
     saved = sq_q.limit(limit).all()
@@ -191,7 +193,7 @@ def global_search(
 
     # 4. Search mapping decisions
     map_q = db.query(MappingDecision).filter(
-        MappingDecision.source_value.ilike(f"%{escaped_term}%")
+        iaccent_ilike(MappingDecision.source_value, f"%{escaped_term}%")
     )
     if cdm_name:
         map_q = map_q.filter(MappingDecision.cdm_name == cdm_name)

@@ -12,13 +12,14 @@ os.environ["AUTH_ENABLED"] = "false"
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db.models import Base
 import db.app_db as _app_db
 from main import app
+from utils.text_search import unaccent_lower
 
 # Replace the app engine with an in-memory SQLite using StaticPool
 # so that all connections (TestClient + dependency) share the same DB.
@@ -28,6 +29,14 @@ test_engine = create_engine(
     poolclass=StaticPool,
 )
 _app_db.engine = test_engine
+
+
+# Register a Python UDF named `unaccent` on every SQLite connection so that
+# search queries using func.unaccent(col).ilike(func.unaccent(pat)) work
+# transparently against the test DB (PostgreSQL has the real extension).
+@event.listens_for(test_engine, "connect")
+def _sqlite_register_unaccent(dbapi_connection, _connection_record):
+    dbapi_connection.create_function("unaccent", 1, unaccent_lower)
 
 
 class _FakeAuthMiddleware(BaseHTTPMiddleware):
