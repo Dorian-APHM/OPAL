@@ -237,6 +237,11 @@
   "mapping": {
     "title": "Workflow de Mapping",
     "already_decided": "Déjà décidé dans OPAL (pas encore appliqué au CDM)",
+    "codes": "codes",
+    "codes_selected": "codes sélectionnés",
+    "codes_already_decided": "codes sélectionnés ont déjà un mapping en attente dans OPAL — leur décision sera écrasée.",
+    "click_or_check_to_select": "cliquez une ligne ou utilisez la case à cocher pour sélectionner",
+    "selected": "sélectionné(s)",
     "select_cdm": "Sélectionnez une connexion CDM pour explorer les mappings",
     "dashboard": "Tableau de bord",
     "explore": "Non mappés",
@@ -320,7 +325,9 @@
     "confirm": "Confirmer",
     "confirm_delete": "Supprimer ?",
     "export_csv": "Exporter CSV",
-    "vs": "vs"
+    "vs": "vs",
+    "clear": "effacer",
+    "remove": "retirer"
   },
   "concept": {
     "title": "Explorateur de Concepts",
