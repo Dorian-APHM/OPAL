@@ -293,30 +293,34 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
   useEffect(() => { load(); }, [load]);
 
   const columns: Column<UnmappedItem>[] = [
-    { title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
-    { title: t('mapping.source_name', 'Source Name'), dataIndex: 'source_name', key: 'sn', ellipsis: true,
-      render: (v: string) => v || <span className="text-text-dim">—</span> },
-    ...(domain === 'Drug' ? [{
-      title: 'ATC', dataIndex: 'source_atc' as any, key: 'atc', width: 100, ellipsis: true,
-      render: (v: string) => v || <span className="text-text-dim">—</span>,
-    }] : []),
+    {
+      title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true,
+      render: (_: string, r: UnmappedItem) => {
+        let label = r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value;
+        if (r.source_atc) label += ` [ATC: ${r.source_atc}]`;
+        return label;
+      },
+    },
     { title: t('mapping.n_records', 'Records'), dataIndex: 'n_records', key: 'nr',
       render: (v: number) => v.toLocaleString(), sorter: (a: UnmappedItem, b: UnmappedItem) => a.n_records - b.n_records },
     { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
       render: (v: number) => v.toLocaleString() },
     {
       title: t('concept.mapped_concept', 'Mapped Concept'),
-      dataIndex: 'pending_concept_id' as any,
-      key: 'pending',
+      dataIndex: 'mapped_concept_id' as any,
+      key: 'mapped',
       ellipsis: true,
       render: (_: any, r: UnmappedItem) => {
-        if (!r.pending || !r.pending_concept_id) return <span className="text-text-dim">—</span>;
-        const tooltip = `${t('concept.pending_mapping_tooltip', 'Mapping decided in OPAL but not yet applied to the CDM')}${r.pending_user ? ` — ${r.pending_user}` : ''}`;
+        if (!r.mapped_concept_id) return <Tag>—</Tag>;
+        const tooltip = r.pending
+          ? `${t('concept.pending_mapping_tooltip', 'Mapping decided in OPAL but not yet applied to the CDM')}${r.pending_user ? ` — ${r.pending_user}` : ''}`
+          : undefined;
         return (
-          <span title={tooltip}>
-            <span className="text-xs opacity-70 mr-1">#{r.pending_concept_id}</span>
-            <span className="text-text-bright">{r.pending_concept_name}</span>
-            <Tag color="orange" className="ml-1">{t('concept.pending_mapping', 'pending')}</Tag>
+          <span className="text-emerald-accent" title={tooltip}>
+            <span className="text-xs opacity-70 mr-1">#{r.mapped_concept_id}</span>
+            {r.mapped_concept_name}
+            {r.mapped_standard_concept === 'S' && <Tag color="green" className="ml-1">S</Tag>}
+            {r.pending && <Tag color="orange" className="ml-1">{t('concept.pending_mapping', 'pending')}</Tag>}
           </span>
         );
       },
@@ -350,6 +354,9 @@ function UnmappedExplorerTab({ cdmName }: { cdmName: string }) {
         loading={loading}
         pagination={{ pageSize: 50, current: page, total, onChange: setPage }}
         size="small"
+        onRow={(r: UnmappedItem) => ({
+          className: r.pending ? 'bg-orange-500/8 hover:bg-orange-500/12' : '',
+        })}
       />
     </div>
   );
@@ -943,30 +950,34 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   };
 
   const searchColumns: Column<UnmappedItem>[] = [
-    { title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true },
-    { title: t('mapping.source_name', 'Source Name'), dataIndex: 'source_name', key: 'sn', ellipsis: true,
-      render: (v: string) => v || <span className="text-text-dim">—</span> },
-    ...(domain === 'Drug' ? [{
-      title: 'ATC', dataIndex: 'source_atc' as any, key: 'atc', width: 100, ellipsis: true,
-      render: (v: string) => v || <span className="text-text-dim">—</span>,
-    }] : []),
+    {
+      title: t('mapping.source_value', 'Source Value'), dataIndex: 'source_value', key: 'sv', ellipsis: true,
+      render: (_: string, r: UnmappedItem) => {
+        let label = r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value;
+        if (r.source_atc) label += ` [ATC: ${r.source_atc}]`;
+        return label;
+      },
+    },
     { title: t('mapping.n_records', 'Records'), dataIndex: 'n_records', key: 'nr',
       render: (v: number) => v.toLocaleString() },
     { title: t('mapping.n_persons', 'Persons'), dataIndex: 'n_persons', key: 'np',
       render: (v: number) => v.toLocaleString() },
     {
       title: t('concept.mapped_concept', 'Mapped Concept'),
-      dataIndex: 'pending_concept_id' as any,
-      key: 'pending',
+      dataIndex: 'mapped_concept_id' as any,
+      key: 'mapped',
       ellipsis: true,
       render: (_: any, r: UnmappedItem) => {
-        if (!r.pending || !r.pending_concept_id) return <span className="text-text-dim">—</span>;
-        const tooltip = `${t('concept.pending_mapping_tooltip', 'Mapping decided in OPAL but not yet applied to the CDM')}${r.pending_user ? ` — ${r.pending_user}` : ''}`;
+        if (!r.mapped_concept_id) return <Tag>—</Tag>;
+        const tooltip = r.pending
+          ? `${t('concept.pending_mapping_tooltip', 'Mapping decided in OPAL but not yet applied to the CDM')}${r.pending_user ? ` — ${r.pending_user}` : ''}`
+          : undefined;
         return (
-          <span title={tooltip}>
-            <span className="text-xs opacity-70 mr-1">#{r.pending_concept_id}</span>
-            <span className="text-text-bright">{r.pending_concept_name}</span>
-            <Tag color="orange" className="ml-1">{t('concept.pending_mapping', 'pending')}</Tag>
+          <span className="text-emerald-accent" title={tooltip}>
+            <span className="text-xs opacity-70 mr-1">#{r.mapped_concept_id}</span>
+            {r.mapped_concept_name}
+            {r.mapped_standard_concept === 'S' && <Tag color="green" className="ml-1">S</Tag>}
+            {r.pending && <Tag color="orange" className="ml-1">{t('concept.pending_mapping', 'pending')}</Tag>}
           </span>
         );
       },
@@ -1018,7 +1029,10 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
                   setSuggestions([]);
                   setSuggestRan(false);
                 },
-                className: selectedSource?.source_value === record.source_value ? 'bg-emerald-accent/10' : '',
+                className: [
+                  selectedSource?.source_value === record.source_value ? 'bg-emerald-accent/10' : '',
+                  record.pending && selectedSource?.source_value !== record.source_value ? 'bg-orange-500/8 hover:bg-orange-500/12' : '',
+                ].filter(Boolean).join(' '),
               })}
             />
             <span className="text-text-muted text-sm mt-2 block">{searchTotal} {t('mapping.results_found', 'results found')} — {t('mapping.click_to_select', 'click a row to select')}</span>
@@ -1059,14 +1073,14 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
             </div>
           </div>
 
-          {selectedSource.pending && selectedSource.pending_concept_id && (
+          {selectedSource.pending && selectedSource.mapped_concept_id && (
             <Alert
               type="warning"
               className="mb-4"
               message={
                 <span>
                   <Tag color="orange" className="mr-2">{t('concept.pending_mapping', 'pending')}</Tag>
-                  {t('mapping.already_decided', 'Already decided in OPAL')}: <span className="font-semibold">#{selectedSource.pending_concept_id} — {selectedSource.pending_concept_name}</span>
+                  {t('mapping.already_decided', 'Already decided in OPAL')}: <span className="font-semibold">#{selectedSource.mapped_concept_id} — {selectedSource.mapped_concept_name}</span>
                   {selectedSource.pending_user && <span className="text-text-muted ml-1">({selectedSource.pending_user})</span>}
                 </span>
               }
@@ -1270,7 +1284,9 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
 
 function ReasonCell({ value }: { value: string }) {
   const [hovered, setHovered] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number; height: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{
+    top?: number; bottom?: number; left: number; width: number; maxHeight: number; placement: 'below' | 'above';
+  } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   const handleMouseEnter = () => {
@@ -1278,11 +1294,19 @@ function ReasonCell({ value }: { value: string }) {
       const cellRect = ref.current.getBoundingClientRect();
       const tr = ref.current.closest('tr');
       const trRect = tr?.getBoundingClientRect();
+      const vh = window.innerHeight;
+      const margin = 8;
+      const anchorBottom = trRect ? trRect.bottom : cellRect.bottom;
+      const anchorTop = trRect ? trRect.top : cellRect.top;
+      const spaceBelow = vh - anchorBottom - margin;
+      const spaceAbove = anchorTop - margin;
+      const placeBelow = spaceBelow >= spaceAbove;
       setPos({
-        top: trRect ? trRect.bottom : cellRect.bottom,
+        ...(placeBelow ? { top: anchorBottom } : { bottom: vh - anchorTop }),
         left: cellRect.left,
-        height: trRect?.height ?? cellRect.height,
         width: trRect ? trRect.right - cellRect.left : 300,
+        maxHeight: Math.max(120, placeBelow ? spaceBelow : spaceAbove),
+        placement: placeBelow ? 'below' : 'above',
       });
     }
     setHovered(true);
@@ -1294,21 +1318,25 @@ function ReasonCell({ value }: { value: string }) {
       {pos && createPortal(
         <div style={{
           position: 'fixed',
-          top: pos.top,
+          ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }),
           left: pos.left,
           width: 'fit-content',
           maxWidth: pos.width,
+          maxHeight: pos.maxHeight,
           zIndex: 9999,
           pointerEvents: 'none',
           filter: 'drop-shadow(-2px 2px 8px rgba(50,50,0,0.3))',
           clipPath: hovered ? 'inset(0 0 0 0)' : 'inset(0 100% 0 0)',
           transition: '0.5s ease',
+          overflow: 'hidden',
         }}>
           <div style={{
             padding: '14px 16px', backgroundColor: 'var(--color-surface)',
             border: '1px solid var(--color-glass-border)',
             transition: '0.5s ease', fontSize: '0.85rem', color: 'var(--color-text-bright)',
             wordBreak: 'break-word', lineHeight: 1.5,
+            maxHeight: pos.maxHeight,
+            overflowY: 'auto',
           }}>
             <span style={{
               display: 'block',
