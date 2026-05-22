@@ -2,6 +2,30 @@
 
 ---
 
+## v3.1.0 (2026-05-23)
+
+> **Tag** : `v3.1.0` → commit `d1470ea`
+> **Base** : `v3.0.0`
+
+### Fonctionnalites
+
+- **Multi-select Mapping Manual** (`frontend/src/pages/MappingPage.tsx`) : selection de plusieurs codes source via cases a cocher pour les mapper vers le meme `target_concept_id` en une seule action. La selection persiste entre les pages, l'approbation itere `mappingApi.decide` via `Promise.allSettled` (succes partiels toleres). Le panneau Step 2 s'adapte : 1 selectionne → vue detaillee + suggestions ; N>1 → liste compacte + lookup manuel uniquement. (`bc38045`)
+- **Recherche case+accent insensible partout** (`backend/utils/text_search.py`) : nouveau helper `iaccent_ilike()` produisant `unaccent(col) ILIKE unaccent(pattern)`. Applique a toutes les recherches par mot-cle (concept names, source values, cohortes, mapping decisions, suggestions). "Meta" et "Meta" renvoient desormais les memes resultats. Extension PostgreSQL `unaccent` requise sur l'app DB (migration Alembic `e5f6a7b8c9d0`) et sur chaque CDM (action admin manuelle). UDF Python enregistree sur SQLite pour les tests. (`6c8b19f`)
+- **Pagination des resultats Manual Mapping** (`frontend/src/pages/MappingPage.tsx`) : ajout de pagination sur la recherche de codes source (page size 50) — auparavant limite a 20 resultats sans pagination. (`2cca594`)
+- **Badges "pending" dans Concept Explorer + Mapping** (`backend/modules/concept/router.py`, `backend/modules/mapping/router.py`) : les valeurs source ayant une decision approved/modified dans OPAL mais pas encore appliquee au CDM sont signalees avec un badge orange et un surlignage de ligne `bg-orange-500/8`. Evite de re-mapper des codes deja decides. (`f835d84`, `4d8dd07`)
+- **Tooltip "Reason" viewport-aware dans Mapping History** (`frontend/src/pages/MappingPage.tsx`) : le tooltip detecte l'espace disponible au-dessus/en-dessous de la ligne et bascule pour ne plus etre tronque par le bas de l'ecran. (`f835d84`)
+
+### Securite
+
+- **`cryptography` 46.0.5 → 46.0.7** (`backend/requirements.txt`) : corrige le buffer overflow avec buffers non-contigus (Moderate) et l'enforcement incomplet des contraintes DNS sur les peer names (Low). (`d1470ea`)
+- **`python-multipart` 0.0.22 → 0.0.27** (`backend/requirements.txt`) : corrige le DoS via headers multipart non bornes (**High**) et le DoS via large preamble/epilogue (Moderate). (`d1470ea`)
+
+### Migrations
+
+- Migration Alembic `e5f6a7b8c9d0` : `CREATE EXTENSION IF NOT EXISTS unaccent` sur l'app DB (no-op sur SQLite tests).
+
+---
+
 ## v1.2.1 (2026-03-20)
 
 > **Branche** : `OPAL_V1.2.1`
