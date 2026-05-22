@@ -775,8 +775,10 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   const [search, setSearch] = useSessionState('mapping:manual:search', '');
   const [searchResults, setSearchResults] = useState<UnmappedItem[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
+  const [searchPage, setSearchPage] = useState(1);
   const [searchLoading, setSearchLoading] = useState(false);
   const [selectedSource, setSelectedSource] = useState<UnmappedItem | null>(null);
+  const SEARCH_PAGE_SIZE = 50;
 
   // Concept lookup state
   const [conceptIdInput, setConceptIdInput] = useState<number | null>(null);
@@ -806,15 +808,17 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
   const [suggReasonText, setSuggReasonText] = useState('');
 
   // Search source values
-  const handleSearch = useCallback(() => {
+  const handleSearch = useCallback((p: number = 1) => {
     if (!search.trim()) return;
     setSearchLoading(true);
-    setSelectedSource(null);
-    setConceptInfo(null);
-    setConceptIdInput(null);
-    setConceptError('');
-    mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
-      .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
+    if (p === 1) {
+      setSelectedSource(null);
+      setConceptInfo(null);
+      setConceptIdInput(null);
+      setConceptError('');
+    }
+    mappingApi.unmapped(cdmName, domain, p, SEARCH_PAGE_SIZE, search, true)
+      .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); setSearchPage(p); })
       .catch(() => { setSearchResults([]); setSearchTotal(0); toast.error(t('common.error', 'An error occurred')); })
       .finally(() => setSearchLoading(false));
   }, [cdmName, domain, search]);
@@ -882,7 +886,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       setConceptIdInput(null);
       // Refresh search
       if (search.trim()) {
-        mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
+        mappingApi.unmapped(cdmName, domain, searchPage, SEARCH_PAGE_SIZE, search, true)
           .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
           .catch(() => {});
       }
@@ -927,7 +931,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
       setReason('');
       // Refresh search results to remove mapped item
       if (search.trim()) {
-        mappingApi.unmapped(cdmName, domain, 1, 20, search, true)
+        mappingApi.unmapped(cdmName, domain, searchPage, SEARCH_PAGE_SIZE, search, true)
           .then(r => { setSearchResults(r.data.items); setSearchTotal(r.data.total); })
           .catch(() => toast.error(t('mapping.refresh_failed', 'Failed to refresh results')));
       }
@@ -989,10 +993,10 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
             placeholder={t('mapping.search_source_code', 'Search local code...')}
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleSearch(); }}
+            onKeyDown={e => { if (e.key === 'Enter') handleSearch(1); }}
             className="w-full sm:w-[300px]"
           />
-          <Button variant="primary" onClick={handleSearch} loading={searchLoading}>
+          <Button variant="primary" onClick={() => handleSearch(1)} loading={searchLoading}>
             {t('mapping.search', 'Search')}
           </Button>
         </div>
@@ -1003,7 +1007,7 @@ function ManualMappingTab({ cdmName }: { cdmName: string }) {
               dataSource={searchResults}
               rowKey="source_value"
               size="small"
-              pagination={false}
+              pagination={{ pageSize: SEARCH_PAGE_SIZE, current: searchPage, total: searchTotal, onChange: (p: number) => handleSearch(p) }}
               columns={searchColumns}
               onRow={(record) => ({
                 onClick: () => {
