@@ -52,7 +52,7 @@ Le fichier `main.py` configure l'application FastAPI :
 2. Enregistrement du middleware CORS
 3. Enregistrement conditionnel du middleware Keycloak (`AUTH_ENABLED`)
 4. Enregistrement du middleware d'audit
-5. Inclusion des 19 routers de modules
+5. Inclusion des 21 routers de modules
 6. Endpoints systeme directs (health, i18n, auth)
 7. GZip middleware (compression > 1000 bytes)
 
@@ -60,7 +60,7 @@ Le fichier `main.py` configure l'application FastAPI :
 
 ```
 backend/
-├── main.py                    # App FastAPI + endpoints systeme (19 routers)
+├── main.py                    # App FastAPI + endpoints systeme (21 routers)
 ├── config.py                  # Configuration (env vars + DOMAIN_CONFIG)
 ├── alembic/                   # Migrations de schema (Alembic)
 │   └── versions/              # Fichiers de migration
@@ -72,7 +72,7 @@ backend/
 │   └── logger.py              # Middleware d'audit (masquage params sensibles)
 ├── db/
 │   ├── app_db.py              # SQLAlchemy engine + session factory
-│   ├── models.py              # 22 modeles ORM (+ NotificationPreference)
+│   ├── models.py              # 26 modeles ORM
 │   └── omop_connector.py      # Pool de connexions psycopg2 aux CDM
 ├── utils/
 │   ├── crypto.py              # Chiffrement/dechiffrement Fernet

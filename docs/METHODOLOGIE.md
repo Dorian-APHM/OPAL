@@ -356,7 +356,7 @@ Où `p = proportion (0–1)`.
 
 Le moteur de mapping propose des correspondances entre les termes sources (codes locaux) et les concepts standards OMOP, via 5 stratégies internes (+ SapBERT en pré-calcul externe) exécutées séquentiellement par ordre de confiance.
 
-> **Note v1.2.1** : Le moteur détecte dynamiquement si la colonne `source_name` existe dans le CDM. Si absente, les stratégies basées sur le libellé (ingredient, fuzzy, keyword) sont limitées au `source_value`. Un tableau de `warnings` est retourné indiquant les limitations rencontrées.
+> **Note** : Le moteur détecte dynamiquement si la colonne `source_name` existe dans le CDM. Si absente, les stratégies basées sur le libellé (ingredient, fuzzy, keyword) sont limitées au `source_value`. Un tableau de `warnings` est retourné indiquant les limitations rencontrées.
 
 ### 6.1 SapBERT (pré-calculé, externe)
 

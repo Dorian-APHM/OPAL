@@ -45,6 +45,9 @@ OPAL est une application web autonome qui se connecte a vos bases OMOP CDM exist
 - **Recevoir des notifications temps reel** via WebSocket (zero polling)
 - **Analyser les parcours de soins** (Pathways Analysis) a la maniere d'ATLAS
 - **Basculer entre theme sombre et clair** (palette Creme Sauge)
+- **Visualiser le lineage ETL** : upload de documentation HTML, parsing automatique et rendu interactif source→target
+
+**Recherche** : toutes les recherches par mot-cle (concepts, codes source, cohortes, mappings…) sont **insensibles a la casse ET aux accents** — "Meta" et "Meta" renvoient les memes resultats. Requiert l'extension PostgreSQL `unaccent` (voir [Demarrage rapide](#demarrage-rapide)).
 
 OPAL fonctionne en **lecture seule** sur vos CDM. La seule ecriture possible (optionnelle, opt-in) concerne la table `source_to_concept_map` lors de l'application des mappings valides.
 
@@ -71,6 +74,13 @@ Les 4 services communiquent via le reseau Docker interne `opal-network`. Ports e
 
 - Docker et Docker Compose
 - Acces reseau vers vos bases PostgreSQL OMOP CDM
+- **Extension PostgreSQL `unaccent` installee sur chaque CDM** — requise pour la recherche insensible aux accents. A faire **par un superuser** sur chaque base CDM :
+
+  ```bash
+  psql -U postgres -d <nom_cdm> -c "CREATE EXTENSION IF NOT EXISTS unaccent;"
+  ```
+
+  L'app DB (`opal`) installe automatiquement l'extension via la migration Alembic `e5f6a7b8c9d0`. Pour les CDMs externes, OPAL se connecte en lecture seule et ne peut pas l'installer lui-meme.
 
 ### Lancement
 
@@ -397,6 +407,12 @@ Workflow complet de mapping des codes source vers les concepts standard OMOP.
 - Export CSV de l'historique
 - Application des mappings : preview d'impact → export STCM CSV ou ecriture CDM (opt-in)
 
+**Manual Mapping** — Mapping manuel d'un (ou plusieurs) codes source vers un concept :
+- **Multi-select** : selectionnez plusieurs codes via les cases a cocher pour les mapper tous vers le meme concept_id en une seule action
+- Lookup d'un concept par ID, ou auto-suggestions pour un code unique
+- Pagination des resultats de recherche
+- Badge "pending" + surlignage orange sur les codes ayant deja une decision enregistree dans OPAL mais pas encore appliquee au CDM
+
 #### Reference et SapBERT
 
 - **Codebooks de reference** : upload de CSV (CCAM, CIM-10…) pour enrichir les descriptions
@@ -536,6 +552,8 @@ Les modules suivants completent les fonctionnalites principales :
 | **Partage de cohortes** | — | `/api/cohorts/` | Partage de cohortes entre utilisateurs |
 | **Recherche globale** | — | `/api/search/` | Recherche transversale (cohortes, concepts, requetes) |
 | **Groupes** | — | `/api/groups/` | Gestion de groupes d'utilisateurs |
+| **ETL Lineage** | `/lineage` | `/api/lineage/` | Upload de documentation ETL HTML, parse et visualisation interactive (source/target tables + transformations) |
+| **Activite recente** | — | `/api/recent/` | Flux d'activite recente de l'utilisateur |
 
 ---
 
@@ -662,7 +680,7 @@ Le controle s'applique a deux niveaux :
 - Masquage automatique des parametres sensibles (password, token, ticket)
 - Fichiers de logs crees avec permissions `0o640`
 
-### Securite renforcee (v1.2.1)
+### Securite renforcee
 
 | Protection | Detail |
 |-----------|--------|
@@ -688,16 +706,7 @@ Le controle s'applique a deux niveaux :
 | Keycloak | Changer le mot de passe admin par defaut |
 | Docker | Utiliser `docker-compose.prod.yml` pour le deploiement production |
 
-### Nouveautes v1.2.1
-
-| Fonctionnalite | Detail |
-|----------------|--------|
-| **Detection de colonnes optionnelles** | `cdm_helper.py` detecte si `source_name` existe dans la table OMOP avant de l'inclure dans les requetes |
-| **Avertissements de mapping** | Les suggestions affichent des warnings (`source_name_missing`, `no_reference_codebook`, etc.) pour guider l'utilisateur |
-| **Rate limiting** | `slowapi` applique sur les endpoints couteux (inscription, tickets SSE, compute) |
-| **Pool de threads borne** | `MAX_WORKER_THREADS` (defaut 16) limite la concurrence des taches background |
-| **Nettoyage des taches en memoire** | Daemon automatique purge les taches terminees pour eviter les fuites memoire |
-| **3 nouveaux domaines** | Specimen, Note et Payer_Plan_Period ajoutes a `DOMAIN_CONFIG` |
+Voir [CHANGELOG.md](CHANGELOG.md) pour l'historique detaille des fonctionnalites par version.
 
 ---
 
@@ -724,7 +733,7 @@ opal/
 ├── CLAUDE.md                 # Instructions pour Claude Code
 ├── .env.example              # Template de configuration
 │
-├── CHANGELOG.md             # Historique des changements v1.2.1
+├── CHANGELOG.md             # Historique detaille des changements par version
 │
 ├── docs/
 │   ├── API.md                # Reference API complete (80+ endpoints)
@@ -736,7 +745,7 @@ opal/
 ├── backend/
 │   ├── Dockerfile            # Python 3.12-slim + uvicorn
 │   ├── requirements.txt      # Dependances Python
-│   ├── main.py               # Point d'entree FastAPI + endpoints systeme (19 routers)
+│   ├── main.py               # Point d'entree FastAPI + endpoints systeme (21 routers)
 │   ├── config.py             # Variables d'environnement et constantes
 │   ├── alembic/              # Migrations de schema (Alembic)
 │   ├── auth/
@@ -747,7 +756,7 @@ opal/
 │   │   └── logger.py         # Middleware d'audit (trace toutes les requetes)
 │   ├── db/
 │   │   ├── app_db.py         # Engine SQLAlchemy (base OPAL)
-│   │   ├── models.py         # 22 modeles SQLAlchemy
+│   │   ├── models.py         # 26 modeles SQLAlchemy
 │   │   └── omop_connector.py # Connexion dynamique aux CDM (psycopg2)
 │   ├── utils/
 │   │   ├── crypto.py         # Chiffrement Fernet
@@ -1003,10 +1012,10 @@ Les tests backend utilisent une base SQLite en memoire et un mock psycopg2 (`omo
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Guide utilisateur complet |
 | [docs/METHODOLOGIE.md](docs/METHODOLOGIE.md) | Methodologie des analyses (qualite, cohortes, mapping) |
 | [docs/WEBSOCKET_NOTIFICATIONS.md](docs/WEBSOCKET_NOTIFICATIONS.md) | Architecture WebSocket notifications |
-| [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements v1.2.1 |
+| [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements par version |
 
 ---
 
 ## Licence
 
-Projet interne AP-HM.
+OPAL est distribue sous licence **Apache 2.0**. Voir le fichier [LICENSE](LICENSE) pour le texte complet.
