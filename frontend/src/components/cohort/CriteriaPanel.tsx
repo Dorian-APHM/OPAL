@@ -193,20 +193,20 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   }));
 
   return (
-    <div className="h-full flex flex-col gap-3">
+    <div className="h-full flex flex-col gap-2">
       {/* Concept Sets */}
         <Card
           size="small"
           title={<span className="flex items-center gap-1"><Layers className="h-4 w-4" /> {t('cohort.concept_sets', 'Concept Sets')}</span>}
         >
           {conceptSetsLoading ? (
-            <div className="text-center p-3"><Spinner size="small" /></div>
+            <div className="text-center p-2"><Spinner size="small" /></div>
           ) : (
-            <div className="max-h-[180px] overflow-auto">
+            <div className="max-h-[140px] overflow-auto">
               {conceptSets.map(cs => (
                 <div
                   key={cs.id}
-                  className="cursor-pointer px-3 py-1.5 hover:bg-emerald-accent/5 border-b border-border-subtle last:border-b-0 transition-colors"
+                  className="cursor-pointer px-2 py-1 hover:bg-emerald-accent/5 border-b border-border-subtle last:border-b-0 transition-colors"
                   onClick={() => addConceptSetAsCriterion(cs)}
                 >
                   <div className="flex justify-between items-center">
@@ -273,7 +273,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
               <style>{`@keyframes progress { 0% { width: 5%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 5%; margin-left: 95%; } }`}</style>
             </div>
           ) : sourceSearchResults.length > 0 ? (
-            <div className="max-h-[200px] overflow-auto">
+            <div className="max-h-[160px] overflow-auto">
               {sourceSearchResults.map(r => {
                 const isSelected = selectedSourceCodes.includes(r.source_value);
                 return (
@@ -357,9 +357,9 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
         )}
 
         {/* Search results */}
-        <div className="max-h-[200px] overflow-auto">
+        <div className="max-h-[160px] overflow-auto">
           {loading ? (
-            <div className="text-center p-4"><Spinner size="small" /></div>
+            <div className="text-center p-3"><Spinner size="small" /></div>
           ) : concepts.length > 0 ? (
             concepts.map(c => {
               const isSelected = selectedConcepts.some(s => s.concept_id === c.concept_id);
