@@ -4,7 +4,7 @@ import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
   Star, Share2, Globe, Users, UserPlus, X, GitBranch,
-  Hammer, FlaskConical, Play,
+  Hammer, FlaskConical, Play, ChevronRight,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -363,6 +363,7 @@ export default function CohortPage({ selectedCdm }: Props) {
   const [journeyPersonId, setJourneyPersonId] = useState<number | null>(null);
 
   // Results panel state (inlined from ResultsPanel)
+  const [resultsDrawerOpen, setResultsDrawerOpen] = useSessionState('cohort:resultsDrawerOpen', false);
   const [patientCount, setPatientCount] = useSessionState<number | null>(`cohort:results:count:${cohortKey}`, null);
   const [countLoading, setCountLoading] = useState(false);
   const [attrition, setAttrition] = useSessionState<AttritionStep[]>(`cohort:results:attrition:${cohortKey}`, []);
@@ -429,63 +430,58 @@ export default function CohortPage({ selectedCdm }: Props) {
   }
 
   return (
-    <div className="min-h-[calc(100vh-60px)] flex flex-col">
-      {/* ── Top bar: cohort name | description | actions + export — single line, centered ── */}
-      <div className="flex justify-center my-4 px-2">
-        <div className="flex items-center gap-3">
-          <Input
-            placeholder={t('cohort.cohort_name_placeholder', 'Cohort name...')}
-            value={cohortName}
-            onChange={e => { setCohortName(e.target.value); setNameError(''); }}
-            className="!w-[180px]"
-            required
-            error={nameError}
-          />
-          <Input
-            placeholder={t('cohort.description', 'Description')}
-            value={cohortDesc}
-            onChange={e => setCohortDesc(e.target.value)}
-            className="!w-[400px]"
-          />
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="flex flex-col gap-1">
-              <Button icon={<Plus className="h-3 w-3" />} size="small" onClick={handleNew} className="hover:-translate-y-0.5">
-                {t('cohort.new', 'New')}
-              </Button>
-              <Button icon={<FolderOpen className="h-3 w-3" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }} className="hover:-translate-y-0.5">
-                <span className="inline-flex items-center gap-1.5">
-                  {t('cohort.load', 'Load')} ({cohorts.length})
-                  {cohortNotifCount > 0 && (
-                    <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
-                  )}
-                </span>
-              </Button>
-            </div>
-            <Button icon={<Save className="h-3 w-3" />} variant="primary" size="small" onClick={handleSave} loading={saving}>
-              {t('common.save', 'Save')}
+    <div className="h-[calc(100vh-84px)] flex flex-col overflow-hidden">
+      {/* ── Top bar: cohort name | description | actions + export — single horizontal line, no wrap ── */}
+      <div className="flex items-center gap-2 my-2 px-2 flex-nowrap min-w-0">
+        <Input
+          placeholder={t('cohort.cohort_name_placeholder', 'Cohort name...')}
+          value={cohortName}
+          onChange={e => { setCohortName(e.target.value); setNameError(''); }}
+          className="!w-[160px] flex-shrink-0"
+          required
+          error={nameError}
+        />
+        <Input
+          placeholder={t('cohort.description', 'Description')}
+          value={cohortDesc}
+          onChange={e => setCohortDesc(e.target.value)}
+          className="flex-1 min-w-0"
+        />
+        <Button icon={<Plus className="h-3 w-3" />} size="small" onClick={handleNew} className="flex-shrink-0 whitespace-nowrap">
+          {t('cohort.new', 'New')}
+        </Button>
+        <Button icon={<FolderOpen className="h-3 w-3" />} size="small" onClick={() => { setShowList(true); markAllCohortRead(); }} className="flex-shrink-0 whitespace-nowrap">
+          <span className="inline-flex items-center gap-1.5">
+            {t('cohort.load', 'Load')} ({cohorts.length})
+            {cohortNotifCount > 0 && (
+              <span className="inline-block w-2 h-2 rounded-full bg-red-500 shrink-0" />
+            )}
+          </span>
+        </Button>
+        <Button icon={<Save className="h-3 w-3" />} variant="primary" size="small" onClick={handleSave} loading={saving} className="flex-shrink-0 whitespace-nowrap">
+          {t('common.save', 'Save')}
+        </Button>
+        {savedCohortId && (
+          <>
+            <Button
+              size="small"
+              variant="primary"
+              icon={<Download className="h-3 w-3" />}
+              onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
+              className="flex-shrink-0 whitespace-nowrap"
+            >
+              CSV
             </Button>
-          </div>
-          {/* Export buttons */}
-          {savedCohortId && (
-            <div className="flex flex-col gap-1 shrink-0">
-              <Button
-                size="small"
-                variant="primary"
-                icon={<Download className="h-3 w-3" />}
-                onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'csv'))}
-              >
-                {criteria.inclusion.sameVisit ? 'CSV (Patient + Visit IDs)' : 'CSV (Patient IDs)'}
-              </Button>
-              <Button
-                size="small"
-                icon={<Download className="h-3 w-3" />}
-                onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
-              >
-                SQL
-              </Button>
-            </div>
-          )}
-        </div>
+            <Button
+              size="small"
+              icon={<Download className="h-3 w-3" />}
+              onClick={() => authDownload(cohortApi.exportUrl(savedCohortId, 'sql'))}
+              className="flex-shrink-0 whitespace-nowrap"
+            >
+              SQL
+            </Button>
+          </>
+        )}
       </div>
 
       {/* ── Main tabs: Cohort Builder | Analyse ── */}
@@ -551,13 +547,13 @@ export default function CohortPage({ selectedCdm }: Props) {
       </div>
 
       {/* ── Content ── */}
-      <div className="flex flex-col flex-1 overflow-auto mt-2">
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden mt-2">
         {/* Cohort Builder > Query Builder */}
         {mainTab === 'cohort-builder' && builderSubTab === 'builder' && (
           <>
-            {/* Criteria panel (left) + QueryCanvas (right) — always open */}
-            <div className="flex gap-2">
-              <div className="w-[420px] shrink-0 border border-glass-border rounded-lg p-3 bg-surface-dark/40">
+            {/* Criteria panel (left) + QueryCanvas (center) + collapsible Results drawer (right) */}
+            <div className="flex gap-2 flex-1 min-h-0">
+              <div className="w-[420px] shrink-0 border border-glass-border rounded-lg p-2 bg-surface-dark/40 overflow-hidden flex flex-col">
                 <div className="flex rounded-lg overflow-hidden border border-glass-border mb-2">
                   <button
                     className={`flex-1 py-1.5 text-xs font-medium transition-colors border-none cursor-pointer ${
@@ -586,7 +582,19 @@ export default function CohortPage({ selectedCdm }: Props) {
                 />
               </div>
 
-              <div className="flex-1 min-w-0">
+              <div className="flex-1 min-w-0 flex flex-col gap-2 overflow-y-auto">
+                {/* Toggle button — opens the right results drawer */}
+                {!resultsDrawerOpen && (
+                  <div className="flex justify-end shrink-0">
+                    <Button
+                      size="small"
+                      icon={<User className="h-3.5 w-3.5" />}
+                      onClick={() => setResultsDrawerOpen(true)}
+                    >
+                      {t('cohort.results', 'Résultats')}
+                    </Button>
+                  </div>
+                )}
                 <QueryCanvas
                   inclusion={criteria.inclusion}
                   exclusion={criteria.exclusion}
@@ -601,6 +609,188 @@ export default function CohortPage({ selectedCdm }: Props) {
                   onUpdateInitialEvent={id => setCriteria(prev => ({ ...prev, initial_event_criterion_id: id }))}
                 />
               </div>
+
+              {/* Right drawer — Sample / Count / Attrition stacked vertically */}
+              {resultsDrawerOpen && (
+                <div className="w-[420px] shrink-0 flex flex-col gap-2 overflow-y-auto">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-text-bright inline-flex items-center gap-1.5">
+                      <User className="h-4 w-4" />
+                      {t('cohort.results', 'Résultats')}
+                    </span>
+                    <Button
+                      size="small"
+                      variant="ghost"
+                      icon={<ChevronRight className="h-3.5 w-3.5" />}
+                      onClick={() => setResultsDrawerOpen(false)}
+                      title={t('common.close', 'Close')}
+                    />
+                  </div>
+                  {resultsError && <Alert type="error" message={resultsError} closable onClose={() => setResultsError('')} />}
+
+                  {/* Sample Patients */}
+                  <Card
+                    size="small"
+                    title={
+                      <div className="flex items-center gap-1.5">
+                        <User className="h-4 w-4" />
+                        <span>{t('cohort.sample_patients', 'Sample Patients')}</span>
+                      </div>
+                    }
+                    extra={
+                      <Button
+                        size="small"
+                        onClick={runDetailedSample}
+                        loading={sampleLoading}
+                        disabled={criteria.inclusion.criteria.length === 0}
+                      >
+                        {t('cohort.sample', 'Sample')}
+                      </Button>
+                    }
+                  >
+                    {sampleLoading ? (
+                      <div className="text-center py-5">
+                        <Spinner />
+                        <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sample', 'Loading sample patients...')}</p>
+                      </div>
+                    ) : samplePatients.length > 0 ? (
+                      <div className="max-h-[260px] overflow-auto">
+                        <Table
+                          size="small"
+                          dataSource={samplePatients}
+                          rowKey={(r) => JSON.stringify(r).slice(0, 100)}
+                          pagination={false}
+                          scroll={{ x: true }}
+                          columns={[
+                            {
+                              title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90,
+                              render: (v: number) => (
+                                <a
+                                  onClick={() => setJourneyPersonId(v)}
+                                  title={t('cohort.view_journey', 'View patient journey')}
+                                  className="text-emerald-accent hover:underline cursor-pointer"
+                                >
+                                  {v}
+                                </a>
+                              ),
+                            },
+                            { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
+                            ...sampleColumns.map(col => ({
+                              title: col.label,
+                              dataIndex: col.key,
+                              key: col.key,
+                              width: col.key === 'visit_occurrence_id' ? 90 : 150,
+                              ellipsis: true,
+                              render: (v: any) => v != null ? String(v) : '—',
+                            })),
+                          ]}
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-text-muted text-xs">
+                        {t('cohort.click_sample', 'Click Sample to see random patients')}
+                      </span>
+                    )}
+                  </Card>
+
+                  {/* Patient Count */}
+                  <Card size="small">
+                    <div className="text-center mb-2">
+                      <Statistic
+                        title={
+                          <div className="flex items-center gap-1 justify-center">
+                            <Users className="h-3.5 w-3.5" />
+                            {t('cohort.patient_count', 'Patient Count')}
+                          </div>
+                        }
+                        value={countLoading ? '...' : (patientCount != null ? patientCount.toLocaleString() : '—')}
+                        valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-center gap-2">
+                      {anyResultsLoading ? (
+                        <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={() => { setCountLoading(false); setAttritionLoading(false); }} size="small">
+                          {t('common.cancel')}
+                        </Button>
+                      ) : (
+                        <Button variant="primary" icon={<Play className="h-3.5 w-3.5" />} onClick={runCount} disabled={!hasCriteria || !selectedCdm} size="small">
+                          {t('cohort.run_count', 'Count')}
+                        </Button>
+                      )}
+                      <Tooltip title={t('cohort.approximate_tooltip', 'Quick approximate count')}>
+                        <span>
+                          <Button
+                            icon={<Play className="h-3.5 w-3.5" />}
+                            onClick={async () => {
+                              setCountLoading(true);
+                              try {
+                                const resp = await cohortApi.countApprox(selectedCdm!, toBackendCriteria(criteria));
+                                setPatientCount(resp.data.patient_count);
+                              } catch (e: any) {
+                                setResultsError(e.response?.data?.detail || 'Error');
+                              } finally {
+                                setCountLoading(false);
+                              }
+                            }}
+                            disabled={!hasCriteria || !selectedCdm}
+                            size="small"
+                          >
+                            ~
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    </div>
+                    {generatedSql && (
+                      <div className="mt-2">
+                        <pre className="text-[10px] max-h-[120px] overflow-auto whitespace-pre-wrap break-all text-text-muted bg-deep-base p-2 rounded">
+                          {generatedSql}
+                        </pre>
+                      </div>
+                    )}
+                  </Card>
+
+                  {/* Attrition Diagram */}
+                  <Card
+                    size="small"
+                    title={
+                      <div className="flex items-center gap-1">
+                        <BarChart3 className="h-4 w-4" />
+                        {t('cohort.attrition', 'Attrition Diagram')}
+                      </div>
+                    }
+                    extra={
+                      <Button size="small" onClick={runAttrition} loading={attritionLoading} disabled={!hasCriteria || !selectedCdm}>
+                        {t('cohort.run', 'Run')}
+                      </Button>
+                    }
+                  >
+                    {attritionLoading ? (
+                      <div className="text-center py-5">
+                        <Spinner />
+                        <p className="text-sm text-text-muted mt-2">{t('cohort.loading_attrition', 'Loading attrition data...')}</p>
+                      </div>
+                    ) : attrition.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={Math.max(150, attrition.length * 30)}>
+                        <BarChart data={attritionChartData} layout="vertical" margin={{ left: 10, right: 10 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" />
+                          <YAxis type="category" dataKey="label" width={150} tick={{ fontSize: 10 }} />
+                          <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
+                          <Bar dataKey="count">
+                            {attritionChartData.map((entry, idx) => (
+                              <Cell key={idx} fill={entry.fill} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <span className="text-text-muted text-xs">
+                        {t('cohort.click_run_attrition', 'Click Run to see attrition diagram')}
+                      </span>
+                    )}
+                  </Card>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -622,175 +812,6 @@ export default function CohortPage({ selectedCdm }: Props) {
           <ConceptSetPage selectedCdm={selectedCdm} />
         )}
 
-        {/* ── Bottom row: Sample Patients | Patient Count | Attrition — each 1/3 ── */}
-        {mainTab === 'cohort-builder' && builderSubTab === 'builder' && (
-            <>
-              {resultsError && <Alert type="error" message={resultsError} closable onClose={() => setResultsError('')} className="mt-2" />}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 mt-3">
-                {/* Sample Patients */}
-                <Card
-                  size="small"
-                  title={
-                    <div className="flex items-center gap-1.5">
-                      <User className="h-4 w-4" />
-                      <span>{t('cohort.sample_patients', 'Sample Patients')}</span>
-                    </div>
-                  }
-                  extra={
-                    <Button
-                      size="small"
-                      onClick={runDetailedSample}
-                      loading={sampleLoading}
-                      disabled={criteria.inclusion.criteria.length === 0}
-                    >
-                      {t('cohort.sample', 'Sample')}
-                    </Button>
-                  }
-                >
-                  {sampleLoading ? (
-                    <div className="text-center py-5">
-                      <Spinner />
-                      <p className="text-sm text-text-muted mt-2">{t('cohort.loading_sample', 'Loading sample patients...')}</p>
-                    </div>
-                  ) : samplePatients.length > 0 ? (
-                    <div className="max-h-[300px] overflow-auto">
-                      <Table
-                        size="small"
-                        dataSource={samplePatients}
-                        rowKey={(r) => JSON.stringify(r).slice(0, 100)}
-                        pagination={false}
-                        scroll={{ x: true }}
-                        columns={[
-                          {
-                            title: 'Person ID', dataIndex: 'person_id', key: 'pid', width: 90,
-                            render: (v: number) => (
-                              <a
-                                onClick={() => setJourneyPersonId(v)}
-                                title={t('cohort.view_journey', 'View patient journey')}
-                                className="text-emerald-accent hover:underline cursor-pointer"
-                              >
-                                {v}
-                              </a>
-                            ),
-                          },
-                          { title: t('cohort.birth_year', 'Birth Year'), dataIndex: 'year_of_birth', key: 'yob', width: 80 },
-                          ...sampleColumns.map(col => ({
-                            title: col.label,
-                            dataIndex: col.key,
-                            key: col.key,
-                            width: col.key === 'visit_occurrence_id' ? 90 : 150,
-                            ellipsis: true,
-                            render: (v: any) => v != null ? String(v) : '—',
-                          })),
-                        ]}
-                      />
-                    </div>
-                  ) : (
-                    <span className="text-text-muted text-xs">
-                      {t('cohort.click_sample', 'Click Sample to see random patients')}
-                    </span>
-                  )}
-                </Card>
-
-                {/* Patient Count */}
-                <Card size="small">
-                  <div className="text-center mb-2">
-                    <Statistic
-                      title={
-                        <div className="flex items-center gap-1 justify-center">
-                          <Users className="h-3.5 w-3.5" />
-                          {t('cohort.patient_count', 'Patient Count')}
-                        </div>
-                      }
-                      value={countLoading ? '...' : (patientCount != null ? patientCount.toLocaleString() : '—')}
-                      valueStyle={{ fontSize: 32, color: patientCount != null ? '#3B82F6' : '#475569' }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-center gap-2">
-                    {anyResultsLoading ? (
-                      <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={() => { setCountLoading(false); setAttritionLoading(false); }} size="small">
-                        {t('common.cancel')}
-                      </Button>
-                    ) : (
-                      <Button variant="primary" icon={<Play className="h-3.5 w-3.5" />} onClick={runCount} disabled={!hasCriteria || !selectedCdm} size="small">
-                        {t('cohort.run_count', 'Count')}
-                      </Button>
-                    )}
-                    <Tooltip title={t('cohort.approximate_tooltip', 'Quick approximate count')}>
-                      <span>
-                        <Button
-                          icon={<Play className="h-3.5 w-3.5" />}
-                          onClick={async () => {
-                            setCountLoading(true);
-                            try {
-                              const resp = await cohortApi.countApprox(selectedCdm!, toBackendCriteria(criteria));
-                              setPatientCount(resp.data.patient_count);
-                            } catch (e: any) {
-                              setResultsError(e.response?.data?.detail || 'Error');
-                            } finally {
-                              setCountLoading(false);
-                            }
-                          }}
-                          disabled={!hasCriteria || !selectedCdm}
-                          size="small"
-                        >
-                          ~
-                        </Button>
-                      </span>
-                    </Tooltip>
-                  </div>
-                  {generatedSql && (
-                    <div className="mt-2">
-                      <pre className="text-[10px] max-h-[120px] overflow-auto whitespace-pre-wrap break-all text-text-muted bg-deep-base p-2 rounded">
-                        {generatedSql}
-                      </pre>
-                    </div>
-                  )}
-                </Card>
-
-                {/* Attrition Diagram */}
-                <Card
-                  size="small"
-                  title={
-                    <div className="flex items-center gap-1">
-                      <BarChart3 className="h-4 w-4" />
-                      {t('cohort.attrition', 'Attrition Diagram')}
-                    </div>
-                  }
-                  extra={
-                    <Button size="small" onClick={runAttrition} loading={attritionLoading} disabled={!hasCriteria || !selectedCdm}>
-                      {t('cohort.run', 'Run')}
-                    </Button>
-                  }
-                >
-                  {attritionLoading ? (
-                    <div className="text-center py-5">
-                      <Spinner />
-                      <p className="text-sm text-text-muted mt-2">{t('cohort.loading_attrition', 'Loading attrition data...')}</p>
-                    </div>
-                  ) : attrition.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={Math.max(150, attrition.length * 30)}>
-                      <BarChart data={attritionChartData} layout="vertical" margin={{ left: 10, right: 10 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis type="number" />
-                        <YAxis type="category" dataKey="label" width={150} tick={{ fontSize: 10 }} />
-                        <RechartsTooltip formatter={(v: number) => v?.toLocaleString()} />
-                        <Bar dataKey="count">
-                          {attritionChartData.map((entry, idx) => (
-                            <Cell key={idx} fill={entry.fill} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <span className="text-text-muted text-xs">
-                      {t('cohort.click_run_attrition', 'Click Run to see attrition diagram')}
-                    </span>
-                  )}
-                </Card>
-              </div>
-            </>
-          )}
         {/* Analyse content */}
         {mainTab === 'analyse' && analyseSubTab === 'comparison' && (
           <CohortComparisonPanel

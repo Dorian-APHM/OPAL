@@ -217,7 +217,7 @@ export default function HomePage({ selectedCdm }: Props) {
   // ── Render ──
 
   return (
-    <div className="py-3 flex flex-col overflow-y-auto gap-3" style={{ height: 'calc(100vh - 56px - 16px)' }}>
+    <div className="py-3 flex flex-col overflow-hidden gap-3" style={{ height: 'calc(100vh - 56px - 16px)' }}>
 
       {/* Header */}
       <div className="flex items-center gap-3 flex-shrink-0">
@@ -267,8 +267,8 @@ export default function HomePage({ selectedCdm }: Props) {
               {/* Horizontal bar chart — mapping % per domain */}
               <Card
                 size="small"
-                className="md:col-span-2 flex flex-col"
-                bodyClassName="!p-3 !pt-1 flex-1"
+                className="md:col-span-2 flex flex-col overflow-hidden"
+                bodyClassName="!p-3 !pt-1 flex-1 overflow-y-auto"
                 title={
                   <span className="inline-flex items-center gap-2">
                     <GitMerge className="h-4 w-4 text-emerald-accent" />
@@ -357,12 +357,13 @@ export default function HomePage({ selectedCdm }: Props) {
           </FadeIn>
 
           {/* ── Row 3 : Quick Actions + Favorites + Recent ── */}
-          <FadeIn delay={0.2} className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-shrink-0">
+          <FadeIn delay={0.2} className="grid grid-cols-1 md:grid-cols-3 gap-3 flex-1 min-h-0">
 
             {/* Quick Actions */}
             <Card
               size="small"
-              bodyClassName="!p-3 !pt-2"
+              className="flex flex-col overflow-hidden"
+              bodyClassName="!p-3 !pt-2 flex-1"
               title={
                 <span className="inline-flex items-center gap-2">
                   <Activity className="h-4 w-4 text-emerald-accent" />
@@ -373,7 +374,7 @@ export default function HomePage({ selectedCdm }: Props) {
               {visibleActions.length === 0 ? (
                 <Empty variant="no-data" />
               ) : (
-                <div className="grid grid-cols-1 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
                   {visibleActions.map(({ key, i18nKey, fallback, Icon, route, navState }) => (
                     <Button
                       key={key}
@@ -393,7 +394,8 @@ export default function HomePage({ selectedCdm }: Props) {
             {/* Favorites */}
             <Card
               size="small"
-              bodyClassName="!p-3 !pt-2"
+              className="flex flex-col overflow-hidden"
+              bodyClassName="!p-3 !pt-2 flex-1 overflow-y-auto"
               title={
                 <span className="inline-flex items-center gap-2">
                   <Star className="h-4 w-4 text-yellow-400" />
@@ -404,40 +406,43 @@ export default function HomePage({ selectedCdm }: Props) {
               {favorites.length === 0 ? (
                 <Empty variant="no-favorites" />
               ) : (
-                favorites.slice(0, 10).map(f => (
-                  <div
-                    key={f.id}
-                    className="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
-                    onClick={() => navigateToFavorite(f)}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      <span className="text-text-dim flex-shrink-0">
-                        {f.item_type === 'cohort' ? <Users className="h-4 w-4" /> :
-                         f.item_type === 'query'  ? <Code className="h-4 w-4" /> :
-                         <Heart className="h-4 w-4" />}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-text-bright truncate">{f.item_label || f.item_id}</div>
-                        <span className="text-xs text-text-dim">{f.item_type}</span>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-1">
+                  {favorites.slice(0, 10).map(f => (
+                    <div
+                      key={f.id}
+                      className="flex items-center justify-between px-2 py-1.5 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors min-w-0"
+                      onClick={() => navigateToFavorite(f)}
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="text-text-dim flex-shrink-0">
+                          {f.item_type === 'cohort' ? <Users className="h-4 w-4" /> :
+                           f.item_type === 'query'  ? <Code className="h-4 w-4" /> :
+                           <Heart className="h-4 w-4" />}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-text-bright truncate">{f.item_label || f.item_id}</div>
+                          <span className="text-xs text-text-dim">{f.item_type}</span>
+                        </div>
                       </div>
+                      <UiTooltip title="Remove">
+                        <Button
+                          variant="danger"
+                          size="small"
+                          icon={<Trash2 className="h-3.5 w-3.5" />}
+                          onClick={e => { e.stopPropagation(); removeFavorite(f.id); }}
+                        />
+                      </UiTooltip>
                     </div>
-                    <UiTooltip title="Remove">
-                      <Button
-                        variant="danger"
-                        size="small"
-                        icon={<Trash2 className="h-3.5 w-3.5" />}
-                        onClick={e => { e.stopPropagation(); removeFavorite(f.id); }}
-                      />
-                    </UiTooltip>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </Card>
 
             {/* Recent */}
             <Card
               size="small"
-              bodyClassName="!p-3 !pt-2"
+              className="flex flex-col overflow-hidden"
+              bodyClassName="!p-3 !pt-2 flex-1 overflow-y-auto"
               title={
                 <span className="inline-flex items-center gap-2">
                   <Clock className="h-4 w-4 text-emerald-accent" />
@@ -448,21 +453,23 @@ export default function HomePage({ selectedCdm }: Props) {
               {recentItems.length === 0 ? (
                 <Empty variant="no-data" />
               ) : (
-                recentItems.map(item => (
-                  <div
-                    key={item.id}
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors"
-                    onClick={item.onClick}
-                  >
-                    <span className="text-text-dim flex-shrink-0">{RECENT_TYPE_ICON[item.type]}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-text-bright truncate">{item.label}</div>
-                      <span className="text-xs text-text-dim capitalize">{item.type}</span>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-1">
+                  {recentItems.map(item => (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-emerald-accent/5 transition-colors min-w-0"
+                      onClick={item.onClick}
+                    >
+                      <span className="text-text-dim flex-shrink-0">{RECENT_TYPE_ICON[item.type]}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-text-bright truncate">{item.label}</div>
+                        <span className="text-xs text-text-dim capitalize">{item.type}</span>
+                      </div>
+                      <span className="text-[10px] text-text-dim flex-shrink-0">{timeAgo(item.timestamp)}</span>
+                      <ArrowRight className="h-3 w-3 text-text-dim opacity-40 flex-shrink-0" />
                     </div>
-                    <span className="text-[10px] text-text-dim flex-shrink-0">{timeAgo(item.timestamp)}</span>
-                    <ArrowRight className="h-3 w-3 text-text-dim opacity-40 flex-shrink-0" />
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </Card>
           </FadeIn>
