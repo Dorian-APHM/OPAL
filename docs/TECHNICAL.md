@@ -1489,13 +1489,13 @@ docker compose up -d
 
 Au premier demarrage :
 - Keycloak importe automatiquement le realm `opal` (roles, client, mappers)
-- Un utilisateur OPAL `admin` est cree avec un mot de passe temporaire `admin`
+- Un utilisateur OPAL `admin` est cree avec un mot de passe temporaire `Changeme1!`
 - La base applicative est creee automatiquement
 
 #### 3. Premier login
 
 1. Ouvrir `http://monserveur:3000` → redirection vers Keycloak
-2. Se connecter avec `admin` / `admin`
+2. Se connecter avec `admin` / `Changeme1!`
 3. Keycloak demande de changer le mot de passe (car `temporary: true`)
 4. Choisir un mot de passe fort → acces a OPAL
 

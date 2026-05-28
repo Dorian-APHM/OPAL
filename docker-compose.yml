@@ -122,9 +122,11 @@ services:
       - KC_HTTP_ENABLED=true
     command: start-dev --import-realm
     ports:
-      # SÉCURITÉ (S09) : port Keycloak lié à 127.0.0.1 uniquement.
-      # Pour autoriser l'accès depuis d'autres machines (ex: SSO multi-hôte),
-      # remplacez par "0.0.0.0:8080:8080" et ajoutez un reverse-proxy devant.
+      # SÉCURITÉ (S09) : en développement, Keycloak est exposé sur toutes les
+      # interfaces (0.0.0.0:8080) pour faciliter l'accès multi-poste.
+      # En production, docker-compose.prod.yml lie ce port à 127.0.0.1 uniquement
+      # et place un reverse-proxy TLS devant. Pour restreindre ici aussi,
+      # remplacez par "127.0.0.1:8080:8080".
       - "8080:8080"
     volumes:
       - ./keycloak/opal-realm.json:/opt/keycloak/data/import/opal-realm.json:ro

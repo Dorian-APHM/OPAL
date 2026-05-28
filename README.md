@@ -109,7 +109,9 @@ Keycloak est accessible sur **http://localhost:8080** (login `KEYCLOAK_ADMIN`, m
 
 ### Premiers pas
 
-1. Se connecter via Keycloak avec votre compte (l'authentification est active par defaut)
+> **Compte administrateur initial** : le realm `opal` est livre avec un compte `admin` / `Changeme1!` (mot de passe **temporaire**). A la premiere connexion, Keycloak impose de definir un nouveau mot de passe conforme a la policy (>=8 car., 1 chiffre, 1 majuscule, 1 special). **Changez-le immediatement** — c'est un identifiant par defaut public (cf. `keycloak/opal-realm.json`).
+
+1. Se connecter via Keycloak avec le compte `admin` / `Changeme1!` (l'authentification est active par defaut)
 2. Acceder a la page **Gestion des CDM** (`/cdm`)
 3. Renseigner les coordonnees de connexion PostgreSQL de votre base OMOP
 4. Tester la connexion
@@ -199,6 +201,33 @@ Chaque domaine est commite independamment : tu peux tester Procedure des qu'il e
 docker compose down          # Arret (donnees preservees)
 docker compose down -v       # Arret + suppression des volumes (reset complet)
 ```
+
+### Deploiement production
+
+Le `docker-compose.yml` par defaut lance Keycloak en mode `start-dev` (H2 embarque) — adapte au developpement, **pas a la production**. Pour un deploiement durci, surchargez avec `docker-compose.prod.yml`, qui :
+
+- lance Keycloak en mode `start` (production) avec persistance **PostgreSQL** dediee (`opal-keycloak-db`) au lieu de H2 ;
+- active `KC_HOSTNAME_STRICT` et `KC_PROXY_HEADERS` (a placer derriere un reverse-proxy TLS) ;
+- lie le port Keycloak a `127.0.0.1` uniquement ;
+- retire le montage du socket Docker (orchestration OHDSI desactivee par defaut).
+
+```bash
+cp .env.example .env
+# Editer .env : SECRET_KEY, POSTGRES_PASSWORD, KEYCLOAK_ADMIN_PASSWORD,
+#               ENVIRONMENT=production, EXTERNAL_HOSTNAME=<fqdn ou ip>,
+#               et les variables de la base Keycloak prod : KC_DB_PASSWORD (obligatoire),
+#               KC_DB_USERNAME / KEYCLOAK_PORT (optionnels, valeurs par defaut fournies)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+> Variables specifiques a la production (cf. [.env.example](.env.example)) :
+>
+> | Variable | Obligatoire | Defaut | Description |
+> |----------|-------------|--------|-------------|
+> | `KC_DB_PASSWORD` | **oui** | — | Mot de passe de la base PostgreSQL de Keycloak (`opal-keycloak-db`) |
+> | `KC_DB_USERNAME` | non | `keycloak` | Utilisateur de la base Keycloak |
+> | `KEYCLOAK_PORT` | non | `8080` | Port hote (lie a `127.0.0.1`) expose pour Keycloak |
+> | `EXTERNAL_HOSTNAME` | **oui** (prod) | `localhost` | Requis : pilote `KC_HOSTNAME` (mode strict en prod) |
 
 ---
 
@@ -715,7 +744,8 @@ Le controle s'applique a deux niveaux :
 | Authentification | Activer Keycloak (`AUTH_ENABLED=true`) |
 | Reseau | Ne pas exposer les ports 8000 et 5432 en production |
 | Keycloak | Changer le mot de passe admin par defaut |
-| Docker | Utiliser `docker-compose.prod.yml` pour le deploiement production |
+| Compte OPAL `admin` | Le realm livre un compte `admin` / `Changeme1!` (temporaire). Se connecter et changer le mot de passe **avant** d'exposer l'application |
+| Docker | Utiliser `docker-compose.prod.yml` pour le deploiement production (voir [Deploiement production](#deploiement-production)) |
 
 Voir [CHANGELOG.md](CHANGELOG.md) pour l'historique detaille des fonctionnalites par version.
 
@@ -825,11 +855,11 @@ opal/
 │   ├── i18n/
 │   │   ├── en.json           # Traductions anglais
 │   │   └── fr.json           # Traductions francais
-│   └── tests/                # 51 fichiers de tests (601+ tests)
+│   └── tests/                # 50 fichiers de tests (test_*.py) + fixtures
 │       ├── conftest.py       # Fixtures SQLite in-memory
 │       ├── omop_mock.py      # Mock reutilisable psycopg2
 │       ├── README.md         # Documentation architecture de test
-│       └── test_*.py         # 49 fichiers de tests (csv_safety, thread_pool, rate_limit, sql_safety, ohdsi_router, etc.)
+│       └── test_*.py         # 50 fichiers de tests (csv_safety, thread_pool, rate_limit, sql_safety, ohdsi_router, etc.)
 │
 ├── frontend/
 │   ├── Dockerfile            # Node 20 build + Nginx runtime
