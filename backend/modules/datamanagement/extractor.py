@@ -99,7 +99,8 @@ def get_table_columns(conn, omop_schema: str, table_name: str) -> list[dict]:
     Return the column list for a given OMOP table.
     Each entry: {"column_name": str, "data_type": str}
     """
-    schema = _safe(omop_schema)
+    schema = omop_schema.schema_for(table_name) if hasattr(omop_schema, "schema_for") else omop_schema
+    schema = _safe(schema)
     table = _safe(table_name)
 
     sql = """
@@ -115,8 +116,12 @@ def get_table_columns(conn, omop_schema: str, table_name: str) -> list[dict]:
 
 
 def list_available_tables(conn, omop_schema: str) -> list[str]:
-    """Return OMOP tables that actually exist in the schema."""
-    schema = _safe(omop_schema)
+    """Return OMOP tables that actually exist in the schema.
+
+    All extractable tables belong to the clinical category, so they share one
+    schema; resolve it from a representative clinical table."""
+    schema = omop_schema.schema_for("person") if hasattr(omop_schema, "schema_for") else omop_schema
+    schema = _safe(schema)
     sql = """
         SELECT table_name
         FROM information_schema.tables
@@ -144,7 +149,8 @@ def build_table_sql(
 
     Returns one row per actual row in the source table (no grouping).
     """
-    schema = _safe(omop_schema)
+    schema = omop_schema.schema_for(table_name) if hasattr(omop_schema, "schema_for") else omop_schema
+    schema = _safe(schema)
     tbl = _safe(table_name)
     meta = EXTRACTABLE_TABLES.get(table_name)
     if not meta:

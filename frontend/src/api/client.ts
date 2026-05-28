@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   CdmConfig,
+  SchemaCategoriesInfo,
   SnapshotMeta,
   Snapshot,
   ComparisonResult,
@@ -183,6 +184,7 @@ export function authDownload(url: string, filename?: string) {
 // CDM endpoints
 export const cdmApi = {
   list: () => api.get<{ cdms: CdmConfig[] }>('/cdm/'),
+  categories: () => api.get<SchemaCategoriesInfo>('/cdm/categories'),
   create: (data: {
     name: string;
     db_host: string;
@@ -191,6 +193,7 @@ export const cdmApi = {
     db_user: string;
     db_password: string;
     omop_schema?: string;
+    schema_categories?: Record<string, string> | null;
   }) => api.post('/cdm/', data),
   test: (data: {
     db_host: string;

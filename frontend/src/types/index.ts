@@ -7,7 +7,24 @@ export interface CdmConfig {
   db_name: string;
   db_user: string;
   omop_schema: string;
+  /** Optional per-category schema overrides: { category_key: schema_name }. */
+  schema_categories?: Record<string, string>;
   created_at: string | null;
+}
+
+/** OMOP CDM table category keys (official CDM v5.4 grouping). */
+export type OmopSchemaCategory =
+  | 'clinical'
+  | 'health_system'
+  | 'health_economics'
+  | 'derived'
+  | 'metadata'
+  | 'vocabulary';
+
+/** Response of GET /api/cdm/categories */
+export interface SchemaCategoriesInfo {
+  categories: OmopSchemaCategory[];
+  tables: Record<string, string[]>;
 }
 
 /** Analysis snapshot metadata */
@@ -197,6 +214,8 @@ export interface ComparisonAlert {
 export interface AnalysisSettingsType {
   cdm_name: string;
   omop_schema: string;
+  /** Optional per-category schema overrides: { category_key: schema_name }. */
+  schema_categories?: Record<string, string>;
   top_unmapped_terms: number;
   top_concepts: number;
   max_records_per_person: number;

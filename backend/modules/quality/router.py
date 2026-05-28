@@ -23,7 +23,7 @@ from utils.crypto import decrypt_password
 from modules.quality.engine import get_available_domains, run_domain_analysis
 from modules.quality.comparator import compare_snapshots
 from utils.csv_safety import csv_safe
-from utils.cdm_helper import get_cdm_connection
+from utils.cdm_helper import get_cdm_connection, build_schema_map
 from config import DEFAULT_OMOP_SCHEMA
 from utils.rate_limit import limiter
 from utils.cdm_helper import check_cdm_access
@@ -62,7 +62,7 @@ def _get_cdm_analysis_params(db: Session, cdm: CdmConfig) -> dict:
         AnalysisSettings.cdm_name == cdm.name
     ).first()
     return {
-        "omop_schema": settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA,
+        "omop_schema": build_schema_map(cdm, settings),
         "top_unmapped": settings.top_unmapped_terms if settings else 50,
         "top_concepts": settings.top_concepts if settings else 50,
         "max_rpp": settings.max_records_per_person if settings else 100,

@@ -39,14 +39,20 @@ def populate_domain(
 
     # Check table exists in the CDM
     table_name = cfg["table"]
+    # Resolve the schema that holds the (clinical) domain table and, separately,
+    # the schema that holds the vocabulary `concept` table — they may differ.
+    clinical_schema = omop_schema.schema_for(table_name) if hasattr(omop_schema, "schema_for") else omop_schema
+    vocab_schema = omop_schema.schema_for("concept") if hasattr(omop_schema, "schema_for") else omop_schema
+    clinical_schema = safe_identifier(clinical_schema)
+    vocab_schema = safe_identifier(vocab_schema)
     with conn.cursor() as chk:
         chk.execute(
             "SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = %s AND table_name = %s LIMIT 1",
-            (omop_schema, table_name),
+            (clinical_schema, table_name),
         )
         if not chk.fetchone():
-            logger.info("Table %s.%s not found — skipping domain %s", omop_schema, table_name, domain_name)
+            logger.info("Table %s.%s not found — skipping domain %s", clinical_schema, table_name, domain_name)
             return 0
 
     table = safe_identifier(table_name)
@@ -57,10 +63,10 @@ def populate_domain(
         chk.execute(
             "SELECT 1 FROM information_schema.columns "
             "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
-            (omop_schema, table_name, source_col_name),
+            (clinical_schema, table_name, source_col_name),
         )
         if not chk.fetchone():
-            logger.info("Column %s.%s.%s not found — skipping domain %s", omop_schema, table_name, source_col_name, domain_name)
+            logger.info("Column %s.%s.%s not found — skipping domain %s", clinical_schema, table_name, source_col_name, domain_name)
             return 0
 
     source_col = safe_identifier(source_col_name)
@@ -84,8 +90,8 @@ def populate_domain(
                c.concept_name AS mapped_concept_name,
                c.vocabulary_id AS mapped_vocabulary_id,
                c.standard_concept AS mapped_standard_concept
-        FROM {omop_schema}.{table} t
-        LEFT JOIN {omop_schema}.concept c ON c.concept_id = t.{concept_col}
+        FROM {clinical_schema}.{table} t
+        LEFT JOIN {vocab_schema}.concept c ON c.concept_id = t.{concept_col}
         WHERE t.{source_col} IS NOT NULL
         GROUP BY t.{source_col}{sn_group}{atc_group},
                  t.{concept_col}, c.concept_name, c.vocabulary_id, c.standard_concept

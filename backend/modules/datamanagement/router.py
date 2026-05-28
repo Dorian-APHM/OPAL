@@ -28,7 +28,7 @@ from db.app_db import get_db, SessionLocal
 from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
-from utils.cdm_helper import check_cdm_access
+from utils.cdm_helper import check_cdm_access, build_schema_map
 from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA
 from modules.cohort.sql_builder import build_cohort_sql
@@ -60,11 +60,11 @@ def _assert_task_owner(request: Request, task: dict) -> None:
         return
     raise HTTPException(status_code=403, detail="Access denied: not your extraction task")
 
-def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
+def _get_omop_schema(db: Session, cdm: CdmConfig):
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
     ).first()
-    return settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    return build_schema_map(cdm, settings)
 
 
 def _get_cdm_conn(db: Session, cdm_name: str):

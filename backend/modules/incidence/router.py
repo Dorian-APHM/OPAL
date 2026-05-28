@@ -74,7 +74,7 @@ def _build_dated_cohort_sql(criteria: dict, omop_schema: str) -> str:
         return (
             f"SELECT p.person_id, op.observation_period_start_date AS cohort_start_date\n"
             f"FROM ({base_sql}) p\n"
-            f"JOIN {omop_schema}.observation_period op ON p.person_id = op.person_id"
+            f"JOIN {omop_schema.t('observation_period')} op ON p.person_id = op.person_id"
         )
 
     # Get the exit criteria
@@ -87,7 +87,7 @@ def _build_dated_cohort_sql(criteria: dict, omop_schema: str) -> str:
         f"SELECT base.person_id,\n"
         f"       MIN(t.{date_col}) AS cohort_start_date\n"
         f"FROM ({base_sql}) base\n"
-        f"JOIN {omop_schema}.{domain_table} t ON base.person_id = t.{pid_col}\n"
+        f"JOIN {omop_schema.t(domain_table)} t ON base.person_id = t.{pid_col}\n"
         f"GROUP BY base.person_id"
     )
 

@@ -63,7 +63,14 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
             ]
         }
     """
-    schema = _safe(omop_schema)
+    def _schema_for(table: str) -> str:
+        """Validated schema name that holds ``table`` (category-aware)."""
+        name = omop_schema.schema_for(table) if hasattr(omop_schema, "schema_for") else omop_schema
+        return _safe(name)
+
+    # All data-level conformity queries below touch clinical tables, which share
+    # the same category schema.
+    clinical_schema = _schema_for("person")
     checks = []
     total_steps = len(_CONFORMITY_STEPS)
     completed = 0
@@ -81,11 +88,20 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
             "condition_occurrence", "drug_exposure", "measurement",
             "procedure_occurrence", "observation", "concept", "vocabulary",
         ]
-        cur.execute("""
-            SELECT table_name FROM information_schema.tables
-            WHERE table_schema = %s AND table_type = 'BASE TABLE'
-        """, (schema,))
-        existing_tables = {r[0] for r in cur.fetchall()}
+        # Required tables may live in different schemas (e.g. concept/vocabulary
+        # in a dedicated vocabulary schema). Query each distinct schema once and
+        # check each table against the schema that holds its category.
+        present_by_schema: dict[str, set] = {}
+        for sch in {_schema_for(t) for t in required_tables}:
+            cur.execute("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = %s AND table_type = 'BASE TABLE'
+            """, (sch,))
+            present_by_schema[sch] = {r[0] for r in cur.fetchall()}
+        existing_tables = {
+            t for t in required_tables
+            if t in present_by_schema.get(_schema_for(t), set())
+        }
 
         for table in required_tables:
             present = table in existing_tables
@@ -109,7 +125,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
                     COUNT(*) FILTER (WHERE gender_concept_id = 0 OR gender_concept_id IS NULL) AS unmapped_gender,
                     COUNT(*) FILTER (WHERE year_of_birth > EXTRACT(YEAR FROM CURRENT_DATE)) AS future_births
                 FROM {}.{}
-            """).format(psysql.Identifier(schema), psysql.Identifier("person")))
+            """).format(psysql.Identifier(clinical_schema), psysql.Identifier("person")))
             row = cur.fetchone()
             total_persons = row[0]
             unmapped_gender = row[1]
@@ -122,8 +138,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
                     LEFT JOIN {}.{} op ON op.person_id = p.person_id
                     WHERE op.person_id IS NULL
                 """).format(
-                    psysql.Identifier(schema), psysql.Identifier("person"),
-                    psysql.Identifier(schema), psysql.Identifier("observation_period"),
+                    psysql.Identifier(clinical_schema), psysql.Identifier("person"),
+                    psysql.Identifier(clinical_schema), psysql.Identifier("observation_period"),
                 ))
                 orphan_persons = cur.fetchone()[0]
             else:
@@ -174,8 +190,8 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
                     (SELECT COUNT(*) FROM {}.{}
                      WHERE observation_period_end_date > CURRENT_DATE + INTERVAL '1 day') AS future_obs
             """).format(
-                psysql.Identifier(schema), psysql.Identifier("observation_period"),
-                psysql.Identifier(schema), psysql.Identifier("observation_period"),
+                psysql.Identifier(clinical_schema), psysql.Identifier("observation_period"),
+                psysql.Identifier(clinical_schema), psysql.Identifier("observation_period"),
             ))
             row = cur.fetchone()
             multi_obs = row[0]
@@ -264,7 +280,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
                             " WHERE v.visit_occurrence_id = t.{})) AS orphans"
                         ).format(
                             psysql.Identifier(visit_fk_col),
-                            psysql.Identifier(schema),
+                            psysql.Identifier(clinical_schema),
                             psysql.Identifier("visit_occurrence"),
                             psysql.Identifier(visit_fk_col),
                         )
@@ -273,7 +289,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
                 select_clause = psysql.SQL(",\n                       ").join(filter_parts)
                 cur.execute(psysql.SQL("SELECT {} FROM {}.{} t").format(
                     select_clause,
-                    psysql.Identifier(schema),
+                    psysql.Identifier(clinical_schema),
                     psysql.Identifier(table),
                 ))
                 row = cur.fetchone()
@@ -342,7 +358,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
                 cur.execute(psysql.SQL("""
                     SELECT COUNT(*) FROM {}.{}
                     WHERE visit_start_date > CURRENT_DATE + INTERVAL '1 day'
-                """).format(psysql.Identifier(schema), psysql.Identifier("visit_occurrence")))
+                """).format(psysql.Identifier(clinical_schema), psysql.Identifier("visit_occurrence")))
                 future = cur.fetchone()[0]
                 checks.append({
                     "id": "future_dates_visit_occurrence",
