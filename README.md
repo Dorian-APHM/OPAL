@@ -84,25 +84,32 @@ Les 4 services communiquent via le reseau Docker interne `opal-network`. Ports e
 
 ### Lancement
 
+La configuration passe par un fichier `.env` (ne plus exporter les variables a la main). Copiez le modele fourni et renseignez vos valeurs :
+
 ```bash
 cd opal/
 
-# Generer une cle secrete pour le chiffrement des mots de passe
-export SECRET_KEY=$(openssl rand -hex 32)
+# 1. Creer le .env a partir du modele
+cp .env.example .env
 
-# Definir le mot de passe PostgreSQL (obligatoire)
-export POSTGRES_PASSWORD=yourpassword
+# 2. Editer .env et renseigner au minimum les 3 variables obligatoires :
+#      SECRET_KEY               -> openssl rand -hex 32
+#      POSTGRES_PASSWORD        -> mot de passe de la base applicative
+#      KEYCLOAK_ADMIN_PASSWORD  -> openssl rand -base64 32 (>=8 car., 1 chiffre, 1 maj, 1 special)
+#    Pour un acces depuis d'autres postes, renseignez aussi EXTERNAL_HOSTNAME.
 
-# Lancer tous les services
+# 3. Lancer tous les services
 docker compose up -d
 ```
 
+> Toutes les variables lues par la stack sont documentees dans [.env.example](.env.example), qui fait reference. Inutile de les declarer via `export` : seul le `.env` est pris en compte par `docker compose`.
+
 L'application est accessible sur **http://localhost:3000**.
-Keycloak est accessible sur **http://localhost:8080** (admin/admin par defaut).
+Keycloak est accessible sur **http://localhost:8080** (login `KEYCLOAK_ADMIN`, mot de passe `KEYCLOAK_ADMIN_PASSWORD` definis dans votre `.env`).
 
 ### Premiers pas
 
-1. Se connecter via Keycloak (ou acceder directement si `AUTH_ENABLED=false`)
+1. Se connecter via Keycloak avec votre compte (l'authentification est active par defaut)
 2. Acceder a la page **Gestion des CDM** (`/cdm`)
 3. Renseigner les coordonnees de connexion PostgreSQL de votre base OMOP
 4. Tester la connexion
@@ -199,25 +206,29 @@ docker compose down -v       # Arret + suppression des volumes (reset complet)
 
 ### Variables d'environnement
 
+Toutes les variables se definissent dans le fichier `.env` (cf. [.env.example](.env.example), qui fait reference). Les valeurs `realm`, `client`, `AUTH_ENABLED` et les ports sont figees dans `docker-compose.yml` et ne se configurent plus via `.env`.
+
+**Obligatoires** (le `docker compose up` echoue si elles sont absentes) :
+
+| Variable | Description |
+|----------|-------------|
+| `SECRET_KEY` | Cle de chiffrement Fernet des mots de passe CDM (`openssl rand -hex 32`) |
+| `POSTGRES_PASSWORD` | Mot de passe de la base applicative `opal-db` |
+| `KEYCLOAK_ADMIN_PASSWORD` | Mot de passe admin Keycloak, realm `master` (`openssl rand -base64 32`) |
+
+**Courantes** (valeur par defaut, a adapter selon l'environnement) :
+
 | Variable | Defaut | Description |
 |----------|--------|-------------|
-| `DATABASE_URL` | `postgresql://opal:opal@opal-db:5432/opal` | Connexion a la base applicative OPAL |
-| `SECRET_KEY` | `change-me-in-production` | Cle pour le chiffrement Fernet des mots de passe CDM |
-| `AUTH_ENABLED` | `true` | Activer l'authentification Keycloak OIDC |
-| `KEYCLOAK_URL` | `http://keycloak:8080` | URL interne du serveur Keycloak |
-| `KEYCLOAK_REALM` | `opal` | Realm Keycloak |
-| `KEYCLOAK_CLIENT_ID` | `opal-frontend` | Client ID Keycloak |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Origines CORS autorisees |
-| `OMOP_POOL_MIN_CONN` | `2` | Connexions idle maintenues par pool CDM |
-| `OMOP_POOL_MAX_CONN` | `20` | Max connexions simultanees par CDM |
-| `OMOP_POOL_IDLE_TIMEOUT` | `1800` | Eviction des pools inactifs (secondes) |
-| `APP_DB_POOL_SIZE` | `10` | Taille du pool SQLAlchemy (base app) |
-| `APP_DB_MAX_OVERFLOW` | `20` | Connexions supplementaires sous charge |
-| `APP_DB_POOL_RECYCLE` | `1800` | Recyclage des connexions app (secondes) |
-| `ENVIRONMENT` | `development` | Mode d'execution (`development` ou `production`) |
-| `OMOP_STATEMENT_TIMEOUT_MS` | `1800000` | Timeout requetes OMOP en millisecondes (30 min) |
-| `MAX_WORKER_THREADS` | `16` | Threads max pour taches background |
-| `KEYCLOAK_ISSUER_URL` | *(vide)* | URL issuer Keycloak (si different de `KEYCLOAK_URL`) |
+| `EXTERNAL_HOSTNAME` | `localhost` | Hostname/IP public du serveur. Pilote l'issuer Keycloak ET les origines CORS. A regler des que l'app est accedee depuis d'autres postes |
+| `KEYCLOAK_ADMIN` | `admin` | Login du compte admin Keycloak |
+| `POSTGRES_USER` | `opal` | Utilisateur de la base applicative |
+| `POSTGRES_DB` | `opal` | Nom de la base applicative |
+| `DB_EXTERNAL_PORT` | `5434` | Port hote expose pour la base applicative |
+| `ENVIRONMENT` | `development` | `development` ou `production` |
+| `KEYCLOAK_LDAP_ENABLED` | `false` | Activer la federation LDAP Keycloak |
+
+**Avancees** (optionnelles) : proxy (`HTTP_PROXY` / `HTTPS_PROXY`), orchestration OHDSI (`DOCKER_GID`, `OHDSI_*`) et tuning de performance — toutes documentees et commentees dans [.env.example](.env.example).
 
 ### Parametres d'analyse (par CDM)
 
