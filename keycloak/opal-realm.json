@@ -131,6 +131,7 @@
           "temporary": true
         }
       ],
+      "requiredActions": ["UPDATE_PASSWORD"],
       "realmRoles": ["admin"]
     }
   ],
