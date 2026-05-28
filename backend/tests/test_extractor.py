@@ -1,7 +1,7 @@
-"""Tests for datamanagement/extractor.py — Dataset extraction SQL builder."""
+"""Tests for datamanagement/extractor.py — per-table raw extraction SQL + BDR schema."""
 import pytest
 from modules.datamanagement.extractor import (
-    _safe, _agg_expr, build_extraction_sql, EXTRACTABLE_TABLES,
+    _safe, build_table_sql, build_schema, EXTRACTABLE_TABLES,
     get_table_columns, list_available_tables,
 )
 from tests.omop_mock import make_omop_conn
@@ -16,28 +16,9 @@ class TestSafe:
         assert _safe("Table_123") == "Table_123"
 
     def test_rejects_injection(self):
-        with pytest.raises(ValueError):
-            _safe("table; DROP--")
-        with pytest.raises(ValueError):
-            _safe("with spaces")
-        with pytest.raises(ValueError):
-            _safe("123_starts_with_digit")
-        with pytest.raises(ValueError):
-            _safe("")
-
-
-# ── _agg_expr ──
-
-class TestAggExpr:
-    def test_returns_string_agg(self):
-        result = _agg_expr("condition_concept_id")
-        assert "string_agg" in result
-        assert "DISTINCT" in result
-        assert "condition_concept_id" in result
-
-    def test_validates_column(self):
-        with pytest.raises(ValueError):
-            _agg_expr("bad column name")
+        for bad in ("table; DROP--", "with spaces", "123_starts_with_digit", ""):
+            with pytest.raises(ValueError):
+                _safe(bad)
 
 
 # ── EXTRACTABLE_TABLES constant ──
@@ -76,8 +57,7 @@ class TestGetTableColumns:
 
     def test_empty(self):
         conn = make_omop_conn([[]])
-        result = get_table_columns(conn, "omop_cdm", "nonexistent")
-        assert result == []
+        assert get_table_columns(conn, "omop_cdm", "nonexistent") == []
 
     def test_invalid_schema(self):
         with pytest.raises(ValueError):
@@ -93,112 +73,99 @@ class TestListAvailableTables:
                 {"table_name": "person"},
                 {"table_name": "visit_occurrence"},
                 {"table_name": "condition_occurrence"},
-                {"table_name": "concept"},  # not extractable
-                {"table_name": "vocabulary"},  # not extractable
+                {"table_name": "concept"},      # not extractable
+                {"table_name": "vocabulary"},   # not extractable
             ],
         ])
         result = list_available_tables(conn, "omop_cdm")
-        assert "person" in result
-        assert "visit_occurrence" in result
-        assert "condition_occurrence" in result
-        assert "concept" not in result
-        assert "vocabulary" not in result
+        assert {"person", "visit_occurrence", "condition_occurrence"} <= set(result)
+        assert "concept" not in result and "vocabulary" not in result
 
     def test_empty_schema(self):
-        conn = make_omop_conn([[]])
-        result = list_available_tables(conn, "omop_cdm")
-        assert result == []
+        assert list_available_tables(make_omop_conn([[]]), "omop_cdm") == []
 
 
-# ── build_extraction_sql ──
+# ── build_table_sql (per-table raw extraction) ──
 
-class TestBuildExtractionSql:
-    def test_empty_selections_raises(self):
-        with pytest.raises(ValueError, match="No tables selected"):
-            build_extraction_sql("SELECT 1", "omop_cdm", [], False, False)
-
-    def test_single_direct_table(self):
-        """Extracting person columns should produce a direct join."""
-        sql = build_extraction_sql(
-            "SELECT person_id FROM omop_cdm.person",
-            "omop_cdm",
-            [{"table": "person", "columns": ["person_id", "year_of_birth", "gender_concept_id"]}],
-            same_visit_only=False,
-            cohort_has_visit=False,
+class TestBuildTableSql:
+    def test_person_direct_join(self):
+        sql = build_table_sql(
+            "SELECT person_id FROM omop_cdm.person", "omop_cdm", "person",
+            ["person_id", "year_of_birth", "gender_concept_id"],
+            same_visit_only=False, cohort_has_visit=False,
         )
         assert "WITH cohort AS" in sql
-        assert "base AS" in sql
-        assert "year_of_birth" in sql
-        assert "gender_concept_id" in sql
-        assert "LEFT JOIN omop_cdm.person" in sql
+        assert "FROM omop_cdm.person t" in sql
+        assert "t.year_of_birth" in sql and "t.gender_concept_id" in sql
+        assert "t.person_id IN (SELECT DISTINCT person_id FROM cohort)" in sql
+        assert "ORDER BY t.person_id" in sql
 
-    def test_clinical_table_aggregated(self):
-        """Clinical tables should be pre-aggregated."""
-        sql = build_extraction_sql(
-            "SELECT person_id FROM cohort",
-            "omop_cdm",
-            [{"table": "condition_occurrence",
-              "columns": ["person_id", "visit_occurrence_id", "condition_concept_id"]}],
-            same_visit_only=False,
-            cohort_has_visit=False,
+    def test_clinical_person_filter(self):
+        sql = build_table_sql(
+            "SELECT person_id FROM cohort", "omop_cdm", "condition_occurrence",
+            ["person_id", "condition_concept_id"],
+            same_visit_only=False, cohort_has_visit=False,
         )
-        assert "agg_condition_occurrence" in sql
-        assert "string_agg" in sql.lower() or "GROUP BY" in sql
+        assert "FROM omop_cdm.condition_occurrence t" in sql
+        assert "t.person_id IN (SELECT DISTINCT person_id FROM cohort)" in sql
 
-    def test_same_visit_filter(self):
-        """same_visit_only uses cohort visit IDs directly."""
-        sql = build_extraction_sql(
-            "SELECT person_id, visit_occurrence_id FROM cohort",
-            "omop_cdm",
-            [{"table": "visit_occurrence",
-              "columns": ["visit_occurrence_id", "visit_start_date"]}],
-            same_visit_only=True,
-            cohort_has_visit=True,
+    def test_clinical_same_visit_filter(self):
+        sql = build_table_sql(
+            "SELECT person_id, visit_occurrence_id FROM cohort", "omop_cdm",
+            "condition_occurrence", ["condition_concept_id"],
+            same_visit_only=True, cohort_has_visit=True,
         )
-        assert "WHERE c.visit_occurrence_id IS NOT NULL" in sql
+        assert "(t.person_id, t.visit_occurrence_id) IN" in sql
+        assert "visit_occurrence_id IS NOT NULL" in sql
 
-    def test_multiple_tables(self):
-        """Multiple tables produce correct JOINs."""
-        sql = build_extraction_sql(
-            "SELECT person_id FROM cohort",
-            "omop_cdm",
-            [
-                {"table": "person", "columns": ["person_id", "year_of_birth"]},
-                {"table": "condition_occurrence",
-                 "columns": ["person_id", "visit_occurrence_id", "condition_concept_id"]},
-            ],
-            same_visit_only=False,
-            cohort_has_visit=False,
-        )
-        assert "LEFT JOIN omop_cdm.person" in sql
-        assert "agg_condition_occurrence" in sql
-
-    def test_invalid_identifier_raises(self):
+    def test_invalid_column_raises(self):
         with pytest.raises(ValueError):
-            build_extraction_sql(
-                "SELECT 1", "omop_cdm",
-                [{"table": "valid_table", "columns": ["bad column"]}],
-                False, False,
-            )
+            build_table_sql("SELECT 1", "omop_cdm", "person", ["bad column"], False, False)
 
-    def test_only_join_keys_selected(self):
-        """When only join keys are selected, a count column is added."""
-        sql = build_extraction_sql(
-            "SELECT person_id FROM cohort",
-            "omop_cdm",
-            [{"table": "condition_occurrence",
-              "columns": ["person_id", "visit_occurrence_id"]}],
-            same_visit_only=False,
-            cohort_has_visit=False,
-        )
-        assert "count" in sql.lower()
+    def test_unknown_table_raises(self):
+        with pytest.raises(ValueError, match="Unknown table"):
+            build_table_sql("SELECT 1", "omop_cdm", "concept", ["concept_id"], False, False)
 
-    def test_order_by_present(self):
-        sql = build_extraction_sql(
-            "SELECT person_id FROM cohort",
-            "omop_cdm",
-            [{"table": "person", "columns": ["person_id", "year_of_birth"]}],
-            same_visit_only=False,
-            cohort_has_visit=False,
+    def test_invalid_schema_raises(self):
+        with pytest.raises(ValueError):
+            build_table_sql("SELECT 1", "bad schema", "person", ["person_id"], False, False)
+
+
+# ── build_schema (BDR relational schema) ──
+
+class TestBuildSchema:
+    def test_tables_and_pk(self):
+        schema = build_schema([
+            {"table": "person", "columns": ["person_id", "year_of_birth"]},
+            {"table": "visit_occurrence", "columns": ["visit_occurrence_id", "person_id"]},
+            {"table": "condition_occurrence", "columns": ["person_id", "condition_concept_id"]},
+        ])
+        by_name = {t["name"]: t for t in schema["tables"]}
+        assert by_name["person"]["pk"] == "person_id"
+        assert by_name["visit_occurrence"]["pk"] == "visit_occurrence_id"
+        assert by_name["condition_occurrence"]["pk"] == "condition_occurrence_id"
+
+    def test_relationships_on_shared_keys(self):
+        schema = build_schema([
+            {"table": "person", "columns": ["person_id"]},
+            {"table": "condition_occurrence", "columns": ["person_id", "condition_concept_id"]},
+        ])
+        rels = schema["relationships"]
+        assert any(
+            r["from_column"] == "person_id" and r["to_column"] == "person_id"
+            and {r["from_table"], r["to_table"]} == {"person", "condition_occurrence"}
+            for r in rels
         )
-        assert "ORDER BY" in sql
+
+    def test_with_all_columns_includes_data_type_and_selected(self):
+        schema = build_schema(
+            [{"table": "person", "columns": ["person_id"]}],
+            all_columns={"person": [
+                {"column_name": "person_id", "data_type": "integer"},
+                {"column_name": "year_of_birth", "data_type": "integer"},
+            ]},
+        )
+        cols = {c["name"]: c for c in schema["tables"][0]["columns"]}
+        assert cols["person_id"]["data_type"] == "integer"
+        assert cols["person_id"]["selected"] is True
+        assert cols["year_of_birth"]["selected"] is False
