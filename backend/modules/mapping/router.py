@@ -1554,6 +1554,57 @@ def mapping_history(
     }
 
 
+@router.get("/history/{cdm_name}/export")
+def export_mapping_history(
+    cdm_name: str,
+    domain: str | None = None,
+    action: str | None = None,
+    user_filter: str | None = Query(default=None, alias="user"),
+    db: Session = Depends(get_db),
+):
+    """Export the mapping decision history as CSV (same filters as the history view)."""
+    query = db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name)
+    if domain:
+        query = query.filter(MappingDecision.domain == domain)
+    if action:
+        query = query.filter(MappingDecision.action == action)
+    if user_filter:
+        query = query.filter(MappingDecision.user == user_filter)
+    query = query.order_by(desc(MappingDecision.created_at))
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "domain", "source_value", "source_name", "action",
+        "target_concept_id", "target_concept_name", "target_vocabulary_id",
+        "previous_concept_id", "suggestion_source", "confidence_score",
+        "user", "reason", "created_at",
+    ])
+    for d in query.all():
+        writer.writerow([
+            csv_safe(d.domain or ""),
+            csv_safe(d.source_value or ""),
+            csv_safe(d.source_name or ""),
+            csv_safe(d.action or ""),
+            d.target_concept_id or "",
+            csv_safe(d.target_concept_name or ""),
+            csv_safe(d.target_vocabulary_id or ""),
+            d.previous_concept_id or "",
+            csv_safe(d.suggestion_source or ""),
+            d.confidence_score if d.confidence_score is not None else "",
+            csv_safe(d.user or ""),
+            csv_safe(d.reason or ""),
+            d.created_at.isoformat() if d.created_at else "",
+        ])
+    output.seek(0)
+    filename = f"mapping_history_{cdm_name}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.post("/history/{decision_id}/rollback")
 def rollback_decision(decision_id: int, request: Request, db: Session = Depends(get_db)):
     """Rollback a specific mapping decision (own decisions only)."""

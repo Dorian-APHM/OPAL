@@ -397,6 +397,14 @@ export const mappingApi = {
     ),
   exportStcmUrl: (cdmName: string, domain: string) =>
     `/api/mapping/apply/export/${cdmName}/${domain}`,
+  exportHistoryUrl: (cdmName: string, domain?: string, action?: string, user?: string) => {
+    const p = new URLSearchParams();
+    if (domain) p.set('domain', domain);
+    if (action) p.set('action', action);
+    if (user) p.set('user', user);
+    const qs = p.toString();
+    return `/api/mapping/history/${cdmName}/export${qs ? `?${qs}` : ''}`;
+  },
   history: (cdmName: string, domain?: string, action?: string, page?: number, pageSize?: number, user?: string, sortBy?: string | null, sortDir?: 'asc' | 'desc') =>
     api.get<{ total: number; page: number; total_pages: number; users: string[]; items: MappingDecisionEntry[] }>(
       `/mapping/history/${cdmName}`, { params: { domain: domain || '', action: action || '', user: user || '', page: page || 1, page_size: pageSize || 50, sort_by: sortBy || '', sort_dir: sortDir || 'asc' } }

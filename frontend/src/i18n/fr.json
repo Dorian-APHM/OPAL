@@ -281,6 +281,7 @@
     "date": "Date",
     "export_history": "Exporter",
     "decisions": "décisions",
+    "export_history": "Exporter CSV",
     "apply_to": "Appliquer à",
     "approved_decisions": "Décisions approuvées",
     "impacted_rows": "Lignes impactées",

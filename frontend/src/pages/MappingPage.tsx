@@ -1815,6 +1815,17 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             placeholder="All users"
           />
           <Button icon={<RefreshCw className="h-4 w-4" />} size="small" onClick={load} loading={loading} />
+          <Button
+            icon={<Download className="h-4 w-4" />}
+            size="small"
+            variant="link"
+            onClick={() => authDownload(
+              mappingApi.exportHistoryUrl(cdmName, filterDomain || undefined, filterAction || undefined, filterUser || undefined),
+              `mapping_history_${cdmName}.csv`,
+            )}
+          >
+            {t('mapping.export_history', 'Export CSV')}
+          </Button>
           <span className="text-text-muted text-sm">{total} {t('mapping.decisions', 'decisions')}</span>
 
           <span className="border-l border-glass-border pl-3 flex items-center gap-2">

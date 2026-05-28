@@ -182,7 +182,8 @@ class TestGetMappingStats:
 # ── Main function test ──
 
 class TestRunClinicalDomainAnalysis:
-    def test_condition_domain(self):
+    @patch("utils.cdm_helper._column_exists", return_value=True)
+    def test_condition_domain(self, mock_col_exists):
         from modules.quality.domains.clinical import run_clinical_domain_analysis
 
         responses = [

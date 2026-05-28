@@ -18,7 +18,7 @@ describe('API Client', () => {
   });
 
   it('has request timeout configured', () => {
-    expect(api.defaults.timeout).toBe(30000);
+    expect(api.defaults.timeout).toBe(120000);
   });
 
   it('has request interceptor for auth', () => {
