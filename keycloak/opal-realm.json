@@ -127,7 +127,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "changeme",
+          "value": "Changeme1!",
           "temporary": true
         }
       ],
