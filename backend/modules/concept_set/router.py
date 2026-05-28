@@ -6,7 +6,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.cdm_helper import check_cdm_access
+from utils.cdm_helper import check_cdm_access, build_schema_map
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -31,7 +31,7 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     password = decrypt_password(cdm.db_password_encrypted)
     conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
-    schema = safe_identifier(settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA)
+    schema = build_schema_map(cdm, settings)
     return conn, schema
 
 
@@ -205,7 +205,7 @@ def resolve_concept_set(concept_set_id: int, request: Request, cdm_name: str | N
             sql = psysql.SQL(
                 "SELECT DISTINCT descendant_concept_id FROM {}.{} "
                 "WHERE ancestor_concept_id = ANY(%s)"
-            ).format(psysql.Identifier(omop_schema), psysql.Identifier('concept_ancestor'))
+            ).format(psysql.Identifier(omop_schema.schema_for('concept_ancestor')), psysql.Identifier('concept_ancestor'))
             cur.execute(sql, (list(expand_ids),))
             for row in cur.fetchall():
                 all_ids.add(row[0])
@@ -247,7 +247,7 @@ def concept_set_counts(concept_set_id: int, body: dict, request: Request, db=Dep
                 ).format(
                     concept_col=psysql.Identifier(concept_col),
                     pid_col=psysql.Identifier(pid_col),
-                    schema=psysql.Identifier(omop_schema),
+                    schema=psysql.Identifier(omop_schema.schema_for(table)),
                     table=psysql.Identifier(table),
                     concept_col2=psysql.Identifier(concept_col),
                     concept_col3=psysql.Identifier(concept_col),

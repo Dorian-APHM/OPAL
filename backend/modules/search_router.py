@@ -81,7 +81,7 @@ def global_search(
                                 FROM {}.{}
                                 WHERE concept_id = %s
                                 LIMIT %s
-                            """).format(psysql.Identifier(schema), psysql.Identifier('concept'))
+                            """).format(psysql.Identifier(schema.schema_for('concept')), psysql.Identifier('concept'))
                             cur.execute(sql, (int(search_term), limit))
                         else:
                             sql = psysql.SQL("""
@@ -94,7 +94,7 @@ def global_search(
                                     CASE WHEN standard_concept = 'S' THEN 0 ELSE 1 END,
                                     LENGTH(concept_name)
                                 LIMIT %s
-                            """).format(psysql.Identifier(schema), psysql.Identifier('concept'))
+                            """).format(psysql.Identifier(schema.schema_for('concept')), psysql.Identifier('concept'))
                             cur.execute(sql, (f"%{escaped_term}%", f"%{escaped_term}%", limit))
                         results["concepts"] = [
                             {
@@ -140,7 +140,7 @@ def global_search(
                                 """).format(
                                     source_col=psysql.Identifier(source_col),
                                     source_name_select=source_name_select,
-                                    schema=psysql.Identifier(schema),
+                                    schema=psysql.Identifier(schema.schema_for(table)),
                                     table=psysql.Identifier(table),
                                     where_clause=where_clause,
                                     source_col_group=psysql.Identifier(source_col),

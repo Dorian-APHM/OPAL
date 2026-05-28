@@ -19,7 +19,7 @@ from db.models import CdmConfig, AnalysisSettings
 from db.omop_connector import test_omop_connection, invalidate_pool
 from utils.crypto import encrypt_password, decrypt_password
 from utils.notifications import notify
-from config import DEFAULT_OMOP_SCHEMA
+from config import DEFAULT_OMOP_SCHEMA, OMOP_SCHEMA_CATEGORIES, OMOP_TABLE_CATEGORIES
 from utils.rate_limit import limiter
 from modules.ohdsi.router import ensure_cdm_output_dirs
 
@@ -76,6 +76,31 @@ def _validate_db_host(host: str) -> str:
     return host
 
 
+_SCHEMA_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_schema_categories(v):
+    """Validate a {category: schema_name} mapping.
+
+    Drops empty values (those fall back to the default omop_schema), rejects
+    unknown category keys and invalid schema identifiers. Returns None when the
+    resulting map is empty."""
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise ValueError("schema_categories must be an object")
+    cleaned: dict[str, str] = {}
+    for category, schema in v.items():
+        if category not in OMOP_SCHEMA_CATEGORIES:
+            raise ValueError(f"Unknown schema category: {category}")
+        if schema is None or schema == "":
+            continue  # empty → falls back to default omop_schema
+        if not isinstance(schema, str) or not _SCHEMA_NAME_RE.match(schema) or len(schema) > 63:
+            raise ValueError(f"Invalid schema name for category '{category}'")
+        cleaned[category] = schema
+    return cleaned or None
+
+
 class CdmCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     db_host: str = Field(..., min_length=1, max_length=255)
@@ -84,10 +109,15 @@ class CdmCreateRequest(BaseModel):
     db_user: str = Field(..., min_length=1, max_length=255)
     db_password: str = Field(..., min_length=1, max_length=1000)
     omop_schema: str = Field(default=DEFAULT_OMOP_SCHEMA, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    schema_categories: dict[str, str] | None = Field(default=None)
 
     @validator("db_host")
     def validate_host(cls, v):
         return _validate_db_host(v)
+
+    @validator("schema_categories")
+    def validate_schema_categories(cls, v):
+        return _validate_schema_categories(v)
 
 
 class CdmTestRequest(BaseModel):
@@ -109,6 +139,7 @@ class CdmUpdateRequest(BaseModel):
     db_user: str | None = Field(default=None, max_length=255)
     db_password: str | None = Field(default=None, max_length=1000)
     omop_schema: str | None = Field(default=None, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    schema_categories: dict[str, str] | None = Field(default=None)
 
     @validator("db_host")
     def validate_host(cls, v):
@@ -116,14 +147,23 @@ class CdmUpdateRequest(BaseModel):
             return _validate_db_host(v)
         return v
 
+    @validator("schema_categories")
+    def validate_schema_categories(cls, v):
+        return _validate_schema_categories(v)
+
 
 class SettingsUpdateRequest(BaseModel):
     omop_schema: str | None = Field(default=None, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    schema_categories: dict[str, str] | None = Field(default=None)
     top_unmapped_terms: int | None = Field(default=None, ge=1, le=1000)
     top_concepts: int | None = Field(default=None, ge=1, le=1000)
     max_records_per_person: int | None = Field(default=None, ge=1, le=10000)
     max_observation_months: int | None = Field(default=None, ge=1, le=1200)
     comparison_alert_threshold: float | None = Field(default=None, ge=0.0, le=100.0)
+
+    @validator("schema_categories")
+    def validate_schema_categories(cls, v):
+        return _validate_schema_categories(v)
 
 
 @router.get("/")
@@ -140,10 +180,22 @@ def list_cdms(db: Session = Depends(get_db)):
                 "db_name": c.db_name,
                 "db_user": c.db_user,
                 "omop_schema": c.omop_schema,
+                "schema_categories": c.schema_categories or {},
                 "created_at": c.created_at.isoformat() if c.created_at else None,
             }
             for c in cdms
         ]
+    }
+
+
+@router.get("/categories")
+def list_schema_categories():
+    """Return the OMOP CDM table categories and the tables they contain.
+
+    Used by the CDM config UI to render an optional per-category schema input."""
+    return {
+        "categories": OMOP_SCHEMA_CATEGORIES,
+        "tables": OMOP_TABLE_CATEGORIES,
     }
 
 
@@ -165,6 +217,7 @@ def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(ge
         db_user=req.db_user,
         db_password_encrypted=encrypt_password(req.db_password),
         omop_schema=req.omop_schema,
+        schema_categories=req.schema_categories,
     )
     db.add(cdm)
 
@@ -246,6 +299,8 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, request: Request, db: Sessi
         cdm.db_password_encrypted = encrypt_password(req.db_password)
     if req.omop_schema is not None:
         cdm.omop_schema = req.omop_schema
+    if "schema_categories" in req.model_fields_set:
+        cdm.schema_categories = req.schema_categories
 
     notify(
         db, username, "cdm_updated",
@@ -330,9 +385,13 @@ def get_cdm_settings(cdm_name: str, db: Session = Depends(get_db)):
     """Get analysis settings for a CDM."""
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
     if not settings:
+        # Fall back to the CDM config's own schema settings when no analysis
+        # settings row exists yet.
+        cdm = db.query(CdmConfig).filter(CdmConfig.name == cdm_name).first()
         return {
             "cdm_name": cdm_name,
-            "omop_schema": DEFAULT_OMOP_SCHEMA,
+            "omop_schema": (cdm.omop_schema if cdm else None) or DEFAULT_OMOP_SCHEMA,
+            "schema_categories": (cdm.schema_categories if cdm else None) or {},
             "top_unmapped_terms": 50,
             "top_concepts": 50,
             "max_records_per_person": 100,
@@ -342,6 +401,7 @@ def get_cdm_settings(cdm_name: str, db: Session = Depends(get_db)):
     return {
         "cdm_name": settings.cdm_name,
         "omop_schema": settings.omop_schema,
+        "schema_categories": settings.schema_categories or {},
         "top_unmapped_terms": settings.top_unmapped_terms,
         "top_concepts": settings.top_concepts,
         "max_records_per_person": settings.max_records_per_person,
@@ -365,6 +425,8 @@ def update_cdm_settings(cdm_name: str, req: SettingsUpdateRequest, db: Session =
 
     if req.omop_schema is not None:
         settings.omop_schema = req.omop_schema
+    if "schema_categories" in req.model_fields_set:
+        settings.schema_categories = req.schema_categories
     if req.top_unmapped_terms is not None:
         settings.top_unmapped_terms = req.top_unmapped_terms
     if req.top_concepts is not None:

@@ -84,13 +84,18 @@ def _get_records_per_person(cur, schema: str, table: str, person_id: str, max_bi
 
 
 def _get_top_concepts(cur, schema: str, table: str, concept_id: str,
-                      source_value: str, limit: int) -> list:
+                      source_value: str, limit: int, concept_schema: str | None = None) -> list:
     """Top N concepts by record count.
 
     Uses a LATERAL subquery to cap source_values at 10 per concept,
     avoiding a full STRING_AGG(DISTINCT) over potentially thousands
     of values per concept (P7 fix).
+
+    ``concept_schema`` is the schema holding the vocabulary ``concept`` table;
+    it defaults to ``schema`` when the vocabulary lives in the same schema.
     """
+    if concept_schema is None:
+        concept_schema = schema
     cur.execute(psysql.SQL(
         "SELECT"
         "  top.concept_id,"
@@ -105,7 +110,7 @@ def _get_top_concepts(cur, schema: str, table: str, concept_id: str,
         "    COUNT(*) AS n_records,"
         "    COUNT(DISTINCT t.person_id) AS n_persons"
         "  FROM {schema}.{table} t"
-        "  JOIN {schema}.{concept_tbl} c ON t.{concept_id} = c.concept_id"
+        "  JOIN {concept_schema}.{concept_tbl} c ON t.{concept_id} = c.concept_id"
         "  WHERE t.{concept_id} != 0"
         "  GROUP BY t.{concept_id}, c.concept_name"
         "  ORDER BY n_records DESC"
@@ -123,6 +128,7 @@ def _get_top_concepts(cur, schema: str, table: str, concept_id: str,
     ).format(
         concept_id=psysql.Identifier(concept_id),
         schema=psysql.Identifier(schema),
+        concept_schema=psysql.Identifier(concept_schema),
         table=psysql.Identifier(table),
         concept_tbl=psysql.Identifier("concept"),
         source_value=psysql.Identifier(source_value),
@@ -246,7 +252,12 @@ def run_clinical_domain_analysis(
     concept_id = safe_identifier(cfg["concept_id"])
     source_value = safe_identifier(cfg["source_value"])
     source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-    schema = safe_identifier(omop_schema)
+    # Resolve the schema that holds this domain's table and, separately, the
+    # schema that holds the vocabulary `concept` table (they may differ).
+    schema = omop_schema.schema_for(cfg["table"]) if hasattr(omop_schema, "schema_for") else omop_schema
+    schema = safe_identifier(schema)
+    concept_schema = omop_schema.schema_for("concept") if hasattr(omop_schema, "schema_for") else schema
+    concept_schema = safe_identifier(concept_schema)
 
     res = {
         "domain": domain_name,
@@ -262,7 +273,8 @@ def run_clinical_domain_analysis(
             cur, schema, table, person_id, max_bin=max_records_per_person
         )
         res["achilles_like"]["top_concepts"] = _get_top_concepts(
-            cur, schema, table, concept_id, source_value, limit=top_concepts
+            cur, schema, table, concept_id, source_value, limit=top_concepts,
+            concept_schema=concept_schema,
         )
         res["mapping"] = _get_mapping_stats(
             cur, schema, table, source_value, concept_id,

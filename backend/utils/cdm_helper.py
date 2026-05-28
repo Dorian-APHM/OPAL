@@ -13,13 +13,81 @@ from db.models import CdmConfig, AnalysisSettings
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
 from utils.sql_safety import safe_identifier
-from config import DEFAULT_OMOP_SCHEMA
+from config import DEFAULT_OMOP_SCHEMA, TABLE_CATEGORY
+
+
+class SchemaMap(str):
+    """A CDM schema reference that resolves the right schema per OMOP table.
+
+    Real-world OMOP deployments may store different categories of tables
+    (clinical, vocabulary, …) in different PostgreSQL schemas. ``SchemaMap``
+    subclasses ``str`` so that, used directly as a string, it behaves exactly
+    like the CDM's default schema — preserving the previous single-schema
+    behavior everywhere it isn't yet category-aware. Use :meth:`t` to build a
+    fully-qualified ``schema.table`` reference for an f-string, or
+    :meth:`schema_for` to obtain just the schema name (e.g. to wrap in a
+    ``psycopg2.sql.Identifier``).
+
+    Example::
+
+        f"SELECT * FROM {schema.t('concept')}"     # vocab_schema.concept
+        psysql.Identifier(schema.schema_for('person'))  # clinical schema
+    """
+
+    def __new__(cls, default_schema: str, category_schemas: dict | None = None):
+        default = safe_identifier(default_schema)
+        obj = super().__new__(cls, default)
+        cats: dict[str, str] = {}
+        for category, sch in (category_schemas or {}).items():
+            if sch:
+                cats[category] = safe_identifier(sch)
+        obj._category_schemas = cats
+        return obj
+
+    def schema_for(self, table: str) -> str:
+        """Return the validated schema name that holds ``table``.
+
+        Falls back to the default schema when the table's category has no
+        explicit override (or the table is unknown)."""
+        category = TABLE_CATEGORY.get(table)
+        if category is not None:
+            override = self._category_schemas.get(category)
+            if override:
+                return override
+        return str(self)
+
+    def t(self, table: str) -> str:
+        """Return the fully-qualified ``schema.table`` reference for ``table``."""
+        return f"{self.schema_for(table)}.{table}"
+
+
+def build_schema_map(cdm: CdmConfig, settings: AnalysisSettings | None = None) -> SchemaMap:
+    """Build a :class:`SchemaMap` from a CDM config and its analysis settings.
+
+    The default schema and per-category overrides defined in AnalysisSettings
+    take precedence over those on the CdmConfig."""
+    default = None
+    if settings is not None and getattr(settings, "omop_schema", None):
+        default = settings.omop_schema
+    if not default:
+        default = (cdm.omop_schema if cdm is not None else None) or DEFAULT_OMOP_SCHEMA
+
+    cats: dict[str, str] = {}
+    if cdm is not None and getattr(cdm, "schema_categories", None):
+        cats.update(cdm.schema_categories)
+    if settings is not None and getattr(settings, "schema_categories", None):
+        cats.update(settings.schema_categories)
+    return SchemaMap(default, cats)
 
 
 def get_cdm_connection(db: Session, cdm_name: str):
     """
     Look up a CDM by name, decrypt credentials, open a pooled connection,
-    and return (connection, validated_schema).
+    and return (connection, schema_map).
+
+    ``schema_map`` is a :class:`SchemaMap` that resolves the right schema for
+    each OMOP table category. It behaves like the default schema string when
+    used directly.
 
     Raises HTTPException 404 if CDM not found.
     """
@@ -29,8 +97,7 @@ def get_cdm_connection(db: Session, cdm_name: str):
     password = decrypt_password(cdm.db_password_encrypted)
     conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
-    raw_schema = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
-    schema = safe_identifier(raw_schema)
+    schema = build_schema_map(cdm, settings)
     return conn, schema
 
 
@@ -77,12 +144,16 @@ def get_domain_config(conn, schema: str, domain: str) -> dict:
     # Check optional columns that may be absent from certain CDMs
     optional_cols = ["source_name", "source_concept_id", "source_atc"]
     table = cfg.get("table", "")
+    # Resolve the schema that actually holds this domain's table (the table may
+    # live in a different schema than the default when per-category schemas are
+    # configured).
+    table_schema = schema.schema_for(table) if isinstance(schema, SchemaMap) else schema
     for opt in optional_cols:
         col_name = cfg.get(opt)
-        if col_name and not _column_exists(conn, schema, table, col_name):
+        if col_name and not _column_exists(conn, table_schema, table, col_name):
             _logger.info(
                 "Optional column %s.%s.%s not found — disabling '%s' for domain %s",
-                schema, table, col_name, opt, domain,
+                table_schema, table, col_name, opt, domain,
             )
             del cfg[opt]
 

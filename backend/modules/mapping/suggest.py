@@ -39,6 +39,10 @@ def suggest_mappings(
     Strategies 1-3 (exact, relationship, ingredient) always run (fast).
     Strategies 4-5 (fuzzy, keyword, contextual) can be toggled via flags.
     """
+    # Every suggestion query hits vocabulary tables (concept,
+    # concept_relationship, concept_synonym) — resolve to the vocabulary schema.
+    if hasattr(omop_schema, "schema_for"):
+        omop_schema = omop_schema.schema_for("concept")
     omop_schema = safe_identifier(omop_schema)
     suggestions = []
     seen_concept_ids = set()
