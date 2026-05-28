@@ -6,7 +6,7 @@ import {
   Shield, ClipboardList,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { cdmApi, cdmAccessApi } from '../../api/client';
+import { cdmApi, cdmAccessApi, ohdsiApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
 import { Select } from '../ui/Select';
@@ -44,6 +44,8 @@ export default function Sidebar({ selectedCdm, onCdmChange, collapsed, onCollaps
   const navigate = useNavigate();
   const location = useLocation();
   const [cdms, setCdms] = useState<CdmConfig[]>([]);
+  // OHDSI is opt-in (server-side OHDSI_MODE). Hide the tab unless enabled.
+  const [ohdsiEnabled, setOhdsiEnabled] = useState(false);
   const { username, roles, logout, hasPageAccess, authenticated, token } = useAuth();
 
   useEffect(() => {
@@ -51,12 +53,15 @@ export default function Sidebar({ selectedCdm, onCdmChange, collapsed, onCollaps
       cdmAccessApi.getAccessibleCdms()
         .then((res) => setCdms(res.data.cdms.map((name: string) => ({ name } as CdmConfig))))
         .catch(() => cdmApi.list().then((r) => setCdms(r.data.cdms)).catch(() => {}));
+      ohdsiApi.config()
+        .then((res) => setOhdsiEnabled(!!res.data.enabled))
+        .catch(() => setOhdsiEnabled(false));
     }
   }, [authenticated, token]);
 
   const menuItems = useMemo(
-    () => menuConfig.filter((item) => hasPageAccess(item.key)),
-    [roles, hasPageAccess, i18n.language]
+    () => menuConfig.filter((item) => hasPageAccess(item.key) && (item.key !== '/ohdsi' || ohdsiEnabled)),
+    [roles, hasPageAccess, i18n.language, ohdsiEnabled]
   );
 
   const toggleLang = () => {

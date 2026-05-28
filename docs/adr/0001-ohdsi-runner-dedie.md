@@ -101,8 +101,9 @@ outils OHDSI en sous-processus, et que le backend pilote via une API HTTP intern
    - Authentification par **token partagé** (`OHDSI_RUNNER_TOKEN`) sur le réseau interne.
 
 4. **Deux modes seulement, pilotés par `OHDSI_MODE`** :
-   - `OHDSI_MODE=off` (**défaut**) : runner non démarré, routeur OHDSI non enregistré
-     côté backend, onglet masqué côté frontend.
+   - `OHDSI_MODE=off` (**défaut**) : runner non démarré ; les endpoints d'action
+     du backend renvoient `503` ; `GET /api/ohdsi/config` reste disponible et
+     renvoie `{enabled: false}` pour que le frontend masque l'onglet.
    - `OHDSI_MODE=on` : runner démarré via le **profil Compose `ohdsi`**
      (`docker compose --profile ohdsi up -d`).
    - Le service `opal-ohdsi-runner` est **déclaré dans le `docker-compose.yml` de base**

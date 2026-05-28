@@ -34,7 +34,7 @@ checkLevels <- c("TABLE", "FIELD", "CONCEPT") #On peut selectionner ici qu'une p
 checkNames <- c() # Names can be found in inst/csv/OMOP_CDM_v5.3.1_Check_Desciptions.csv
 tablesToExclude <- c()
 
-outputFolder <- "/output"
+outputFolder <- Sys.getenv("OUTPUT_DIR", "/output")
 
 DataQualityDashboard::executeDqChecks(connectionDetails = connectionDetails,
                                       cdmVersion = CDM_VERSION,
