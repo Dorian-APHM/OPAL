@@ -358,6 +358,7 @@
   },
   "ohdsi": {
     "title": "OHDSI Quality Tools",
+    "disabled": "OHDSI tools are disabled on this server (OHDSI_MODE=off).",
     "select_cdm": "Select a CDM to use OHDSI tools",
     "configuration": "Configuration",
     "results_schema": "Results Schema",

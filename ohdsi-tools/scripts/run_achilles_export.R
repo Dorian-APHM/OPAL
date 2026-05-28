@@ -15,7 +15,7 @@ RESULTS_SCHEMA <- Sys.getenv("RESULTS_SCHEMA")
 SERVER <- paste(DB_HOST, "/", DB_NAME, sep="")
 PATH_TO_DRIVER <- Sys.getenv("PATH_TO_DRIVER")
 
-OUTPUT_FOLDER <- "/output"
+OUTPUT_FOLDER <- Sys.getenv("OUTPUT_DIR", "/output")
 print(paste(DB_NAME," ",RESULTS_SCHEMA," ",CDM_SCHEMA))
 
 connectionDetails <- createConnectionDetails(

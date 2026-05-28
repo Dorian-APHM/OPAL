@@ -164,18 +164,8 @@ def _inmemory_cleanup():
                 if stale_ids:
                     logger.info("Cleaned up %d stale extraction tasks", len(stale_ids))
 
-            # 3. OHDSI tasks — evict finished tasks older than TTL
-            from modules.ohdsi.router import _tasks, _lock as _ohdsi_lock
-            with _ohdsi_lock:
-                stale_ohdsi = [
-                    tid for tid, t in _tasks.items()
-                    if t.get("status") in ("completed", "error", "failed")
-                    and t.get("finished_at") and now - t["finished_at"] > _TASK_TTL_SECONDS
-                ]
-                for tid in stale_ohdsi:
-                    _tasks.pop(tid, None)
-                if stale_ohdsi:
-                    logger.info("Cleaned up %d stale OHDSI tasks", len(stale_ohdsi))
+            # OHDSI job state lives in the dedicated runner (persisted there),
+            # so there is nothing to evict from the backend anymore.
 
         except Exception as e:
             logger.error("In-memory cleanup error: %s", e)
@@ -190,27 +180,6 @@ def _start_inmemory_cleanup():
     _cleanup_thread = _threading.Thread(target=_inmemory_cleanup, daemon=True, name="inmemory-cleanup")
     _cleanup_thread.start()
     logger.info("In-memory task cleanup started (evicts stale tasks every 5 min)")
-
-
-# ---------------------------------------------------------------------------
-# OHDSI output dirs — ensure per-CDM folders exist for all registered CDMs
-# ---------------------------------------------------------------------------
-@app.on_event("startup")
-def _ensure_ohdsi_dirs():
-    """Create OHDSI output sub-folders for every registered CDM at startup."""
-    from db.app_db import SessionLocal
-    from db.models import CdmConfig as _CdmConfig
-    from modules.ohdsi.router import ensure_cdm_output_dirs
-    try:
-        db = SessionLocal()
-        cdm_names = [c.name for c in db.query(_CdmConfig.name).all()]
-        db.close()
-        for name in cdm_names:
-            ensure_cdm_output_dirs(name)
-        if cdm_names:
-            logger.info("OHDSI output dirs ensured for %d CDMs", len(cdm_names))
-    except Exception:
-        logger.warning("Could not create OHDSI output dirs at startup", exc_info=True)
 
 
 @app.on_event("shutdown")
