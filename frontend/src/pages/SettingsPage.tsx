@@ -259,6 +259,7 @@ function SourceValueCacheCard({ cdmName }: { cdmName: string }) {
   const handlePopulate = async () => {
     try {
       await conceptApi.populateSourceValueCacheUrl_post(cdmName);
+      setDomains([]);          // clear stale rows so a rebuild shows fresh progress
       setPopulating(true);
       startPolling();
     } catch {
@@ -352,10 +353,10 @@ function SourceValueCacheCard({ cdmName }: { cdmName: string }) {
                   <span className="text-text-dim">{d.row_count.toLocaleString()}</span>
                   {d.status === 'done' ? (
                     <Check className="h-3 w-3 text-green-400" />
-                  ) : d.status === 'error' ? (
-                    <X className="h-3 w-3 text-red-400" title={d.error_message || ''} />
-                  ) : d.status === 'running' ? (
+                  ) : d.status === 'running' && populating ? (
                     <Loader className="h-3 w-3 text-blue-400 animate-spin" />
+                  ) : d.status === 'error' || d.status === 'running' ? (
+                    <X className="h-3 w-3 text-red-400" title={d.error_message || 'Interrompu'} />
                   ) : null}
                 </div>
               </div>
