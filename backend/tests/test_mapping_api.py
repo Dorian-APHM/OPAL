@@ -350,11 +350,12 @@ def test_apply_with_approved_decisions(client, cdm_name):
     assert data["count"] == 2
     assert data["written_to_cdm"] is False
     assert len(data["rows"]) == 2
-    # Verify STCM row structure
+    # Verify the apply response row structure (display rows for the UI)
     row = data["rows"][0]
     assert "source_code" in row
+    assert "source_code_description" in row
     assert "target_concept_id" in row
-    assert row["source_vocabulary_id"] == "OPAL_Condition"
+    assert "target_vocabulary_id" in row
 
 
 def test_apply_preview_no_decisions(client, cdm_name):
@@ -380,7 +381,7 @@ def test_export_stcm_csv(client, cdm_name):
     assert resp.status_code == 200
     assert "text/csv" in resp.headers.get("content-type", "")
     content = resp.text
-    assert "source_code" in content
+    assert "sourceCode" in content  # STCM (Usagi) standard header
     assert "E11" in content
     assert "201826" in content
 
