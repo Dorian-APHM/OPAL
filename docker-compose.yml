@@ -154,7 +154,14 @@ services:
     container_name: opal-ohdsi-runner
     profiles: ["ohdsi"]
     environment:
-      - "OHDSI_RUNNER_TOKEN=${OHDSI_RUNNER_TOKEN:?OHDSI_RUNNER_TOKEN is required when the ohdsi profile is enabled (openssl rand -hex 32)}"
+      # Token partagé backend<->runner. NE PAS utiliser `:?` ici : Compose
+      # interpole tout le fichier (même les services hors profil) pour TOUTE
+      # commande (down/up/ps...), donc un `:?` ferait échouer ces commandes
+      # pour quiconque n'active pas OHDSI. L'obligation du token est appliquée
+      # au runtime : le runner refuse toute route si le token est vide
+      # (server.py) et le backend bloque en prod si OHDSI_MODE=on sans token
+      # (config.py). Générer avec: openssl rand -hex 32
+      - OHDSI_RUNNER_TOKEN=${OHDSI_RUNNER_TOKEN:-}
       - OHDSI_MAX_CONCURRENT_JOBS=${OHDSI_MAX_CONCURRENT_JOBS:-2}
     volumes:
       - opal_ohdsi_data:/data
