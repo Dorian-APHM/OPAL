@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cdmApi, conceptApi } from '../api/client';
+import { cdmApi, conceptApi, cohortLlmApi } from '../api/client';
 import { Card, Button, Input, NumberInput, Alert, Tag, useToast } from '../components/ui';
 import SchemaCategoriesEditor from '../components/SchemaCategoriesEditor';
-import { Database, RefreshCw, Trash2, Check, X, Loader } from 'lucide-react';
+import { Database, RefreshCw, Trash2, Check, X, Loader, Cpu } from 'lucide-react';
 
 interface Props {
   selectedCdm: string | null;
@@ -59,20 +59,13 @@ export default function SettingsPage({ selectedCdm }: Props) {
     }
   };
 
-  if (!selectedCdm) {
-    return (
-      <div>
-        <h3 className="text-2xl font-bold text-text-bright mb-4">{t('settings.title')}</h3>
-        <Alert message={t('cdm.select_cdm')} type="info" showIcon />
-      </div>
-    );
-  }
-
   return (
     <div>
       <h3 className="text-2xl font-bold text-text-bright mb-4">
-        {t('settings.title')} — {selectedCdm}
+        {t('settings.title')}{selectedCdm ? ` — ${selectedCdm}` : ''}
       </h3>
+      {!selectedCdm && <Alert message={t('cdm.select_cdm')} type="info" showIcon />}
+      {selectedCdm && (<>
       <Card className="max-w-lg">
         <div className="space-y-4">
           <div>
@@ -112,7 +105,97 @@ export default function SettingsPage({ selectedCdm }: Props) {
 
       {/* Source Value Cache */}
       <SourceValueCacheCard cdmName={selectedCdm} />
+      </>)}
+
+      {/* Cohort-LLM on-premise config (admin, instance-wide) */}
+      <CohortLlmConfigCard />
     </div>
+  );
+}
+
+
+// ──── Cohort-LLM on-premise config (admin, instance-wide) ────
+// Only rendered in on-premise mode for admins (GET /settings is admin-gated).
+
+function CohortLlmConfigCard() {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const [visible, setVisible] = useState(false);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [hasKey, setHasKey] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    cohortLlmApi.config().then((res) => {
+      if (res.data.mode !== 'on-premise') return;       // only relevant on-premise
+      cohortLlmApi.getSettings()                          // admin-only -> 403 hides the card
+        .then((s) => {
+          setBaseUrl(s.data.base_url ?? '');
+          setModel(s.data.model ?? '');
+          setHasKey(s.data.has_api_key);
+          setVisible(true);
+        })
+        .catch(() => setVisible(false));
+    }).catch(() => { /* feature off / unreachable */ });
+  }, []);
+
+  if (!visible) return null;
+
+  const save = async () => {
+    try {
+      setLoading(true);
+      const payload: { base_url: string; model: string; api_key?: string } = { base_url: baseUrl, model };
+      if (apiKey) payload.api_key = apiKey;               // only send when (re)set
+      const res = await cohortLlmApi.updateSettings(payload);
+      setHasKey(res.data.has_api_key);
+      setApiKey('');
+      toast.success(t('settings.saved'));
+    } catch {
+      toast.error(t('common.error'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card className="max-w-lg mt-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Cpu className="h-4 w-4 text-emerald-accent" />
+        <span className="font-semibold text-text-bright text-sm">
+          {t('settings.cohort_llm_title', 'LLM Cohorte (on-premise)')}
+        </span>
+      </div>
+      <p className="text-xs text-text-muted mb-3">
+        {t('settings.cohort_llm_help',
+          "Endpoint OpenAI-compatible de votre LLM. La clé API est chiffrée et n'est jamais réaffichée.")}
+      </p>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-text-muted mb-1.5">
+            {t('settings.cohort_llm_base_url', 'URL (base OpenAI-compatible)')}
+          </label>
+          <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://llm.chu.fr/v1" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-text-muted mb-1.5">
+            {t('settings.cohort_llm_model', 'Modèle')}
+          </label>
+          <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="llama3.1:70b-instruct" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-text-muted mb-1.5">
+            {t('settings.cohort_llm_api_key', 'Clé API')}
+          </label>
+          <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                 placeholder={hasKey ? '•••••••• (inchangée)' : t('settings.cohort_llm_api_key_ph', 'optionnelle')} />
+        </div>
+        <Button variant="primary" onClick={save} loading={loading}>
+          {t('common.save')}
+        </Button>
+      </div>
+    </Card>
   );
 }
 

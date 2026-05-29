@@ -57,9 +57,6 @@ preview*.html
 /scripts/lineage_viewer.html
 /scripts/parse_etl_lineage.py
 
-# Projet cohort-llm parallèle — tourne en LOCAL uniquement, ne pas pousser sur git
-cohort-llm/
-
 # Exports / patches locaux (diffs, dumps ponctuels)
 exports/
 

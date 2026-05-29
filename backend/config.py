@@ -242,3 +242,17 @@ if ENVIRONMENT == "production" and OHDSI_ENABLED and not OHDSI_RUNNER_TOKEN:
         "FATAL: OHDSI_MODE=on requires OHDSI_RUNNER_TOKEN in production. "
         "Generate one with: openssl rand -hex 32"
     )
+
+# Cohort-LLM integration (natural-language -> cohort draft via the opal-llm service).
+# The backend is a thin client of opal-llm; it does no inference itself. Three modes:
+#   off         -> feature disabled (endpoints return 503, "AI assistant" tab hidden)
+#   embedded    -> opal-llm runs a bundled local model (Ollama, pulled on first run)
+#   on-premise  -> opal-llm uses the institution's own OpenAI-compatible LLM; the
+#                  endpoint/model/key are configured in the UI (Settings, admin) and
+#                  stored encrypted in the app DB, then injected per request.
+COHORT_LLM_MODE = os.getenv("COHORT_LLM_MODE", "off").strip().lower()
+COHORT_LLM_ENABLED = COHORT_LLM_MODE != "off"
+# Internal URL of the opal-llm service (RAG + generation relay).
+COHORT_LLM_URL = os.getenv(
+    "COHORT_LLM_URL", os.getenv("OPAL_LLM_URL", "http://opal-llm:8001")
+).rstrip("/")

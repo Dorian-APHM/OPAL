@@ -336,6 +336,59 @@ export interface CohortCriteria {
   initial_event_criterion_id?: string;
 }
 
+// ── Cohort-LLM (natural-language → draft) ──
+
+/** One source code in a concept-set returned by the RAG */
+export interface ConceptSetMember {
+  source_value: string;
+  label: string;
+}
+
+/** A group of matching codes (CIM10 family, ATC class, or a singleton) */
+export interface ConceptSetGroup {
+  domain: string;
+  kind: 'group' | 'singleton';
+  group_key: string;   // e.g. "E11" (CIM10 prefix) or "A10BA" (ATC)
+  rep_label: string;
+  score: number;
+  n_members: number;
+  members: ConceptSetMember[];
+}
+
+/** A criterion as extracted by the LLM, enriched with RAG concept-sets */
+export interface DraftCriterion {
+  id?: string;
+  domain: string;
+  label: string;
+  negation: boolean;
+  operator_with_next: 'AND' | 'OR';
+  temporal: TemporalConstraint | null;
+  value: ValueConstraint | null;
+  expansion?: string;
+  no_match?: boolean;
+  concept_sets: ConceptSetGroup[];
+}
+
+/** Full draft returned by POST /api/cohort-llm/draft */
+export interface CohortDraft {
+  demographics: { age_min?: number | null; age_max?: number | null; sex?: 'M' | 'F' | null };
+  criteria: DraftCriterion[];
+}
+
+/** Cohort-LLM feature flag (GET /cohort-llm/config) */
+export interface CohortLlmConfig {
+  enabled: boolean;
+  mode: 'off' | 'embedded' | 'on-premise';
+}
+
+/** On-premise LLM settings (GET /cohort-llm/settings). API key is never returned. */
+export interface CohortLlmSettings {
+  mode: 'off' | 'embedded' | 'on-premise';
+  base_url: string | null;
+  model: string | null;
+  has_api_key: boolean;
+}
+
 /** Cohort summary from list endpoint */
 export interface CohortSummary {
   id: number;

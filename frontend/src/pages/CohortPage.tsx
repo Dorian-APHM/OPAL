@@ -4,7 +4,7 @@ import {
   Save, FolderOpen, Trash2, Plus, PlayCircle, User, Table2,
   ArrowLeftRight, Code, Download, AppWindow, BarChart3, LineChart,
   Star, Share2, Globe, Users, UserPlus, X, GitBranch,
-  Hammer, FlaskConical, Play, ChevronRight,
+  Hammer, FlaskConical, Play, ChevronRight, Sparkles,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/KeycloakContext';
@@ -18,6 +18,7 @@ import {
   ResponsiveContainer, Cell,
 } from 'recharts';
 import CriteriaPanel from '../components/cohort/CriteriaPanel';
+import AiAssistantPanel from '../components/cohort/AiAssistantPanel';
 import QueryCanvas from '../components/cohort/QueryCanvas';
 import CharacterizationPanel from '../components/cohort/CharacterizationPanel';
 import CohortComparisonPanel from '../components/cohort/CohortComparisonPanel';
@@ -26,12 +27,12 @@ import PatientJourney from '../components/cohort/PatientJourney';
 import ConceptSetPage from './ConceptSetPage';
 import IncidencePage from './IncidencePage';
 import EstimationPage from './EstimationPage';
-import { cohortApi, cohortSharingApi, usersApi, groupApi, favoritesApi, authDownload } from '../api/client';
+import { cohortApi, cohortSharingApi, usersApi, groupApi, favoritesApi, authDownload, cohortLlmApi } from '../api/client';
 import SqlEditor from '../components/SqlEditor';
 import { useNotifDots } from '../hooks/useNotifDots';
 import { useSessionState } from '../hooks/useSessionState';
 import type {
-  CohortCriterion,
+  CohortCriterion, DemographicConstraints,
   CohortCriteria, CohortSummary, CohortShareInfo, AttritionStep,
 } from '../types';
 
@@ -154,6 +155,22 @@ export default function CohortPage({ selectedCdm }: Props) {
         criteria: [...prev[addMode].criteria, criterion],
       },
     }));
+  };
+
+  /** Apply a validated AI draft: merge criteria + demographics, then switch to the builder. */
+  const handleApplyAiDraft = (payload: {
+    inclusion: CohortCriterion[];
+    exclusion: CohortCriterion[];
+    demographics: DemographicConstraints;
+  }) => {
+    setCriteria(prev => ({
+      ...prev,
+      inclusion: { ...prev.inclusion, criteria: [...prev.inclusion.criteria, ...payload.inclusion] },
+      exclusion: { ...prev.exclusion, criteria: [...prev.exclusion.criteria, ...payload.exclusion] },
+      demographics: { ...prev.demographics, ...payload.demographics },
+    }));
+    setBuilderSubTab('builder');
+    toast.success(t('cohort.ai_applied', 'Critères appliqués depuis l\'assistant IA'));
   };
 
   const handleSave = async () => {
@@ -342,6 +359,14 @@ export default function CohortPage({ selectedCdm }: Props) {
   const [builderSubTab, setBuilderSubTab] = useState<string>('builder');
   const [analyseSubTab, setAnalyseSubTab] = useState<string>('comparison');
 
+  // Cohort-LLM is opt-in (COHORT_LLM_MODE). Hide the "AI assistant" tab when off.
+  const [cohortLlmEnabled, setCohortLlmEnabled] = useState(false);
+  useEffect(() => {
+    cohortLlmApi.config()
+      .then(res => setCohortLlmEnabled(!!res.data.enabled))
+      .catch(() => setCohortLlmEnabled(false));
+  }, []);
+
   // Legacy compatibility: activeTab derived from current state
   const activeTab = mainTab === 'cohort-builder' ? builderSubTab : analyseSubTab;
   const setActiveTab = (key: string) => {
@@ -512,6 +537,9 @@ export default function CohortPage({ selectedCdm }: Props) {
       <div className="flex items-center border-b border-glass-border/50 px-3 bg-[#1a1f2e]/30">
         {(mainTab === 'cohort-builder'
           ? [
+              ...(cohortLlmEnabled
+                ? [{ key: 'ai-assistant', label: t('cohort.ai_assistant', 'Assistant IA'), icon: <Sparkles className="h-3.5 w-3.5" /> }]
+                : []),
               { key: 'builder', label: t('cohort.query_builder', 'Query Builder') },
               { key: 'characterization', label: 'Table 1', icon: <Table2 className="h-3.5 w-3.5" /> },
               { key: 'sql', label: 'SQL', icon: <Code className="h-3.5 w-3.5" /> },
@@ -548,6 +576,13 @@ export default function CohortPage({ selectedCdm }: Props) {
 
       {/* ── Content ── */}
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden mt-2">
+        {/* Cohort Builder > Assistant IA */}
+        {mainTab === 'cohort-builder' && builderSubTab === 'ai-assistant' && (
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <AiAssistantPanel cdmName={selectedCdm} onApply={handleApplyAiDraft} />
+          </div>
+        )}
+
         {/* Cohort Builder > Query Builder */}
         {mainTab === 'cohort-builder' && builderSubTab === 'builder' && (
           <>
