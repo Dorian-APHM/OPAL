@@ -1034,6 +1034,8 @@ Les tests backend utilisent une base SQLite en memoire et un mock psycopg2 (`omo
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Guide utilisateur complet |
 | [docs/METHODOLOGIE.md](docs/METHODOLOGIE.md) | Methodologie des analyses (qualite, cohortes, mapping) |
 | [docs/WEBSOCKET_NOTIFICATIONS.md](docs/WEBSOCKET_NOTIFICATIONS.md) | Architecture WebSocket notifications |
+| [docs/COHORT_LLM.md](docs/COHORT_LLM.md) | Assistant IA cohort-llm — modes (off/embedded/on-premise), install et usage |
+| [docs/adr/0001-ohdsi-runner-dedie.md](docs/adr/0001-ohdsi-runner-dedie.md) | ADR — runner OHDSI dédié (suppression du socket Docker) |
 | [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements par version |
 
 ---

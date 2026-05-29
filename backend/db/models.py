@@ -459,3 +459,20 @@ class MappingApplyLog(Base):
     applied_by = Column(String(255), nullable=False, default="system")
     applied_at = Column(DateTime, default=_utcnow)
     rolled_back = Column(Integer, nullable=False, default=0)  # 0=active, 1=rolled back
+
+
+class CohortLlmConfig(Base):
+    """Instance-wide cohort-LLM connection (singleton row, id=1).
+
+    Used in 'on-premise' mode: the admin enters their OpenAI-compatible LLM endpoint
+    in the Settings UI. The API key is stored Fernet-encrypted (utils/crypto) and is
+    never returned in clear by the API. Empty/absent -> the embedded model is used.
+    """
+    __tablename__ = "cohort_llm_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    base_url = Column(String(1000), nullable=True)
+    model = Column(String(255), nullable=True)
+    api_key_encrypted = Column(Text, nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

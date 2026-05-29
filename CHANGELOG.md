@@ -2,6 +2,43 @@
 
 ---
 
+## v3.4.0 (2026-05-29)
+
+> **Tag** : `v3.4.0`
+> **Base** : `v3.3.0`
+
+### Fonctionnalites
+
+- **Assistant IA cohort-llm — opt-in (off / embedded / on-premise)** : décris une
+  cohorte en langage naturel, obtiens un brouillon (démographie + critères) avec
+  chaque terme résolu en codes OMOP réels du CDM (RAG e5 sur `source_value_cache`).
+  Trois modes via `COHORT_LLM_MODE` (off par défaut, onglet masqué) :
+  `embedded` (LLM local Ollama, modèle téléchargé au 1er run, plus baké) et
+  `on-premise` (ton propre LLM via un endpoint **OpenAI-compatible**). Service
+  `opal-llm` derrière le profil compose `cohort-llm`. Client LLM unifié
+  OpenAI-compatible (`cohort-llm/scripts/llm.py`). Voir [docs/COHORT_LLM.md](docs/COHORT_LLM.md).
+- **Config LLM on-premise dans l'UI (Réglages, admin)** : endpoint/modèle/clé API.
+  La **clé est optionnelle** (uniquement si l'endpoint exige une auth), **chiffrée
+  (Fernet)** en base et jamais réaffichée. Le backend l'injecte par requête.
+
+### Securite
+
+- Réglages LLM réservés aux **admins** ; `check_cdm_access` appliqué sur `/draft` ;
+  en `on-premise`, prompt + libellés ne sortent que vers le LLM de l'établissement
+  (donnée maîtrisée).
+
+### Migrations
+
+- Alembic `a7b8c9d0e1f2` : table `cohort_llm_config` (singleton, additive).
+
+### Corrections
+
+- **`requests` restauré** (`backend/requirements.txt`) : il était tiré
+  transitivement par le paquet `docker` retiré en v3.3.0, ce qui cassait la
+  **Gestion des utilisateurs** (`admin_router` → `ModuleNotFoundError: requests`).
+
+---
+
 ## v3.3.0 (2026-05-29)
 
 > **Tag** : `v3.3.0`

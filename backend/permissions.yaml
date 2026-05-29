@@ -44,6 +44,7 @@ roles:
       - /api/notifications
       - /api/saved-queries
       - /api/cohort-templates
+      - /api/cohort-llm
       - /api/cdm-access
       - /api/groups
       - /api/i18n
@@ -70,6 +71,7 @@ roles:
       - /api/notifications
       - /api/saved-queries
       - /api/cohort-templates
+      - /api/cohort-llm
       - /api/cdm-access/cdms-for-user
       - /api/groups
       - /api/i18n

@@ -9,6 +9,8 @@ import type {
   CohortSummary,
   CohortDetail,
   CohortCriteria,
+  CohortDraft,
+  CohortLlmSettings,
   OmopConcept,
   AttritionStep,
   SamplePatient,
@@ -339,6 +341,18 @@ export const cohortApi = {
     api.put(`/cohorts/${cohortId}/pathways-result`, { pathways }),
   getPathways: (cohortId: number) =>
     api.get<{ pathways: PathwaysResult | null; pathways_at: string | null; version: number }>(`/cohorts/${cohortId}/pathways-result`),
+};
+
+// Cohort-LLM (natural-language → draft) endpoints
+export const cohortLlmApi = {
+  config: () => api.get<{ enabled: boolean; mode: 'off' | 'embedded' | 'on-premise' }>('/cohort-llm/config'),
+  draft: (cdmName: string, prompt: string, signal?: AbortSignal) =>
+    api.post<CohortDraft>('/cohort-llm/draft', { cdm_name: cdmName, prompt }, { signal, timeout: 180000 }),
+  health: () => api.get<{ status: string; cdms_indexed: string[] }>('/cohort-llm/health'),
+  // On-premise LLM settings (admin). The API key is write-only (never returned).
+  getSettings: () => api.get<CohortLlmSettings>('/cohort-llm/settings'),
+  updateSettings: (data: { base_url?: string; model?: string; api_key?: string }) =>
+    api.put<{ ok: boolean; has_api_key: boolean }>('/cohort-llm/settings', data),
 };
 
 // Mapping endpoints

@@ -171,7 +171,13 @@
     "max_records_per_person": "Records/person cap",
     "max_observation_months": "Observation months cap",
     "comparison_threshold": "Comparison alert threshold (%)",
-    "saved": "Settings saved"
+    "saved": "Settings saved",
+    "cohort_llm_title": "Cohort LLM (on-premise)",
+    "cohort_llm_help": "OpenAI-compatible endpoint of your LLM. The API key is encrypted and never shown again.",
+    "cohort_llm_base_url": "Base URL (OpenAI-compatible)",
+    "cohort_llm_model": "Model",
+    "cohort_llm_api_key": "API key",
+    "cohort_llm_api_key_ph": "optional"
   },
   "cohort": {
     "title": "Cohort Builder",
