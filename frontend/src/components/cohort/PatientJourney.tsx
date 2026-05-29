@@ -183,7 +183,7 @@ export default function PatientJourney({ cdmName, personId, open, onClose }: Pro
                       <Tag>{domEvents.length}</Tag>
                     </div>
                     {domEvents.map((evt, i) => (
-                      <EventRow key={i} evt={evt} formatDate={formatDate} />
+                      <EventRow key={`${evt.domain}-${evt.concept_id ?? ''}-${evt.start_date ?? ''}-${i}`} evt={evt} formatDate={formatDate} />
                     ))}
                   </div>
                 ))}
@@ -205,7 +205,7 @@ export default function PatientJourney({ cdmName, personId, open, onClose }: Pro
                     </span>
                     <div className="mt-1">
                       {dateEvents.map((evt, i) => (
-                        <EventRow key={i} evt={evt} formatDate={formatDate} />
+                        <EventRow key={`${evt.domain}-${evt.concept_id ?? ''}-${evt.start_date ?? ''}-${i}`} evt={evt} formatDate={formatDate} />
                       ))}
                     </div>
                   </div>

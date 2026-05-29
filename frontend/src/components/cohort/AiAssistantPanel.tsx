@@ -155,7 +155,7 @@ export default function AiAssistantPanel({ cdmName, onApply }: Props) {
 
           {draft.criteria.map((c, i) => (
             <CriterionReviewCard
-              key={i}
+              key={c.id ?? `${c.label}-${i}`}
               criterion={c}
               selected={selections[i] || new Set()}
               onChange={(next) => setCritSelection(i, next)}

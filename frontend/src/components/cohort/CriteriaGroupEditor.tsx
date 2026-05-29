@@ -262,7 +262,9 @@ export default function CriteriaGroupEditor({
     >
       <div className="flex flex-col gap-1">
         {children.map((node, idx) => (
-          <div key={idx}>
+          // Stable key for criteria (which carry internal state: Collapse, loaded
+          // descendants...) so reorder/delete doesn't stick state to the wrong row.
+          <div key={node.type === 'criterion' ? `c-${node.criterion.id}` : `g-${idx}`}>
             {/* Per-pair operator badge between siblings (independent AND/OR) */}
             {idx > 0 && (
               <div className="text-center py-0.5">
