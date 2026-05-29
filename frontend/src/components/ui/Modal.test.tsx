@@ -40,6 +40,15 @@ describe('Modal', () => {
     );
     expect(screen.getByText('Save')).toBeInTheDocument();
   });
+
+  it('has an accessible name even when no title is provided', () => {
+    render(
+      <Modal open={true} onClose={() => {}}>
+        Untitled content
+      </Modal>
+    );
+    expect(screen.getByRole('dialog', { name: 'Dialog' })).toBeInTheDocument();
+  });
 });
 
 describe('Confirm', () => {

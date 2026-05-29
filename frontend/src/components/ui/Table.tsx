@@ -109,6 +109,8 @@ export function Table<T extends Record<string, any>>({
                   className={`${px} ${py} text-left text-xs font-semibold uppercase tracking-wider text-text-muted bg-surface-dark border-b border-glass-border sticky top-0 ${col.sorter ? 'cursor-pointer select-none hover:text-emerald-accent' : ''}`}
                   style={{ width: col.width, textAlign: col.align }}
                   onClick={() => handleSort(col)}
+                  tabIndex={col.sorter ? 0 : undefined}
+                  onKeyDown={col.sorter ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort(col); } } : undefined}
                   aria-sort={col.sorter && sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : col.sorter ? 'none' : undefined}
                   scope="col"
                 >

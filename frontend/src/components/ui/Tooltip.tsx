@@ -1,4 +1,4 @@
-import { useState, useRef, type ReactNode, type ReactElement } from 'react';
+import { useState, useRef, useId, cloneElement, type ReactNode, type ReactElement } from 'react';
 
 interface TooltipProps {
   title: ReactNode;
@@ -9,6 +9,7 @@ interface TooltipProps {
 export function Tooltip({ title, children, placement = 'top' }: TooltipProps) {
   const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const tipId = useId();
 
   if (!title) return children;
 
@@ -19,17 +20,27 @@ export function Tooltip({ title, children, placement = 'top' }: TooltipProps) {
     right: 'left-full top-1/2 -translate-y-1/2 ml-2',
   };
 
+  const show = () => setVisible(true);
+  const hide = () => setVisible(false);
+
   return (
     <div
       ref={ref}
       className="relative inline-flex"
-      onMouseEnter={() => setVisible(true)}
-      onMouseLeave={() => setVisible(false)}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
     >
-      {children}
+      {/* Link the trigger to the tooltip for screen readers when visible. */}
+      {cloneElement(children, visible ? { 'aria-describedby': tipId } : {})}
       {visible && (
         <div className={`absolute z-[1100] ${positionClasses[placement]} pointer-events-none`}>
-          <div className="px-2.5 py-1.5 rounded-lg bg-surface-light text-xs text-text-bright shadow-[0_4px_16px_rgba(0,0,0,0.3)] whitespace-nowrap border border-glass-border">
+          <div
+            id={tipId}
+            role="tooltip"
+            className="px-2.5 py-1.5 rounded-lg bg-surface-light text-xs text-text-bright shadow-[0_4px_16px_rgba(0,0,0,0.3)] max-w-xs whitespace-normal break-words border border-glass-border"
+          >
             {title}
           </div>
         </div>

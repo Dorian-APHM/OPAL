@@ -727,7 +727,9 @@
     "action_types": "Action Types",
     "filter_user": "Filter by user",
     "filter_action": "Filter by action",
-    "no_entries": "No audit entries found"
+    "no_entries": "No audit entries found",
+    "date_from": "From date",
+    "date_to": "To date"
   },
   "datamanagement": {
     "extraction_complete": "Extraction complete",
