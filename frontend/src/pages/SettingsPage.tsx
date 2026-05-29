@@ -228,29 +228,33 @@ function SourceValueCacheCard({ cdmName }: { cdmName: string }) {
   const loadStatus = useCallback(async () => {
     try {
       const resp = await conceptApi.sourceValueCacheStatus(cdmName);
-      setDomains(resp.data.domains);
+      const list: CacheDomainStatus[] = resp.data.domains ?? [];
+      setDomains(list);
       const isPopulating = resp.data.populating;
       setPopulating(isPopulating);
-      return isPopulating;
+      const hasError = list.some(d => d.status === 'error' || d.error_message);
+      return { populating: isPopulating, hasError };
     } catch {
-      return false;
+      return { populating: false, hasError: false };
     }
   }, [cdmName]);
 
   const startPolling = useCallback(() => {
     stopPolling();
     pollingRef.current = setInterval(async () => {
-      const stillRunning = await loadStatus();
+      const { populating: stillRunning, hasError } = await loadStatus();
       if (!stillRunning) {
         stopPolling();
-        toast.success(t('settings.cache_populated', 'Source value cache populated'));
+        // Don't claim success when the population actually failed.
+        if (hasError) toast.error(t('common.error', 'An error occurred'));
+        else toast.success(t('settings.cache_populated', 'Source value cache populated'));
       }
     }, 3000);
   }, [loadStatus, stopPolling, toast, t]);
 
   // Load on mount + auto-start polling if already running
   useEffect(() => {
-    loadStatus().then(isPopulating => {
+    loadStatus().then(({ populating: isPopulating }) => {
       if (isPopulating) startPolling();
     });
     return stopPolling;

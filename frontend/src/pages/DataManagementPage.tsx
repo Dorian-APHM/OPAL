@@ -341,44 +341,42 @@ export default function DataManagementPage({ selectedCdm }: Props) {
   const handleTableToggle = useCallback(
     (tableName: string, checked: boolean) => {
       if (!selectedCdm) return;
-      setTableState((prev) => {
-        const next = { ...prev };
-        next[tableName] = { ...next[tableName], selected: checked };
+      // Decide whether to fetch columns *before* updating state, so the API call
+      // is not a side effect inside the setState updater (which runs twice under
+      // React StrictMode and would fire the request twice).
+      const needsFetch = checked && (tableState[tableName]?.columns.length ?? 0) === 0;
 
-        if (checked && next[tableName].columns.length === 0) {
-          next[tableName].loading = true;
-          dataManagementApi
-            .listColumns(selectedCdm, tableName)
-            .then((res) => {
-              const cols: ColumnInfo[] = res.data.columns;
-              const preset = _DEFAULT_COLUMNS[tableName];
-              const selected = preset
-                ? new Set(cols.filter((c) => preset.has(c.column_name)).map((c) => c.column_name))
-                : new Set(cols.map((c) => c.column_name));
-              setTableState((p) => ({
-                ...p,
-                [tableName]: {
-                  ...p[tableName],
-                  columns: cols,
-                  selectedColumns: selected,
-                  loading: false,
-                },
-              }));
-            })
-            .catch(() => {
-              setTableState((p) => ({
-                ...p,
-                [tableName]: { ...p[tableName], loading: false },
-              }));
-            });
-        }
-        return next;
-      });
+      setTableState((prev) => ({
+        ...prev,
+        [tableName]: { ...prev[tableName], selected: checked, loading: needsFetch ? true : prev[tableName]?.loading },
+      }));
+
+      if (needsFetch) {
+        dataManagementApi
+          .listColumns(selectedCdm, tableName)
+          .then((res) => {
+            const cols: ColumnInfo[] = res.data.columns ?? [];
+            const preset = _DEFAULT_COLUMNS[tableName];
+            const selected = preset
+              ? new Set(cols.filter((c) => preset.has(c.column_name)).map((c) => c.column_name))
+              : new Set(cols.map((c) => c.column_name));
+            setTableState((p) => ({
+              ...p,
+              [tableName]: { ...p[tableName], columns: cols, selectedColumns: selected, loading: false },
+            }));
+          })
+          .catch(() => {
+            setTableState((p) => ({
+              ...p,
+              [tableName]: { ...p[tableName], loading: false },
+            }));
+          });
+      }
       if (checked) setExpandedTable(tableName);
       // Clear schema when selection changes
       setSchemaData(null);
     },
-    [selectedCdm],
+    [selectedCdm, tableState],
   );
 
   const handleColumnToggle = (tableName: string, colName: string, checked: boolean) => {

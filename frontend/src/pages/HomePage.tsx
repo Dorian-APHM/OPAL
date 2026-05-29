@@ -208,9 +208,10 @@ export default function HomePage({ selectedCdm }: Props) {
     return (
       <div className="flex items-center justify-center" style={{ height: 'calc(100vh - 56px - 32px)' }}>
         <Empty variant="no-cdm">
-          <Button variant="primary" size="middle" icon={<Database className="h-4 w-4" />} onClick={() => {}}>
+          <span className="inline-flex items-center gap-2 text-sm text-text-muted">
+            <Database className="h-4 w-4" />
             {t('dashboard.select_cdm', 'Select a CDM database')}
-          </Button>
+          </span>
         </Empty>
       </div>
     );
