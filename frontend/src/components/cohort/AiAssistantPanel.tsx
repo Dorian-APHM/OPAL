@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import { Sparkles, User, ArrowRight } from 'lucide-react';
 import { cohortLlmApi } from '../../api/client';
-import type { CohortDraft, CohortCriterion, DemographicConstraints } from '../../types';
+import type { CohortDraft, CohortCriterion, CriteriaGroup, DemographicConstraints } from '../../types';
 import { TextArea, Button, Spinner, Alert } from '../ui';
 import CriterionReviewCard from './CriterionReviewCard';
 
 interface ApplyPayload {
-  inclusion: CohortCriterion[];
+  // Inclusion is mapped onto the builder's native group model: standalone AND
+  // criteria + OR sub-groups (clusters of OR-linked criteria). No operatorWithNext,
+  // so the group AND/OR toggle and manual additions work normally.
+  inclusionCriteria: CohortCriterion[];
+  inclusionGroups: CriteriaGroup[];
   exclusion: CohortCriterion[];
   demographics: DemographicConstraints;
 }
@@ -68,7 +72,9 @@ export default function AiAssistantPanel({ cdmName, onApply }: Props) {
 
   const buildAndApply = () => {
     if (!draft) return;
-    const inclusion: CohortCriterion[] = [];
+    // Build leaf criteria, keeping each inclusion criterion's operator to the NEXT
+    // (from the LLM) so we can fold OR-runs into sub-groups.
+    const incNodes: { crit: CohortCriterion; op: 'AND' | 'OR' }[] = [];
     const exclusion: CohortCriterion[] = [];
 
     draft.criteria.forEach((c, i) => {
@@ -83,9 +89,26 @@ export default function AiAssistantPanel({ cdmName, onApply }: Props) {
         temporal: c.temporal || { type: 'any_time' },
         occurrence: { type: 'any', count: 1 },
         value: c.value || undefined,
-        operatorWithNext: c.operator_with_next || 'AND',
+        // No operatorWithNext: we express the logic via the group model below.
       };
-      (c.negation ? exclusion : inclusion).push(crit);
+      if (c.negation) exclusion.push(crit);
+      else incNodes.push({ crit, op: c.operator_with_next === 'OR' ? 'OR' : 'AND' });
+    });
+
+    // Fold consecutive OR-linked inclusion criteria into OR sub-groups; the rest
+    // are standalone criteria. Parent inclusion group stays AND (set in CohortPage).
+    // (op[i] = operator linking criterion i to i+1 — mirrors the legacy grouping.)
+    const inclusionCriteria: CohortCriterion[] = [];
+    const inclusionGroups: CriteriaGroup[] = [];
+    let seg: CohortCriterion[] = [];
+    incNodes.forEach((node, idx) => {
+      seg.push(node.crit);
+      const isLast = idx === incNodes.length - 1;
+      if (isLast || node.op === 'AND') {
+        if (seg.length === 1) inclusionCriteria.push(seg[0]);
+        else inclusionGroups.push({ operator: 'OR', criteria: seg });
+        seg = [];
+      }
     });
 
     const d = draft.demographics || {};
@@ -97,7 +120,7 @@ export default function AiAssistantPanel({ cdmName, onApply }: Props) {
     }
     if (d.sex === 'M' || d.sex === 'F') demographics.gender = [GENDER_CONCEPT[d.sex]];
 
-    onApply({ inclusion, exclusion, demographics });
+    onApply({ inclusionCriteria, inclusionGroups, exclusion, demographics });
   };
 
   const totalSelected = Object.values(selections).reduce((n, s) => n + s.size, 0);

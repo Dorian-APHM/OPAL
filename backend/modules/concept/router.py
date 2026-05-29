@@ -1141,12 +1141,16 @@ def populate_source_value_cache(
     password = decrypt_password(cdm.db_password_encrypted)
     schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
 
-    # Clean slate: drop previous per-domain status rows so a rebuild over an existing
-    # cache shows fresh progress (no stale 'running'/old rows polluting the UI).
+    # Clean slate + pre-seed: drop old status rows, then create one 'pending' row per
+    # domain so the UI shows 0/total immediately (total known upfront) instead of a
+    # denominator that grows as each domain starts (0/1 -> 1/2 -> ...).
     from db.models import SourceValueCacheStatus
+    from modules.concept.source_value_cache import domains_to_populate
     db.query(SourceValueCacheStatus).filter(
         SourceValueCacheStatus.cdm_name == cdm_name
     ).delete(synchronize_session=False)
+    for _d in domains_to_populate():
+        db.add(SourceValueCacheStatus(cdm_name=cdm_name, domain=_d, status="pending", row_count=0))
     db.commit()
 
     _cancelled = {"v": False}

@@ -164,6 +164,14 @@ def populate_domain(
     return row_count
 
 
+def domains_to_populate() -> list[str]:
+    """Domains the cache build will process (those with a source_value column).
+
+    Single source of truth so the populate endpoint can pre-seed the per-domain
+    status rows (UI shows 0/total upfront) and the worker iterates the same set."""
+    return [d for d, cfg in DOMAIN_CONFIG.items() if cfg.get("source_value")]
+
+
 def populate_all_domains(
     cdm_name: str,
     conn,
@@ -177,10 +185,7 @@ def populate_all_domains(
     progress_callback(domain, status, completed, total, row_count)
     cancelled_check() -> bool
     """
-    domains_with_source = [
-        d for d, cfg in DOMAIN_CONFIG.items()
-        if cfg.get("source_value")
-    ]
+    domains_with_source = domains_to_populate()
     total = len(domains_with_source)
     completed = 0
 
