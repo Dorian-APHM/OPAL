@@ -577,12 +577,11 @@ def _build_criteria_flat(
     Criteria linked by OR are grouped into sub-groups (UNION),
     then all groups are combined with AND (INTERSECT).
     """
-    # The group operator (AND/OR) + sub-groups are authoritative; the legacy
-    # per-criterion 'operatorWithNext' field is IGNORED. Honoring it used to flip
-    # this group into "per-criterion mode" and override the group operator/sub-groups
-    # whenever the AI (or a stale saved cohort) had set it — which broke the builder's
-    # AND/OR. Forcing False = always combine via the group operator.
-    has_per_criterion_ops = False
+    # Per-criterion operators: each criterion's `operatorWithNext` links it to the
+    # next one (UI lets the user set AND/OR per pair → e.g. A AND (B OR C)). When a
+    # criterion has no explicit operator, fall back to the GROUP operator (so a group
+    # with no per-pair edits behaves exactly like a single-operator group).
+    has_per_criterion_ops = any(c.get("operatorWithNext") for c in criteria)
 
     if has_per_criterion_ops:
         # Group consecutive OR-linked criteria together
@@ -590,7 +589,7 @@ def _build_criteria_flat(
         for i, criterion in enumerate(criteria):
             or_groups[-1].append(criterion)
             if i < len(criteria) - 1:
-                op = criterion.get("operatorWithNext", "AND").upper()
+                op = (criterion.get("operatorWithNext") or operator).upper()
                 if op == "AND":
                     or_groups.append([])
 
