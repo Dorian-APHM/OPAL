@@ -2,6 +2,57 @@
 
 ---
 
+## v3.3.0 (2026-05-29)
+
+> **Tag** : `v3.3.0`
+> **Base** : `v3.2.0` (`e969579`)
+
+### Fonctionnalites
+
+- **Schemas OMOP par categorie** (`backend/utils/cdm_helper.py`, `backend/config.py`, `frontend/src/components/SchemaCategoriesEditor.tsx`) : un CDM peut desormais lire chaque categorie de tables OMOP (clinical, vocabulary, derived, metadata…) depuis un schema PostgreSQL different. Nouveau helper `SchemaMap`/`build_schema_map(cdm, settings)` (sous-classe `str`, retombe sur `omop_schema` sans override → 100% retrocompatible), colonnes `schema_categories` JSON nullable sur `cdm_configs` et `analysis_settings`, editeur dedie dans Gestion CDM / Reglages. Tous les domaines Quality, `conformity.py` et OHDSI resolvent le schema par categorie. (`2cbfa28`, `60a236f`, merge `8486b22`)
+- **Runner OHDSI dedie — suppression du socket Docker** (`ohdsi-tools/runner/`, `backend/modules/ohdsi/router.py`, `docker-compose.yml`) : l'orchestration OHDSI par montage du socket Docker est remplacee par un service `opal-ohdsi-runner` (FastAPI) qui execute les outils R (Achilles, DQD, CDM Onboarding, Achilles Export) en **sous-processus**, pilote par le backend via une API HTTP interne authentifiee par token. Le backend ne detient plus aucun privilege Docker. **Opt-in** : `OHDSI_MODE=off` par defaut (onglet masque), `OHDSI_MODE=on` + profil compose `ohdsi` pour activer. Voir [ADR 0001](docs/adr/0001-ohdsi-runner-dedie.md). (`7f71eb8`, `eebafee`, merge `591d8bd`)
+- **Export CSV de l'historique de mapping** (`backend/modules/mapping/router.py`, `frontend/src/pages/MappingPage.tsx`) : `GET /api/mapping/history/{cdm_name}/export` + bouton « Export CSV » dans la vue historique (respecte les filtres domaine/action/utilisateur). (`4062a91`, merge `bf4412f`)
+
+### Securite
+
+- **S01 (CRITIQUE) corrige** : le socket Docker (`/var/run/docker.sock`) et le `group_add` docker sont retires du backend. Une compromission du backend ne donne plus un acces root-hote. (`591d8bd`)
+- **Annulation OHDSI robuste** : `cancel` envoie `SIGTERM` puis **escalade en `SIGKILL`** apres 10s au groupe de process (R + JVM enfants) si l'outil ignore le signal. (`591d8bd`)
+
+### Migrations
+
+- Alembic `f6a7b8c9d0e1` : ajout des colonnes `schema_categories` JSON **nullable** sur `cdm_configs` et `analysis_settings`. Additif et non destructif ; auto-ALTER idempotent au demarrage pour les bases existantes.
+
+### Corrections
+
+- **OHDSI respecte l'override de schema des AnalysisSettings** (`build_schema_map(cdm, settings)`) au lieu du schema d'enregistrement brut — remarque revue Codex. (`591d8bd`)
+- **`OHDSI_RUNNER_TOKEN` ne casse plus les commandes compose hors profil** : passage de `${VAR:?}` (obligatoire, interpole pour TOUTE commande meme hors profil) a `${VAR:-}`. L'obligation est appliquee au runtime (runner + garde production). (`4d4d468`)
+- **Tests perimes corriges** : `test_extractor.py` (import `_agg_expr` supprime) et le test de timeout frontend — la suite repasse au vert. (`4062a91`)
+
+### Notes de deploiement
+
+- OHDSI est desormais **opt-in et desactive par defaut**. Pour l'activer : `OHDSI_MODE=on` + `OHDSI_RUNNER_TOKEN` (`openssl rand -hex 32`) dans `.env`, puis `docker compose --profile ohdsi up -d --build`. Voir [.env.example](.env.example) et README §6.
+
+---
+
+## v3.2.0 (2026-05-28)
+
+> **Tag** : `v3.2.0` → commit `e969579`
+> **Base** : `v3.1.0`
+
+### Fonctionnalites
+
+- **Restructuration de la page Cohort (V2)** (`frontend/src/pages/CohortPage.tsx`) : onglets Builder / Analyse, navigation au survol, layout adapte au viewport, tiroir « Results » repliable, barre superieure sur une seule ligne. (`6bb6d23`, `4a4087e`, `077d439`)
+
+### Securite / Authentification
+
+- **Keycloak** : changement de mot de passe force a la premiere connexion de l'admin ; le mot de passe admin par defaut respecte la policy du realm. (`466341a`, `e969579`)
+
+### Documentation
+
+- Bascule de l'installation vers le workflow `.env` ; `.env.example` synchronise avec `docker-compose.yml`. (`708dc70`, `97c7fbd`)
+
+---
+
 ## v3.1.0 (2026-05-23)
 
 > **Tag** : `v3.1.0` → commit `d1470ea`
