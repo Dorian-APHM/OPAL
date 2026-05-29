@@ -40,6 +40,20 @@ export default function GlobalSearch({ selectedCdm }: Props) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+
+  // Focus trap: keep Tab/Shift+Tab cycling within the command palette.
+  const handleTrap = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab' || !paletteRef.current) return;
+    const focusables = paletteRef.current.querySelectorAll<HTMLElement>(
+      'a[href],button:not([disabled]),input,textarea,select,[tabindex]:not([tabindex="-1"])'
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const { hasPageAccess } = useAuth();
@@ -191,8 +205,13 @@ export default function GlobalSearch({ selectedCdm }: Props) {
       {/* Command palette */}
       <div className="fixed inset-0 z-[71] flex items-start justify-center pt-[15vh] pointer-events-none">
         <div
+          ref={paletteRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Search"
           className="pointer-events-auto w-[90vw] max-w-[560px] bg-surface border border-glass-border rounded-xl shadow-[0_16px_64px_rgba(0,0,0,0.5),0_0_0_1px_rgba(16,185,129,0.08)]"
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={handleTrap}
         >
           {/* Search input */}
           <div className="p-3 border-b border-glass-border">
