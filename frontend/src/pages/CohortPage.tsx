@@ -613,10 +613,12 @@ export default function CohortPage({ selectedCdm }: Props) {
                     - {t('cohort.exclusion', 'Exclusion')}
                   </button>
                 </div>
-                <CriteriaPanel
-                  cdmName={selectedCdm}
-                  onAddCriterion={handleAddCriterion}
-                />
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <CriteriaPanel
+                    cdmName={selectedCdm}
+                    onAddCriterion={handleAddCriterion}
+                  />
+                </div>
               </div>
 
               <div className="flex-1 min-w-0 flex flex-col gap-2 overflow-y-auto">

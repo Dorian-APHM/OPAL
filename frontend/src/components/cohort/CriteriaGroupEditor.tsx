@@ -171,6 +171,26 @@ export default function CriteriaGroupEditor({
     setChildren(next);
   };
 
+  // Per-pair operator: the badge between child idx-1 and idx reflects the operator
+  // linking them, stored as `operatorWithNext` on the PRECEDING criterion (falls back
+  // to the group operator). Each badge is independent → mix AND/OR: A AND (B OR C).
+  const opBefore = (idx: number): 'AND' | 'OR' => {
+    const prev = children[idx - 1];
+    return prev?.type === 'criterion'
+      ? (prev.criterion.operatorWithNext ?? normalised.operator)
+      : normalised.operator;
+  };
+  const toggleOpBefore = (idx: number) => {
+    const prev = children[idx - 1];
+    if (!prev || prev.type !== 'criterion') { toggleOperator(); return; } // sub-group: group op
+    const next = opBefore(idx) === 'AND' ? 'OR' : 'AND';
+    setChildren(children.map((n, i) =>
+      i === idx - 1 && n.type === 'criterion'
+        ? { type: 'criterion', criterion: { ...n.criterion, operatorWithNext: next } }
+        : n,
+    ));
+  };
+
   // -- render --
 
   if (children.length === 0 && !isRoot) return null;
@@ -236,14 +256,14 @@ export default function CriteriaGroupEditor({
       <div className="flex flex-col gap-1">
         {children.map((node, idx) => (
           <div key={idx}>
-            {/* Operator badge between siblings */}
+            {/* Per-pair operator badge between siblings (independent AND/OR) */}
             {idx > 0 && (
               <div className="text-center py-0.5">
                 <Tag
-                  color={normalised.operator === 'AND' ? 'blue' : 'orange'}
+                  color={opBefore(idx) === 'AND' ? 'blue' : 'orange'}
                   className="text-[11px] font-bold cursor-pointer"
                 >
-                  <span onClick={toggleOperator}>{normalised.operator}</span>
+                  <span onClick={() => toggleOpBefore(idx)}>{opBefore(idx)}</span>
                 </Tag>
               </div>
             )}
@@ -841,16 +861,19 @@ function buildFormula(group: CriteriaGroup): string {
   const children = group.children ?? [];
   if (children.length === 0) return '\u2205';
 
-  const parts = children.map(node => {
-    if (node.type === 'criterion') {
-      return criterionLabel(node.criterion);
-    } else {
-      const inner = buildFormula(node.group);
-      return `(${inner})`;
-    }
-  });
+  const label = (node: CriteriaNode) =>
+    node.type === 'criterion' ? criterionLabel(node.criterion) : `(${buildFormula(node.group)})`;
 
-  return parts.join(` ${group.operator} `);
+  // Interleave per-pair operators (operatorWithNext on the preceding criterion,
+  // falling back to the group operator). OR binds tighter than AND (backend groups
+  // OR-runs into UNION, then AND into INTERSECT) \u2192 e.g. "A AND B OR C" = A AND (B OR C).
+  let out = label(children[0]);
+  for (let i = 1; i < children.length; i++) {
+    const prev = children[i - 1];
+    const op = prev.type === 'criterion' ? (prev.criterion.operatorWithNext ?? group.operator) : group.operator;
+    out += ` ${op} ${label(children[i])}`;
+  }
+  return out;
 }
 
 function criterionLabel(c: CohortCriterion): string {
