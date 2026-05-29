@@ -295,6 +295,15 @@ if _insp.has_table("cohorts"):
         if "shared_with_all" not in _cohort_cols:
             _conn.execute(text("ALTER TABLE cohorts ADD COLUMN shared_with_all INTEGER DEFAULT 0"))
 
+# Per-category OMOP schema overrides (nullable JSON; categories without an
+# entry fall back to omop_schema, so existing CDMs are unaffected).
+for _tbl in ("cdm_configs", "analysis_settings"):
+    if _insp.has_table(_tbl):
+        _tbl_cols = {c["name"] for c in _insp.get_columns(_tbl)}
+        if "schema_categories" not in _tbl_cols:
+            with engine.begin() as _conn:
+                _conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN schema_categories JSON"))
+
 # Import and register routers
 from modules.cdm_router import router as cdm_router
 from modules.quality.router import router as quality_router

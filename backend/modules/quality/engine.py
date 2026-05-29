@@ -35,10 +35,11 @@ def get_available_domains(conn=None, omop_schema: str = "omop_cdm") -> list[str]
             cur = conn.cursor()
             for domain_name, cfg in DOMAIN_CONFIG.items():
                 table = cfg["table"]
+                table_schema = omop_schema.schema_for(table) if hasattr(omop_schema, "schema_for") else omop_schema
                 cur.execute(
                     "SELECT 1 FROM information_schema.tables "
                     "WHERE table_schema = %s AND table_name = %s LIMIT 1",
-                    (omop_schema, table),
+                    (table_schema, table),
                 )
                 if cur.fetchone():
                     domains.append(domain_name)

@@ -8,7 +8,7 @@ import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.cdm_helper import check_cdm_access, get_domain_config
+from utils.cdm_helper import check_cdm_access, get_domain_config, build_schema_map
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -97,11 +97,11 @@ def _annotate_pending_mappings(db: Session, cdm_name: str, results: list[dict]) 
             r["pending"] = True
 
 
-def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
+def _get_omop_schema(db: Session, cdm: CdmConfig):
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
     ).first()
-    return settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    return build_schema_map(cdm, settings)
 
 
 def _get_conn(db: Session, cdm_name: str):
@@ -109,7 +109,7 @@ def _get_conn(db: Session, cdm_name: str):
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    schema = safe_identifier(_get_omop_schema(db, cdm))
+    schema = _get_omop_schema(db, cdm)
     try:
         conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
     except Exception as e:
@@ -120,6 +120,12 @@ def _get_conn(db: Session, cdm_name: str):
 
 def _ident(name: str) -> psysql.Identifier:
     """Return a psycopg2 sql.Identifier for safe SQL interpolation."""
+    return psysql.Identifier(safe_identifier(name))
+
+
+def _sident(schema, table: str) -> psysql.Identifier:
+    """Return a sql.Identifier for the schema that holds ``table`` (category-aware)."""
+    name = schema.schema_for(table) if hasattr(schema, "schema_for") else schema
     return psysql.Identifier(safe_identifier(name))
 
 
@@ -181,7 +187,7 @@ def search_concepts(
                 {where}
                 ORDER BY c.concept_name
                 LIMIT %s OFFSET %s
-            """).format(schema=_ident(schema), where=where)
+            """).format(schema=_sident(schema, 'concept'), where=where)
             cur.execute(query, params + [limit, offset])
             rows = cur.fetchall()
             total = rows[0]["_total_count"] if rows else 0
@@ -216,7 +222,7 @@ def get_concept_details(
                        c.invalid_reason
                 FROM {schema}.concept c
                 WHERE c.concept_id = %s
-                """).format(schema=_ident(schema)),
+                """).format(schema=_sident(schema, 'concept')),
                 [concept_id],
             )
             concept = cur.fetchone()
@@ -238,7 +244,7 @@ def get_concept_details(
                   AND cr.invalid_reason IS NULL
                 ORDER BY cr.relationship_id, c2.concept_name
                 LIMIT 200
-                """).format(schema=_ident(schema)),
+                """).format(schema=_sident(schema, 'concept')),
                 [concept_id],
             )
             relationships = [dict(r) for r in cur.fetchall()]
@@ -252,7 +258,7 @@ def get_concept_details(
                     FROM {schema}.concept_synonym
                     WHERE concept_id = %s
                     ORDER BY concept_synonym_name
-                    """).format(schema=_ident(schema)),
+                    """).format(schema=_sident(schema, 'concept')),
                     [concept_id],
                 )
                 synonyms = [dict(r) for r in cur.fetchall()]
@@ -300,7 +306,7 @@ def get_concept_hierarchy(
                   AND ca.ancestor_concept_id != %s
                 ORDER BY ca.min_levels_of_separation
                 LIMIT 100
-                """).format(schema=_ident(schema)),
+                """).format(schema=_sident(schema, 'concept')),
                 [concept_id, concept_id],
             )
             ancestors = [dict(r) for r in cur.fetchall()]
@@ -319,7 +325,7 @@ def get_concept_hierarchy(
                   AND ca.descendant_concept_id != %s
                 ORDER BY ca.min_levels_of_separation
                 LIMIT 200
-                """).format(schema=_ident(schema)),
+                """).format(schema=_sident(schema, 'concept')),
                 [concept_id, concept_id],
             )
             descendants = [dict(r) for r in cur.fetchall()]
@@ -381,7 +387,7 @@ def get_concept_source_values(
                         LIMIT 50
                         """).format(
                             source_col=_ident(source_col),
-                            schema=_ident(schema),
+                            schema=_sident(schema, table),
                             table=_ident(table),
                             where_clause=where_clause,
                             source_col_2=_ident(source_col),
@@ -513,8 +519,8 @@ def search_source_value(
                            c.concept_name AS mapped_concept_name,
                            c.vocabulary_id AS mapped_vocabulary_id,
                            c.standard_concept AS mapped_standard_concept
-                    FROM {schema}.{table} t
-                    LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
+                    FROM {tschema}.{table} t
+                    LEFT JOIN {vschema}.concept c ON c.concept_id = t.{concept_col}
                     WHERE {where_clause}
                     GROUP BY t.{source_col}{source_name_group}{source_atc_group}, t.{concept_col},
                              c.concept_name, c.vocabulary_id, c.standard_concept
@@ -523,7 +529,8 @@ def search_source_value(
                     source_name_select=source_name_select,
                     source_atc_select=source_atc_select,
                     concept_col=_ident(concept_col),
-                    schema=_ident(schema),
+                    tschema=_sident(schema, table),
+                    vschema=_sident(schema, 'concept'),
                     table=_ident(table),
                     where_clause=where_clause,
                     source_name_group=source_name_group,
@@ -653,7 +660,7 @@ def search_source_value_fast(
                     source_col=_ident(source_col),
                     source_name_select=source_name_select,
                     source_atc_select=source_atc_select,
-                    schema=_ident(schema),
+                    schema=_sident(schema, table),
                     table=_ident(table),
                 ))
                 params.extend([domain_name, f"{q}%", limit])
@@ -673,7 +680,7 @@ def search_source_value_fast(
                         source_col=_ident(source_col),
                         source_name_col=_ident(source_name_col),
                         source_atc_select=source_atc_select,
-                        schema=_ident(schema),
+                        schema=_sident(schema, table),
                         table=_ident(table),
                     ))
                     params.extend([domain_name, f"{q}%", limit])
@@ -693,7 +700,7 @@ def search_source_value_fast(
                         source_col=_ident(source_col),
                         source_name_select=source_name_select,
                         source_atc_col=_ident(source_atc_col),
-                        schema=_ident(schema),
+                        schema=_sident(schema, table),
                         table=_ident(table),
                     ))
                     params.extend([domain_name, f"{q}%", limit])
@@ -827,8 +834,8 @@ def export_source_value_search(
                                c.concept_name AS mapped_concept_name,
                                c.vocabulary_id AS mapped_vocabulary_id,
                                c.standard_concept AS mapped_standard_concept
-                        FROM {schema}.{table} t
-                        LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
+                        FROM {tschema}.{table} t
+                        LEFT JOIN {vschema}.concept c ON c.concept_id = t.{concept_col}
                         WHERE {where_clause}
                         GROUP BY t.{source_col}{source_name_group}{source_atc_group}, t.{concept_col},
                                  c.concept_name, c.vocabulary_id, c.standard_concept
@@ -837,7 +844,8 @@ def export_source_value_search(
                         source_name_select=source_name_select,
                         source_atc_select=source_atc_select,
                         concept_col=_ident(concept_col),
-                        schema=_ident(schema),
+                        tschema=_sident(schema, table),
+                        vschema=_sident(schema, 'concept'),
                         table=_ident(table),
                         where_clause=where_clause,
                         source_name_group=source_name_group,
@@ -923,7 +931,7 @@ def get_concept_counts(
                         "GROUP BY {concept_col}"
                     ).format(
                         concept_col=_ident(concept_col),
-                        schema=_ident(schema),
+                        schema=_sident(schema, table),
                         table=_ident(table),
                     )
                 )
@@ -988,7 +996,7 @@ def get_concept_source_counts(
                             "GROUP BY {col}"
                         ).format(
                             col=_ident(source_concept_col),
-                            schema=_ident(schema),
+                            schema=_sident(schema, table),
                             table=_ident(table),
                         ),
                         [ids],
@@ -1024,7 +1032,7 @@ def list_concept_domains(
                 WHERE domain_id IS NOT NULL
                 GROUP BY domain_id
                 ORDER BY count DESC
-                """).format(schema=_ident(schema))
+                """).format(schema=_sident(schema, 'concept'))
             )
             return {"domains": [dict(r) for r in cur.fetchall()]}
     finally:
@@ -1047,7 +1055,7 @@ def list_vocabularies(
                 WHERE vocabulary_id IS NOT NULL
                 GROUP BY vocabulary_id
                 ORDER BY count DESC
-                """).format(schema=_ident(schema))
+                """).format(schema=_sident(schema, 'concept'))
             )
             return {"vocabularies": [dict(r) for r in cur.fetchall()]}
     finally:

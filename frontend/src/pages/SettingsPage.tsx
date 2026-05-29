@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, conceptApi } from '../api/client';
 import { Card, Button, Input, NumberInput, Alert, Tag, useToast } from '../components/ui';
+import SchemaCategoriesEditor from '../components/SchemaCategoriesEditor';
 import { Database, RefreshCw, Trash2, Check, X, Loader } from 'lucide-react';
 
 interface Props {
@@ -15,6 +16,7 @@ export default function SettingsPage({ selectedCdm }: Props) {
 
   // Form state
   const [omopSchema, setOmopSchema] = useState('');
+  const [schemaCategories, setSchemaCategories] = useState<Record<string, string>>({});
   const [topUnmappedTerms, setTopUnmappedTerms] = useState<number | null>(null);
   const [topConcepts, setTopConcepts] = useState<number | null>(null);
   const [maxRecordsPerPerson, setMaxRecordsPerPerson] = useState<number | null>(null);
@@ -26,6 +28,7 @@ export default function SettingsPage({ selectedCdm }: Props) {
       cdmApi.getSettings(selectedCdm).then((res) => {
         const data = res.data;
         setOmopSchema(data.omop_schema ?? '');
+        setSchemaCategories(data.schema_categories ?? {});
         setTopUnmappedTerms(data.top_unmapped_terms ?? null);
         setTopConcepts(data.top_concepts ?? null);
         setMaxRecordsPerPerson(data.max_records_per_person ?? null);
@@ -41,6 +44,7 @@ export default function SettingsPage({ selectedCdm }: Props) {
       setLoading(true);
       await cdmApi.updateSettings(selectedCdm, {
         omop_schema: omopSchema,
+        schema_categories: schemaCategories,
         top_unmapped_terms: topUnmappedTerms ?? undefined,
         top_concepts: topConcepts ?? undefined,
         max_records_per_person: maxRecordsPerPerson ?? undefined,
@@ -75,6 +79,11 @@ export default function SettingsPage({ selectedCdm }: Props) {
             <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.omop_schema')} <span className="text-red-400">*</span></label>
             <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
           </div>
+          <SchemaCategoriesEditor
+            value={schemaCategories}
+            onChange={setSchemaCategories}
+            defaultSchema={omopSchema}
+          />
           <div>
             <label className="block text-xs font-medium text-text-muted mb-1.5">{t('settings.top_unmapped_terms')} <span className="text-red-400">*</span></label>
             <NumberInput value={topUnmappedTerms ?? undefined} onChange={(v) => setTopUnmappedTerms(v)} min={1} max={500} />

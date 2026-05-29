@@ -33,7 +33,18 @@
     "connection_success": "Connexion réussie",
     "connection_failed": "Échec de la connexion",
     "registered_cdms": "CDM enregistrés",
-    "no_cdms": "Aucun CDM enregistré"
+    "no_cdms": "Aucun CDM enregistré",
+    "schema_categories": "Schémas par catégorie (avancé)",
+    "schema_categories_help": "Laissez un champ vide pour utiliser le schéma par défaut. Renseignez un schéma pour lire cette catégorie de tables depuis un schéma différent (par ex. vocabulaire partagé).",
+    "tables": "tables",
+    "category": {
+      "clinical": "Données cliniques",
+      "health_system": "Système de santé",
+      "health_economics": "Économie de la santé",
+      "derived": "Éléments dérivés",
+      "metadata": "Métadonnées",
+      "vocabulary": "Vocabulaire"
+    }
   },
   "quality": {
     "title": "Analyse Qualité",

@@ -25,6 +25,9 @@ class CdmConfig(Base):
     db_user = Column(String(255), nullable=False)
     db_password_encrypted = Column(Text, nullable=False)
     omop_schema = Column(String(255), nullable=False, default="omop_cdm")
+    # Optional per-category schema overrides: {category_key: schema_name}.
+    # Categories without an entry fall back to omop_schema.
+    schema_categories = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -53,6 +56,9 @@ class AnalysisSettings(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     cdm_name = Column(String(255), nullable=False, unique=True, index=True)
     omop_schema = Column(String(255), default="omop_cdm")
+    # Optional per-category schema overrides: {category_key: schema_name}.
+    # Overrides the matching entries on CdmConfig.schema_categories.
+    schema_categories = Column(JSON, nullable=True)
     top_unmapped_terms = Column(Integer, default=50)
     top_concepts = Column(Integer, default=50)
     max_records_per_person = Column(Integer, default=100)

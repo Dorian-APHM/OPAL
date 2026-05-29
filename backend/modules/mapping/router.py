@@ -25,7 +25,7 @@ from modules.mapping.suggest import suggest_mappings, suggest_batch
 from utils.csv_safety import csv_safe
 from utils.sql_safety import safe_identifier
 from utils.rate_limit import limiter
-from utils.cdm_helper import check_cdm_access, get_domain_config
+from utils.cdm_helper import check_cdm_access, get_domain_config, build_schema_map
 
 logger = logging.getLogger(__name__)
 
@@ -217,12 +217,11 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     return cdm, conn
 
 
-def _get_schema(db: Session, cdm: CdmConfig) -> str:
+def _get_schema(db: Session, cdm: CdmConfig):
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
     ).first()
-    raw = settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
-    return safe_identifier(raw)
+    return build_schema_map(cdm, settings)
 
 
 # ──── 5.1 Mapping Dashboard ────
@@ -464,7 +463,7 @@ def list_unmapped(
     concept_col = safe_identifier(cfg["concept_id"])
     sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
     atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
-    full_table = f"{schema}.{table}"
+    full_table = f"{schema.t(table)}"
 
     try:
         from psycopg2.extras import DictCursor
@@ -520,7 +519,7 @@ def list_unmapped(
                        COUNT(*) AS n_records,
                        COUNT(DISTINCT t.person_id) AS n_persons
                 FROM {full_table} t
-                LEFT JOIN {schema}.concept c ON c.concept_id = t.{concept_col}
+                LEFT JOIN {schema.t('concept')} c ON c.concept_id = t.{concept_col}
                 WHERE {where_clause}
                 GROUP BY t.{sv_col}, t.{concept_col}, c.concept_name, c.vocabulary_id, c.standard_concept
                 ORDER BY COUNT(*) DESC
@@ -572,7 +571,7 @@ def concept_lookup(cdm_name: str, concept_id: int, db: Session = Depends(get_db)
             cur.execute(f"""
                 SELECT concept_id, concept_name, concept_code,
                        vocabulary_id, domain_id, standard_concept, concept_class_id
-                FROM {schema}.concept
+                FROM {schema.t('concept')}
                 WHERE concept_id = %(cid)s
             """, {"cid": concept_id})
             row = cur.fetchone()
@@ -747,7 +746,7 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
         try:
             from psycopg2.extras import DictCursor
             _table = safe_identifier(cfg["table"])
-            full_table = f"{schema}.{_table}"
+            full_table = f"{schema.t(_table)}"
             sv_col = safe_identifier(cfg["source_value"])
             concept_col = safe_identifier(cfg["concept_id"])
             sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
@@ -1071,7 +1070,7 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
         try:
             cdm_obj, conn = _get_cdm_conn(db, tcdm)
             schema = _get_schema(db, cdm_obj)
-            full_table = f"{schema}.{table}"
+            full_table = f"{schema.t(table)}"
             total_updated = 0
             try:
                 with conn.cursor() as cur:
@@ -1176,7 +1175,7 @@ def rollback_apply(batch_id: str, request: Request, db: Session = Depends(get_db
                         if not sv_col_name:
                             continue
                         sv_col = safe_identifier(sv_col_name)
-                        full_table = f"{schema}.{table}"
+                        full_table = f"{schema.t(table)}"
                         cur.execute(
                             f"UPDATE {full_table} SET {col} = %(prev)s "
                             f"WHERE {sv_col} = %(sv)s AND {col} = %(new)s",
@@ -1228,7 +1227,7 @@ def apply_batch_detail(batch_id: str, db: Session = Depends(get_db)):
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"SELECT concept_id, concept_name FROM {schema}.concept "
+                        f"SELECT concept_id, concept_name FROM {schema.t('concept')} "
                         f"WHERE concept_id = ANY(%(ids)s)",
                         {"ids": list(concept_ids)},
                     )
@@ -1312,7 +1311,7 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
     schema = _get_schema(db, cdm)
     cfg = get_domain_config(conn, schema, req.domain)
     table = safe_identifier(cfg["table"])
-    full_table = f"{schema}.{table}"
+    full_table = f"{schema.t(table)}"
     sv_col = safe_identifier(cfg["source_value"])
 
     source_values = [d.source_value for d in decisions]
@@ -1406,7 +1405,7 @@ def export_stcm(cdm_name: str, domain: str, request: Request, db: Session = Depe
                 with conn.cursor(cursor_factory=DictCursor) as cur:
                     cur.execute(
                         f"SELECT concept_id, concept_code, concept_class_id "
-                        f"FROM {schema}.concept WHERE concept_id = ANY(%(ids)s)",
+                        f"FROM {schema.t('concept')} WHERE concept_id = ANY(%(ids)s)",
                         {"ids": target_ids},
                     )
                     for row in cur.fetchall():

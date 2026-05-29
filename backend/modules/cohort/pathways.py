@@ -78,6 +78,8 @@ def run_pathways_analysis(
       - sunburst_tree (dict): hierarchical tree for sunburst viz
       - event_colors (dict): name → colour assignment
     """
+    from modules.cohort.sql_builder import _smap
+    omop_schema = _smap(omop_schema)
     safe_identifier(omop_schema)
     from psycopg2.extras import RealDictCursor
 
@@ -99,7 +101,7 @@ def run_pathways_analysis(
                    op.observation_period_start_date AS cohort_start,
                    op.observation_period_end_date   AS cohort_end
             FROM ({cohort_sql}) p
-            JOIN {omop_schema}.observation_period op
+            JOIN {omop_schema.t('observation_period')} op
               ON p.person_id = op.person_id
         """)
         cur.execute("CREATE INDEX ON _pw_target (person_id)")
@@ -169,7 +171,7 @@ def run_pathways_analysis(
                                 SELECT unnest(ARRAY[{ids_str}]) AS v
                                 UNION
                                 SELECT descendant_concept_id
-                                FROM {omop_schema}.concept_ancestor
+                                FROM {omop_schema.t('concept_ancestor')}
                                 WHERE ancestor_concept_id IN ({ids_str})
                             ) _exp
                         )
@@ -206,7 +208,7 @@ def run_pathways_analysis(
                        t.{date_col},
                        {end_expr}
                 FROM _pw_target tgt
-                JOIN {omop_schema}.{table} t
+                JOIN {omop_schema.t(table)} t
                   ON tgt.person_id = t.person_id
                  AND t.{date_col} BETWEEN tgt.cohort_start AND tgt.cohort_end
                 WHERE {where_filter}

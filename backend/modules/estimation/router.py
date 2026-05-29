@@ -96,14 +96,14 @@ def _build_km_sql(
         target_dated = (
             f"SELECT base.person_id, MIN(t.{date_col}) AS cohort_start\n"
             f"FROM ({target_sql}) base\n"
-            f"JOIN {omop_schema}.{domain_table} t ON base.person_id = t.person_id\n"
+            f"JOIN {omop_schema.t(domain_table)} t ON base.person_id = t.person_id\n"
             f"GROUP BY base.person_id"
         )
     else:
         target_dated = (
             f"SELECT base.person_id, op.observation_period_start_date AS cohort_start\n"
             f"FROM ({target_sql}) base\n"
-            f"JOIN {omop_schema}.observation_period op ON base.person_id = op.person_id"
+            f"JOIN {omop_schema.t('observation_period')} op ON base.person_id = op.person_id"
         )
 
     # Build date extraction for outcome
@@ -111,7 +111,7 @@ def _build_km_sql(
         outcome_dated = (
             f"SELECT base.person_id, MIN(t.{o_date_col}) AS outcome_date\n"
             f"FROM ({outcome_sql}) base\n"
-            f"JOIN {omop_schema}.{o_domain_table} t ON base.person_id = t.person_id\n"
+            f"JOIN {omop_schema.t(o_domain_table)} t ON base.person_id = t.person_id\n"
             f"GROUP BY base.person_id"
         )
     else:
@@ -167,11 +167,11 @@ survival_data AS (
         END AS time_days
         {strata_select}
     FROM target_entry te
-    JOIN {omop_schema}.observation_period op
+    JOIN {omop_schema.t('observation_period')} op
         ON te.person_id = op.person_id
         AND te.cohort_start BETWEEN op.observation_period_start_date AND op.observation_period_end_date
-    JOIN {omop_schema}.person p ON te.person_id = p.person_id
-    LEFT JOIN {omop_schema}.concept gc ON p.gender_concept_id = gc.concept_id
+    JOIN {omop_schema.t('person')} p ON te.person_id = p.person_id
+    LEFT JOIN {omop_schema.t('concept')} gc ON p.gender_concept_id = gc.concept_id
     LEFT JOIN outcome_entry oe ON te.person_id = oe.person_id
     WHERE te.cohort_start::date < ({tar_limit})::date
 )

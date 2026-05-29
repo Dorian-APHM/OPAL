@@ -3,6 +3,7 @@ import { Plus, Plug, Trash2, Lock, Shield, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi, cdmAccessApi, usersApi, groupApi } from '../api/client';
 import { Card, Button, Input, NumberInput, Table, Confirm, Select, Tabs, Tag, Alert, useToast } from '../components/ui';
+import SchemaCategoriesEditor from '../components/SchemaCategoriesEditor';
 import type { Column } from '../components/ui';
 import type { TabItem } from '../components/ui';
 import type { CdmConfig, GroupSummary } from '../types';
@@ -37,6 +38,7 @@ export default function CdmManagementPage() {
   const [dbUser, setDbUser] = useState('');
   const [dbPassword, setDbPassword] = useState('');
   const [omopSchema, setOmopSchema] = useState('omop_cdm');
+  const [schemaCategories, setSchemaCategories] = useState<Record<string, string>>({});
 
   // Confirm dialog state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -107,6 +109,7 @@ export default function CdmManagementPage() {
     db_user: dbUser,
     db_password: dbPassword,
     omop_schema: omopSchema || 'omop_cdm',
+    schema_categories: Object.keys(schemaCategories).length ? schemaCategories : null,
   });
 
   const resetForm = () => {
@@ -117,6 +120,7 @@ export default function CdmManagementPage() {
     setDbUser('');
     setDbPassword('');
     setOmopSchema('omop_cdm');
+    setSchemaCategories({});
   };
 
   const handleTestConnection = async () => {
@@ -407,6 +411,11 @@ export default function CdmManagementPage() {
             <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.schema')} <span className="text-red-400">*</span></label>
             <Input value={omopSchema} onChange={(e) => setOmopSchema(e.target.value)} />
           </div>
+          <SchemaCategoriesEditor
+            value={schemaCategories}
+            onChange={setSchemaCategories}
+            defaultSchema={omopSchema}
+          />
           <div className="flex items-center gap-2">
             <Button onClick={handleTestConnection} loading={loading} icon={<Plug className="h-4 w-4" />}>
               {t('cdm.test_connection')}

@@ -98,7 +98,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 - `utils/csv_safety.py` — CSV formula injection protection
 - `utils/rate_limit.py` — Rate limiting decorator (slowapi)
 - `utils/ws_manager.py` — WebSocket connection manager for real-time notifications
-- `utils/cdm_helper.py` — Centralized CDM connection helper: `get_cdm_connection()`, `get_domain_config()` (runtime optional column detection for `source_name`, `source_concept_id`, `source_atc`), `check_cdm_access()` for POST body CDM checks
+- `utils/cdm_helper.py` — Centralized CDM connection helper: `get_cdm_connection()` (returns a `SchemaMap`), `build_schema_map()`, `get_domain_config()` (runtime optional column detection for `source_name`, `source_concept_id`, `source_atc`), `check_cdm_access()` for POST body CDM checks. `SchemaMap` subclasses `str` (its value is the default schema, so it behaves like a single schema everywhere it isn't category-aware) and exposes `.schema_for(table)` / `.t(table)` to resolve the right schema per OMOP table category.
 - `utils/thread_pool.py` — Bounded ThreadPoolExecutor (`MAX_WORKER_THREADS`) for background tasks
 
 **i18n**: `i18n/en.json` and `i18n/fr.json` — Translations cached at module load time (not read per-request). Served via `/api/i18n/{lang}`.
@@ -122,6 +122,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 ### Key Design Decisions
 
 - External CDMs are accessed **read-only** via raw `psycopg2` (not SQLAlchemy). The only write to CDM is optional `source_to_concept_map` updates during mapping apply.
+- **Per-category schemas**: OMOP tables are grouped into the official CDM v5.4 categories (`clinical`, `health_system`, `health_economics`, `derived`, `metadata`, `vocabulary` — see `config.OMOP_TABLE_CATEGORIES` / `TABLE_CATEGORY`). A CDM may store each category in a different PostgreSQL schema via the optional `schema_categories` JSON column on `CdmConfig`/`AnalysisSettings` (settings override config); categories without an entry fall back to `omop_schema`. Every `schema.table` reference across the app resolves through a `SchemaMap` (`.t(table)` in f-strings, `.schema_for(table)` for `psycopg2.sql.Identifier`), so e.g. vocabulary tables can live in a shared schema. The frontend exposes one default-schema field plus a collapsible per-category override section (`SchemaCategoriesEditor`); `GET /api/cdm/categories` returns the category→tables map.
 - CDM connections use a **per-CDM `ThreadedConnectionPool`** (min=2, max=20). `PooledConnection` wrapper intercepts `close()` to return to pool. Pools auto-evicted after 30min idle, invalidated on CDM credential update/delete.
 - All app state (configs, snapshots, cohorts, mapping decisions) lives in the internal PostgreSQL.
 - Quality analysis snapshots are versioned for temporal comparison.
