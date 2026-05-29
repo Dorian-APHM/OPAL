@@ -134,26 +134,28 @@ export default function HomePage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) return;
+    let cancelled = false; // ignore responses if the CDM changed before they resolve
     setLoading(true);
     Promise.all([
       favoritesApi.list()
-        .then(r => setFavorites(r.data.favorites))
-        .catch(() => toast.error(t('dashboard.load_failed', 'Failed to load favorites'))),
+        .then(r => { if (!cancelled) setFavorites(r.data.favorites ?? []); })
+        .catch(() => { if (!cancelled) toast.error(t('dashboard.load_failed', 'Failed to load favorites')); }),
       qualityApi.getLatestSnapshot(selectedCdm, 'Dashboard')
-        .then(r => setQualitySummary(r.data.results))
-        .catch(() => setQualitySummary(null)),
+        .then(r => { if (!cancelled) setQualitySummary(r.data.results); })
+        .catch(() => { if (!cancelled) setQualitySummary(null); }),
       recentApi.list(selectedCdm)
-        .then(r => setRecentItems(
-          r.data.items.map(item => ({
+        .then(r => { if (!cancelled) setRecentItems(
+          (r.data.items ?? []).map(item => ({
             id: `${item.type}-${item.timestamp}`,
             label: item.label,
             type: item.type,
             timestamp: item.timestamp,
             onClick: () => navigate(item.route, item.nav_state ? { state: item.nav_state } : undefined),
           }))
-        ))
-        .catch(() => setRecentItems([])),
-    ]).finally(() => setLoading(false));
+        ); })
+        .catch(() => { if (!cancelled) setRecentItems([]); }),
+    ]).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [selectedCdm]);
 
   const removeFavorite = async (id: number) => {

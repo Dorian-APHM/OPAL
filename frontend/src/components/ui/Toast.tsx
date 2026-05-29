@@ -69,17 +69,30 @@ function ToastProgress({ type, duration }: { type: ToastType; duration: number }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Track auto-dismiss timers so they can be cleared on manual close / unmount
+  // (otherwise they fire setState after the provider has unmounted).
+  const timers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+
+  const remove = useCallback((id: number) => {
+    const tm = timers.current.get(id);
+    if (tm) { clearTimeout(tm); timers.current.delete(id); }
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   const addToast = useCallback((type: ToastType, message: string) => {
     const id = nextId++;
     setToasts((prev) => [...prev, { id, type, message, createdAt: Date.now() }]);
-    setTimeout(() => {
+    const tm = setTimeout(() => {
+      timers.current.delete(id);
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, TOAST_DURATION);
+    timers.current.set(id, tm);
   }, []);
 
-  const remove = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  // Clear any pending timers when the provider unmounts.
+  useEffect(() => {
+    const map = timers.current;
+    return () => { map.forEach(clearTimeout); map.clear(); };
   }, []);
 
   const ctx: ToastContextType = {
