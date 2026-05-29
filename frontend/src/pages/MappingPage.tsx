@@ -111,20 +111,20 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   useEffect(() => {
     setLoading(true);
     mappingApi.dashboard(cdmName)
-      .then(r => { setData(r.data.domains); setDecisions(r.data.decisions_summary); })
+      .then(r => { setData(r.data.domains ?? []); setDecisions(r.data.decisions_summary ?? {}); })
       .catch(() => toast.error(t('mapping.load_failed', 'Failed to load mapping dashboard')))
       .finally(() => setLoading(false));
   }, [cdmName]);
 
   useEffect(() => {
     mappingApi.evolution(cdmName, evoDomain)
-      .then(r => setEvolution(r.data.evolution))
+      .then(r => setEvolution(r.data.evolution ?? []))
       .catch(() => setEvolution([]));
   }, [cdmName, evoDomain]);
 
   useEffect(() => {
     mappingApi.strategyStats(cdmName, strategyDomain)
-      .then(r => setStrategyData(r.data.strategies))
+      .then(r => setStrategyData(r.data.strategies ?? []))
       .catch(() => setStrategyData([]));
   }, [cdmName, strategyDomain]);
 

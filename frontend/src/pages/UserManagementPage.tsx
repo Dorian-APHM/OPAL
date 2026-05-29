@@ -109,7 +109,7 @@ export default function UserManagementPage() {
       if (resp.data.error) {
         setError(resp.data.error);
       }
-      setUsers(resp.data.users);
+      setUsers(resp.data.users ?? []);
     } catch (e: any) {
       setError(e.message || 'Failed to fetch users');
     } finally {
@@ -121,7 +121,7 @@ export default function UserManagementPage() {
     setRequestsLoading(true);
     try {
       const resp = await adminApi.accessRequests('pending');
-      setRequests(resp.data.requests);
+      setRequests(resp.data.requests ?? []);
     } catch {
       // silently fail
     } finally {
@@ -133,7 +133,7 @@ export default function UserManagementPage() {
     setGroupsLoading(true);
     try {
       const resp = await groupApi.list();
-      setGroups(resp.data.groups);
+      setGroups(resp.data.groups ?? []);
     } catch {
       // silently fail
     } finally {
@@ -144,7 +144,7 @@ export default function UserManagementPage() {
   const fetchOpalUsers = useCallback(async () => {
     try {
       const resp = await usersApi.listOpalUsers();
-      setOpalUsers(resp.data.users);
+      setOpalUsers(resp.data.users ?? []);
     } catch {
       // silently fail
     }

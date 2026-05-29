@@ -116,8 +116,8 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) return;
-    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load domains')));
-    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load vocabularies')));
+    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains ?? [])).catch(() => toast.error(t('concepts.load_failed', 'Failed to load domains')));
+    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies ?? [])).catch(() => toast.error(t('concepts.load_failed', 'Failed to load vocabularies')));
   }, [selectedCdm]);
 
   const doSearch = useCallback(async (p: number = 1) => {
@@ -132,11 +132,12 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         standard_only: standardOnly, limit: 50, offset: (p - 1) * 50,
       });
       if (ctrl.signal.aborted) return;
-      setConcepts(res.data.concepts);
-      setTotal(res.data.total);
+      const concepts = res.data.concepts ?? [];
+      setConcepts(concepts);
+      setTotal(res.data.total ?? 0);
       setPage(p);
       // Fetch record/person counts for returned concepts
-      const ids = res.data.concepts.map((c: ConceptItem) => c.concept_id);
+      const ids = concepts.map((c: ConceptItem) => c.concept_id);
       if (ids.length > 0 && selectedCdm) {
         setCountsLoading(true);
         conceptApi.counts(selectedCdm, ids)
@@ -172,8 +173,8 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         q: query, domain: domainFilter, limit: 50, offset: (p - 1) * 50,
       });
       if (ctrl.signal.aborted) return;
-      setSourceResults(res.data.results);
-      setSourceTotal(res.data.total);
+      setSourceResults(res.data.results ?? []);
+      setSourceTotal(res.data.total ?? 0);
       setSourcePage(p);
     } catch {
       if (ctrl.signal.aborted) return;

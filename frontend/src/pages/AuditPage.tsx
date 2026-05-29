@@ -61,8 +61,8 @@ export default function AuditPage() {
       if (actionFilter) params.action = actionFilter;
 
       const resp = await auditApi.logs(params);
-      setEntries(resp.data.entries);
-      setTotal(resp.data.total);
+      setEntries(resp.data.entries ?? []);
+      setTotal(resp.data.total ?? 0);
     } catch {
       toast.error(t('audit.load_error', 'Failed to load audit logs'));
     } finally {
@@ -180,14 +180,14 @@ export default function AuditPage() {
           <Card size="small">
             <Statistic
               title={t('audit.active_users', 'Active Users')}
-              value={stats.by_user.length}
+              value={stats.by_user?.length ?? 0}
               prefix={<User className="h-5 w-5" />}
             />
           </Card>
           <Card size="small">
             <Statistic
               title={t('audit.action_types', 'Action Types')}
-              value={stats.by_action.length}
+              value={stats.by_action?.length ?? 0}
               prefix={<Clock className="h-5 w-5" />}
             />
           </Card>
