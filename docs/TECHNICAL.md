@@ -1037,38 +1037,44 @@ L'historique regroupe les decisions par `(source_value, domain, target_concept_i
 
 ### Architecture
 
-OPAL utilise le Docker socket pour lancer des conteneurs OHDSI a la demande.
+Le backend ne touche **pas** au Docker socket. Les outils OHDSI tournent dans un
+service runner dedie (`opal-ohdsi-runner`) qui les execute en **sous-processus**
+R et expose une petite API HTTP interne. Voir
+[docs/adr/0001-ohdsi-runner-dedie.md](adr/0001-ohdsi-runner-dedie.md).
 
 ```
-POST /api/ohdsi/run/achilles
+POST /api/ohdsi/run/achilles                 (backend)
     │
-    ▼
-router.py
+    ├── _require_enabled()  (OHDSI_MODE=on)
+    ├── check_cdm_access(cdm_name)
+    ├── Recupere + dechiffre les credentials CDM
     │
-    ├── Recupere les parametres CDM (host, port, credentials)
-    │
-    ├── Construit la commande docker run
-    │   - Image: ohdsi-docker-achilles
-    │   - Env vars: CDM_CONNECTION_STRING, RESULTS_SCHEMA, ...
-    │   - Volume: output/ monte pour les resultats
-    │
-    ├── Lance le conteneur en arriere-plan
-    │
-    └── Stocke le PID/container_id pour le suivi
+    └── POST {runner}/jobs  (token X-Runner-Token)
+            │
+            ▼
+        opal-ohdsi-runner
+            ├── Persiste le job (SQLite) — survit aux redemarrages
+            ├── Lance `Rscript scripts/run_achilles.R` en sous-processus
+            │   (env: DB_*, *_SCHEMA, CDM_VERSION, OUTPUT_DIR, SMALL_CELL_COUNT)
+            └── Capture stdout/stderr -> fichier de logs par job
 ```
+
+Modes : `OHDSI_MODE=off` (defaut, endpoints en 503, onglet masque) /
+`OHDSI_MODE=on` (runner demarre via le profil Compose `ohdsi`).
 
 ### Logs en temps reel
 
-Les logs sont streames via SSE (Server-Sent Events) :
+Les logs sont streames via SSE (Server-Sent Events), authentifies par ticket SSE :
 
-1. Un thread lit `docker logs --follow` du conteneur
-2. Les nouvelles lignes sont accumulees dans un buffer
-3. L'endpoint SSE envoie les lignes depuis un offset
-4. Le frontend auto-reconnecte avec le dernier offset en cas de deconnexion
+1. Le backend interroge `{runner}/jobs/{id}/logs?offset=` (polling 1s)
+2. Il relaie les nouvelles lignes au frontend via SSE
+3. Le frontend auto-reconnecte avec le dernier offset en cas de deconnexion
 
 ### Fichiers de sortie
 
-Les resultats OHDSI sont ecrits dans un volume monte. Le navigateur de fichiers permet :
+Les resultats sont ecrits par le runner dans `/data/output/<cdm>/<service>/`
+(volume `opal_ohdsi_data`). Le backend relaie le navigateur de fichiers via
+`GET /api/ohdsi/files/{path}` (acces par CDM verifie sur le premier segment) :
 - Lister les dossiers et fichiers
 - Telecharger des fichiers individuels
 - Naviguer via des breadcrumbs
@@ -1296,18 +1302,24 @@ Les decisions de mapping incluent un audit trail complet dans la table `mapping_
 
 ### docker-compose.yml
 
-**4 services** :
+**4 services + 1 optionnel** (`opal-ohdsi-runner`, profil `ohdsi`) :
 
 | Service | Image | Ports | Volumes |
 |---------|-------|-------|---------|
 | `opal-frontend` | `node:20-alpine` → `nginx:alpine` | 3000:80 | - |
-| `opal-backend` | `python:3.12-slim` | 8000:8000 | `opal_data`, Docker socket, logs |
+| `opal-backend` | `python:3.12-slim` | 8000:8000 | `opal_data`, logs |
 | `opal-db` | `postgres:16-alpine` | 5434:5432 | `opal_pgdata` |
 | `opal-keycloak` | `keycloak:24.0` | 8080:8080 | `opal_keycloak_data`, realm config |
+| `opal-ohdsi-runner` *(profil `ohdsi`)* | build `ohdsi-tools/` | - (interne) | `opal_ohdsi_data` |
+
+> Le backend ne monte **plus** le socket Docker. L'orchestration OHDSI passe par
+> le runner dedie (voir section 10).
 
 ### Reseau
 
-Tous les services partagent le reseau Docker `opal-network`. Les noms de service servent de DNS interne (`opal-db`, `opal-keycloak`, etc.).
+Les services principaux partagent `opal-network`. Le runner OHDSI vit sur un
+reseau dedie `opal-ohdsi-network` (egress vers la base OMOP externe uniquement,
+pas d'acces a `opal-db` ni Keycloak) ; le backend est attache aux deux.
 
 ### Volumes
 
@@ -1316,16 +1328,20 @@ Tous les services partagent le reseau Docker `opal-network`. Les noms de service
 | `opal_pgdata` | Donnees PostgreSQL | Tables OPAL |
 | `opal_data` | Cle de chiffrement | `.secret_key` |
 | `opal_keycloak_data` | Donnees Keycloak | Utilisateurs, sessions |
+| `opal_ohdsi_data` | Jobs + sorties OHDSI | `jobs.db`, logs, `output/<cdm>/<service>/` |
 
 ### docker-compose.prod.yml (production)
 
 Le fichier `docker-compose.prod.yml` ajoute les durcissements suivants :
 - Keycloak en mode production (`start` au lieu de `start-dev`)
 - PostgreSQL pour persistence Keycloak (remplace H2 en memoire)
-- Socket Docker retire
 - Ports bindes sur localhost uniquement
 - Variables d'environnement requises (`:?`)
 - Limites de ressources (CPU/RAM)
+
+> Note : le socket Docker n'est plus monte (ni en dev ni en prod) — l'orchestration
+> OHDSI passe par le runner dedie. Pour activer OHDSI en prod : `OHDSI_MODE=on` +
+> `OHDSI_RUNNER_TOKEN` et le profil `ohdsi`.
 
 ### Health checks
 
@@ -1412,7 +1428,7 @@ app.dependency_overrides[get_db] = override_get_db
 | `test_pagination_gaps.py` | Pagination limit/offset |
 | `test_thread_pool.py` | Pool de connexions OMOP, eviction, invalidation |
 | `test_csv_safety.py` | Protection injection formules CSV |
-| `test_ohdsi_router.py` | Endpoints OHDSI, orchestration Docker |
+| `test_ohdsi_router.py` | Endpoints OHDSI (mode on/off, accès CDM, client runner mocké) |
 | `test_rate_limit.py` | Rate limiting par endpoint |
 | `test_sql_safety.py` | Validation safe_identifier, longueur max |
 

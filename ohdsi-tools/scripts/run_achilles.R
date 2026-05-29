@@ -56,7 +56,9 @@ achilles(
 
     verboseMode = TRUE,
     numThreads = 1,
-    smallCellCount = 0,  # `0` to stop dropping persons with a small number of records (i.e. a test database)
+    # Small-cell suppression. Default 5 (patient privacy). Override with SMALL_CELL_COUNT
+    # only on test databases; never set 0 on real patient data.
+    smallCellCount = as.integer(Sys.getenv("SMALL_CELL_COUNT", "5")),
     optimizeAtlasCache = FALSE,
 
     sqlOnly = FALSE,  # `TRUE` to debug without actually running the queries
@@ -70,4 +72,4 @@ achilles(
     excludeAnalysisIds = EXCLUDED_ANALYSIS_IDS,
 
     sourceName = CDM_SOURCE_NAME,  # Optional, defaults to the value in `cdm_source`
-    outputFolder = "output")
+    outputFolder = Sys.getenv("OUTPUT_DIR", "output"))

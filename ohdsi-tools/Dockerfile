@@ -50,4 +50,38 @@ RUN tar xzf /tmp/Achilles.tar.gz -C /usr/local/lib/R/site-library/ && \
     R -e "remotes::install_local('/tmp/CdmOnboarding.tar.gz')" && \
     rm -f /tmp/*.tar.gz
 
+# ---------------------------------------------------------------------------
+# OPAL OHDSI Runner — small FastAPI service that launches the R tools as
+# subprocesses (no Docker socket, no container orchestration).
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
+# Bake scripts, JDBC driver and runner into the image (no host bind mounts).
+COPY scripts /app/scripts
+COPY drivers /app/drivers
+COPY runner /app/runner
+
+RUN python3 -m pip install --no-cache-dir -r /app/runner/requirements.txt
+
+# Non-root runtime user; /data is the writable volume (jobs DB, logs, outputs).
+RUN useradd --system --create-home --home-dir /home/ohdsi ohdsi \
+    && mkdir -p /data \
+    && chown -R ohdsi:ohdsi /data /app/runner
+
+ENV PATH_TO_DRIVER=/app/drivers \
+    OHDSI_APP_ROOT=/app \
+    OHDSI_DATA_DIR=/data \
+    HOME=/tmp \
+    TMPDIR=/tmp
+
+USER ohdsi
+EXPOSE 9000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')" || exit 1
+
+ENTRYPOINT ["python3", "-m", "uvicorn", "--app-dir", "/app/runner", "server:app", "--host", "0.0.0.0", "--port", "9000"]

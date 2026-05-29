@@ -490,6 +490,7 @@ export const conceptApi = {
 
 // OHDSI Tools endpoints
 export const ohdsiApi = {
+  config: () => api.get<{ enabled: boolean }>('/ohdsi/config'),
   run: (service: string, params: {
     cdm_name: string;
     results_schema: string;

@@ -228,7 +228,7 @@ Toutes les variables se definissent dans le fichier `.env` (cf. [.env.example](.
 | `ENVIRONMENT` | `development` | `development` ou `production` |
 | `KEYCLOAK_LDAP_ENABLED` | `false` | Activer la federation LDAP Keycloak |
 
-**Avancees** (optionnelles) : proxy (`HTTP_PROXY` / `HTTPS_PROXY`), orchestration OHDSI (`DOCKER_GID`, `OHDSI_*`) et tuning de performance — toutes documentees et commentees dans [.env.example](.env.example).
+**Avancees** (optionnelles) : proxy (`HTTP_PROXY` / `HTTPS_PROXY`), runner OHDSI (`OHDSI_MODE`, `OHDSI_RUNNER_TOKEN`) et tuning de performance — toutes documentees et commentees dans [.env.example](.env.example).
 
 ### Parametres d'analyse (par CDM)
 
@@ -463,7 +463,7 @@ Navigation et exploration du vocabulaire OMOP.
 
 **Route** : `/ohdsi` | **API** : `/api/ohdsi/` | **Roles** : admin, data-manager
 
-Lancement et supervision de conteneurs Docker OHDSI.
+Lancement et supervision des outils R OHDSI.
 
 | Service | Description |
 |---------|-------------|
@@ -475,25 +475,36 @@ Lancement et supervision de conteneurs Docker OHDSI.
 - Configuration : schema resultats, schema vocabulaire, version CDM
 - Logs en temps reel via SSE avec auto-reconnexion
 - Navigateur de fichiers de sortie avec telechargement
-- Statuts : idle, running, done, error
+- Statuts : idle, running, done, error, cancelled
 
-#### Installation des images OHDSI
+#### Architecture (runner dedie, sans socket Docker)
 
-Les 4 outils sont construits depuis [ohdsi-tools/](ohdsi-tools/) (Dockerfile + scripts R + packages OHDSI vendores + driver JDBC PostgreSQL). Le repertoire est autonome : aucun telechargement externe au build.
+Les outils tournent dans un **service runner dedie** (`opal-ohdsi-runner`) qui
+les execute en **sous-processus** R. Le backend ne touche **jamais** au socket
+Docker : il appelle le runner via une API HTTP interne authentifiee par token.
+Voir [docs/adr/0001-ohdsi-runner-dedie.md](docs/adr/0001-ohdsi-runner-dedie.md).
+
+La fonctionnalite est **opt-in** (2 modes via `OHDSI_MODE`) :
+
+- `OHDSI_MODE=off` (defaut) : desactive, onglet masque.
+- `OHDSI_MODE=on` : renseignez `OHDSI_RUNNER_TOKEN` (`openssl rand -hex 32`) puis
+  demarrez avec le profil `ohdsi` :
 
 ```bash
-# Sans proxy
-docker compose -f ohdsi-tools/docker-compose.yml build
+# Build + lancement du runner (sans proxy)
+docker compose --profile ohdsi up -d --build
 
-# Derriere un proxy corporate avec interception SSL
-docker compose -f ohdsi-tools/docker-compose.yml build \
+# Build derriere un proxy corporate avec interception SSL
+docker compose --profile ohdsi build \
   --build-arg HTTP_PROXY=http://localhost:3128 \
   --build-arg HTTPS_PROXY=http://localhost:3128 \
   --build-arg PROXY_CA_HOST=<proxy-ip> \
   --build-arg PROXY_CA_PORT=<proxy-port>
 ```
 
-Les images sont nommees `ohdsi-docker-{achilles,achilles-export,dqd,cdmonboarding}` (prefixe par defaut `OHDSI_IMAGE_PREFIX=ohdsi-docker`). Les conteneurs sont lances a la demande par le backend via le socket Docker — voir [ohdsi-tools/README.md](ohdsi-tools/README.md).
+Le runner est construit depuis [ohdsi-tools/](ohdsi-tools/) (autonome : aucun
+telechargement externe au build) et vit sur un reseau dedie dont le seul egress
+est la base OMOP externe. Voir [ohdsi-tools/README.md](ohdsi-tools/README.md).
 
 ---
 
@@ -807,7 +818,7 @@ opal/
 │   │   ├── concept_set/
 │   │   │   └── router.py          # Concept sets CRUD
 │   │   ├── ohdsi/
-│   │   │   └── router.py          # Orchestration Docker OHDSI
+│   │   │   └── router.py          # Client HTTP du runner OHDSI (sans socket Docker)
 │   │   ├── incidence/
 │   │   │   └── router.py          # Taux d'incidence
 │   │   ├── estimation/

@@ -24,21 +24,18 @@ services:
       - KEYCLOAK_LDAP_ENABLED=${KEYCLOAK_LDAP_ENABLED:-false}
       - "SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set}"
       - CORS_ORIGINS=http://${EXTERNAL_HOSTNAME:-localhost}:3000,http://${EXTERNAL_HOSTNAME:-localhost}:5173,http://localhost:3000,http://localhost:5173
-      - OHDSI_IMAGE_PREFIX=${OHDSI_IMAGE_PREFIX:-ohdsi-docker}
-      - OHDSI_HOST_OUTPUT_DIR=${OHDSI_HOST_OUTPUT_DIR:-${PWD}/ohdsi_output}
-      - OHDSI_HOST_SCRIPTS_DIR=${OHDSI_HOST_SCRIPTS_DIR:-${PWD}/ohdsi-tools/scripts}
-      - OHDSI_HOST_JDBC_DIR=${OHDSI_HOST_JDBC_DIR:-${PWD}/ohdsi-tools/drivers}
-    group_add:
-      - "${DOCKER_GID:-136}"  # docker socket GID on host (run: stat -c '%g' /var/run/docker.sock)
+      # OHDSI: the backend is a thin client of opal-ohdsi-runner (no Docker socket).
+      - OHDSI_MODE=${OHDSI_MODE:-off}
+      - OHDSI_RUNNER_URL=http://opal-ohdsi-runner:9000
+      - OHDSI_RUNNER_TOKEN=${OHDSI_RUNNER_TOKEN:-}
+    networks:
+      - default
+      - ohdsi-net
     depends_on:
       opal-db:
         condition: service_healthy
     volumes:
       - opal_data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${OHDSI_HOST_SCRIPTS_DIR:-./ohdsi-tools/scripts}:/app/ohdsi_scripts:ro
-      - ${OHDSI_HOST_JDBC_DIR:-./ohdsi-tools/drivers}:/app/jdbc_drivers:ro
-      - ./ohdsi_output:/app/ohdsi_output
       - ./backend/logs:/app/logs
     deploy:
       resources:
@@ -143,11 +140,54 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # OHDSI runner — opt-in via the "ohdsi" profile and OHDSI_MODE=on.
+  #   docker compose --profile ohdsi up -d
+  # Runs the OHDSI R tools as subprocesses (no Docker socket). Lives on a
+  # dedicated network with egress to the external OMOP DB only — it cannot
+  # reach opal-db or keycloak.
+  opal-ohdsi-runner:
+    build:
+      context: ./ohdsi-tools
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+    container_name: opal-ohdsi-runner
+    profiles: ["ohdsi"]
+    environment:
+      - "OHDSI_RUNNER_TOKEN=${OHDSI_RUNNER_TOKEN:?OHDSI_RUNNER_TOKEN is required when the ohdsi profile is enabled (openssl rand -hex 32)}"
+      - OHDSI_MAX_CONCURRENT_JOBS=${OHDSI_MAX_CONCURRENT_JOBS:-2}
+    volumes:
+      - opal_ohdsi_data:/data
+    networks:
+      - ohdsi-net
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   opal_pgdata:
   opal_data:
   opal_keycloak_data:
+  opal_ohdsi_data:
 
 networks:
   default:
     name: opal-network
+  ohdsi-net:
+    name: opal-ohdsi-network

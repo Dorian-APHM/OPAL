@@ -57,7 +57,7 @@
 
 **Scénario d'exploitation** : Si un attaquant obtient l'exécution de code dans le backend (ex: vulnérabilité de dépendance, désérialisation), il peut utiliser le socket Docker pour créer un conteneur privilégié montant le filesystem hôte → compromission totale de l'hôte.
 
-**Correction appliquée** : Mount `/var/run/docker.sock` supprimé de `docker-compose.yml` (base). Commentaire détaillé ajouté sur l'utilisation de `tecnativa/docker-socket-proxy` (whitelist CONTAINERS/IMAGES/POST) pour l'intégration OHDSI. Le `group_add: ["136"]` est également retiré.
+**Correction appliquée** : Le socket Docker n'est plus monté nulle part et le `group_add` docker est retiré. L'orchestration OHDSI passe désormais par un **service runner dédié** (`opal-ohdsi-runner`) qui exécute les outils R en **sous-processus** et que le backend pilote via une API HTTP interne authentifiée par token. Le backend ne détient plus aucun privilège Docker. Voir [docs/adr/0001-ohdsi-runner-dedie.md](../adr/0001-ohdsi-runner-dedie.md).
 
 ---
 
@@ -139,14 +139,14 @@
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | Autorisation |
-| **Fichier** | `backend/modules/ohdsi/router.py:168` |
-| **Statut** | Présent |
+| **Fichier** | `backend/modules/ohdsi/router.py` |
+| **Statut** | ✅ CORRIGÉ |
 
-**Description** : Le `POST /api/ohdsi/run/{service_name}` reçoit `cdm_name` dans le body JSON mais n'appelle pas `check_cdm_access()`. Le middleware ne peut vérifier l'accès CDM que quand `cdm_name` est un query/path parameter, pas dans le body JSON.
+**Description** : Le `POST /api/ohdsi/run/{service_name}` reçoit `cdm_name` dans le body JSON mais n'appelait pas `check_cdm_access()`. De plus, les endpoints de lecture (logs/status/files) ne vérifiaient pas l'accès CDM (IDOR inter-CDM).
 
-**Scénario d'exploitation** : Un data-manager avec accès CDM restreint par ACL lance une analyse Achilles contre un CDM qu'il ne devrait pas voir, causant potentiellement des écritures dans le schéma results du CDM.
+**Scénario d'exploitation** : Un data-manager avec accès CDM restreint par ACL lance une analyse contre un CDM qu'il ne devrait pas voir, ou consulte les sorties/logs d'un autre CDM.
 
-**Correction recommandée** : Ajouter `check_cdm_access(request, req.cdm_name)` au début de la fonction `run_service`.
+**Correction appliquée** : `check_cdm_access()` est appelé au lancement ; les endpoints de lecture filtrent par accès (`status` réduit aux CDM accessibles, `logs` résout le dernier job accessible, `files` vérifie l'accès sur le segment CDM du chemin).
 
 ---
 
@@ -173,12 +173,12 @@
 |----------|--------|
 | **Sévérité** | HAUTE |
 | **Catégorie** | Configuration |
-| **Fichier** | `backend/modules/ohdsi/router.py:184-198` |
-| **Statut** | Présent |
+| **Fichier** | `backend/modules/ohdsi/router.py` |
+| **Statut** | ✅ CORRIGÉ (obsolète) |
 
-**Description** : Le router OHDSI transmet le mot de passe CDM déchiffré en variable d'environnement texte clair (`DB_PASSWORD`) aux conteneurs Docker. Les variables d'environnement sont visibles via `docker inspect`, les listings de processus et les logs des conteneurs.
+**Description** : L'ancien router OHDSI transmettait le mot de passe CDM déchiffré en variable d'environnement (`DB_PASSWORD`) aux conteneurs lancés via le socket Docker, donc visible via `docker inspect`. La mitigation « creds file » d'alors était inopérante (le mot de passe restait aussi dans l'env, et aucun script ne lisait le fichier).
 
-**Correction recommandée** : Utiliser Docker secrets ou monter un fichier credentials temporaire supprimé après le démarrage du conteneur.
+**Correction appliquée** : Il n'y a plus de conteneur lancé via socket (cf. S01). Le mot de passe est transmis au runner via le corps de `POST /jobs` sur le canal interne authentifié, puis injecté dans l'environnement du sous-processus R — pas d'exposition `docker inspect`. Le dispositif « creds file » mort a été supprimé.
 
 ---
 
@@ -510,20 +510,20 @@
 ## Recommandations prioritisées
 
 ### Priorité 1 — Bloquants déploiement
-1. Supprimer le mount Docker socket du compose de base ou utiliser docker-socket-proxy
+1. ✅ Résolu (ohdsi-runner-adr) — le socket Docker a été retiré du compose de base ; OHDSI passe par un runner dédié appelé en HTTP.
 2. Exiger le mot de passe Keycloak admin dans le compose de base
-3. Ajouter `check_cdm_access` à l'endpoint OHDSI run
+3. ✅ Résolu (ohdsi-runner-adr) — `check_cdm_access` est appelé dans `run_service` (`backend/modules/ohdsi/router.py`).
 
 ### Priorité 2 — Avant mise en production
 4. Ajouter la vérification de propriété utilisateur aux endpoints d'extraction
 5. Arrêter de retourner le SQL généré au frontend
-6. Utiliser Docker secrets pour les credentials OHDSI
+6. ✅ Superseded (ohdsi-runner-adr) — les credentials CDM sont transmis au runner via un POST authentifié (token partagé) sur un réseau isolé, plus via le socket/secrets Docker.
 7. Exiger `ENCRYPTION_KEY` en production
 8. Hasher les mots de passe dans `PoolEntry`
 
 ### Priorité 3 — Durcissement
 9. Rate limiting sur cohort count, attrition, sample, concept counts, search, OHDSI run
-10. Vérification propriétaire sur OHDSI stop
+10. ✅ Résolu (ohdsi-runner-adr) — `_assert_stop_allowed` n'autorise l'arrêt qu'au lanceur du job ou à un admin/data-manager.
 11. Filtrer les analyses actives par permissions CDM
 12. Valider strictement les dates des logs d'audit
 13. Sanitiser tous les noms de fichiers CSV
