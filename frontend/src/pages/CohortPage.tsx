@@ -32,7 +32,7 @@ import SqlEditor from '../components/SqlEditor';
 import { useNotifDots } from '../hooks/useNotifDots';
 import { useSessionState } from '../hooks/useSessionState';
 import type {
-  CohortCriterion, CriteriaGroup, DemographicConstraints,
+  CohortCriterion, DemographicConstraints,
   CohortCriteria, CohortSummary, CohortShareInfo, AttritionStep,
 } from '../types';
 
@@ -159,18 +159,15 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   /** Apply a validated AI draft: merge criteria + demographics, then switch to the builder. */
   const handleApplyAiDraft = (payload: {
-    inclusionCriteria: CohortCriterion[];
-    inclusionGroups: CriteriaGroup[];
+    inclusion: CohortCriterion[];
     exclusion: CohortCriterion[];
     demographics: DemographicConstraints;
   }) => {
+    // Append AI criteria exactly like manual ones; the user then arranges AND/OR
+    // and ordering in the builder. (AI criteria carry no operatorWithNext.)
     setCriteria(prev => ({
       ...prev,
-      inclusion: {
-        ...prev.inclusion,
-        criteria: [...prev.inclusion.criteria, ...payload.inclusionCriteria],
-        groups: [...(prev.inclusion.groups || []), ...payload.inclusionGroups],
-      },
+      inclusion: { ...prev.inclusion, criteria: [...prev.inclusion.criteria, ...payload.inclusion] },
       exclusion: { ...prev.exclusion, criteria: [...prev.exclusion.criteria, ...payload.exclusion] },
       demographics: { ...prev.demographics, ...payload.demographics },
     }));
