@@ -864,16 +864,21 @@ function buildFormula(group: CriteriaGroup): string {
   const label = (node: CriteriaNode) =>
     node.type === 'criterion' ? criterionLabel(node.criterion) : `(${buildFormula(node.group)})`;
 
-  // Interleave per-pair operators (operatorWithNext on the preceding criterion,
-  // falling back to the group operator). OR binds tighter than AND (backend groups
-  // OR-runs into UNION, then AND into INTERSECT) \u2192 e.g. "A AND B OR C" = A AND (B OR C).
-  let out = label(children[0]);
-  for (let i = 1; i < children.length; i++) {
-    const prev = children[i - 1];
-    const op = prev.type === 'criterion' ? (prev.criterion.operatorWithNext ?? group.operator) : group.operator;
-    out += ` ${op} ${label(children[i])}`;
-  }
-  return out;
+  // Mirror the backend grouping: OR binds tighter than AND. We split children into
+  // AND-separated segments where each segment is a run of OR-linked items, and wrap
+  // every multi-item (OR) segment in parentheses \u2192 "A OR B AND C" = "(A OR B) AND C".
+  const opAfter = (i: number): 'AND' | 'OR' => {
+    const n = children[i];
+    return n.type === 'criterion' ? (n.criterion.operatorWithNext ?? group.operator) : group.operator;
+  };
+  const segments: string[][] = [[]];
+  children.forEach((node, i) => {
+    segments[segments.length - 1].push(label(node));
+    if (i < children.length - 1 && opAfter(i) === 'AND') segments.push([]);
+  });
+  return segments
+    .map(seg => (seg.length > 1 ? `(${seg.join(' OR ')})` : seg[0]))
+    .join(' AND ');
 }
 
 function criterionLabel(c: CohortCriterion): string {
