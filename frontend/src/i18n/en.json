@@ -281,6 +281,7 @@
     "date": "Date",
     "export_history": "Export",
     "decisions": "decisions",
+    "export_history": "Export CSV",
     "apply_to": "Apply to",
     "approved_decisions": "Approved Decisions",
     "impacted_rows": "Impacted Rows",
