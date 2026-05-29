@@ -1,5 +1,5 @@
-import { Fragment, type ReactNode } from 'react';
-import { Listbox, ListboxButton, ListboxOption, ListboxOptions, Transition } from '@headlessui/react';
+import { type ReactNode } from 'react';
+import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from '@headlessui/react';
 import { ChevronDown, Check, X } from 'lucide-react';
 
 function labelToString(label: ReactNode): string {
@@ -70,15 +70,10 @@ export function Select({
             </span>
           </ListboxButton>
 
-          <Transition
-            as={Fragment}
-            leave="transition ease-in duration-100"
-            leaveFrom="opacity-100"
-            leaveTo="opacity-0"
-          >
             <ListboxOptions
-              anchor="bottom start"
-              className="z-[9999] mt-1 max-h-60 min-w-[var(--button-width)] w-max max-w-[320px] overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)] py-1 text-sm focus:outline-none"
+              anchor={{ to: 'bottom start', gap: 4 }}
+              transition
+              className="z-[9999] max-h-60 min-w-[var(--button-width)] w-max max-w-[320px] overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)] py-1 text-sm focus:outline-none transition duration-100 ease-in data-[closed]:opacity-0"
             >
               {options.map((option) => (
                 <ListboxOption
@@ -109,7 +104,6 @@ export function Select({
                 </ListboxOption>
               ))}
             </ListboxOptions>
-          </Transition>
         </div>
       </Listbox>
     </div>
