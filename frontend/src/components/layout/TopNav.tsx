@@ -6,7 +6,7 @@ import {
   Menu, X, ChevronDown, Bell, Sun, Moon, Search, GitBranch,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { cdmApi, cdmAccessApi, notificationsApi } from '../../api/client';
+import { cdmApi, cdmAccessApi, notificationsApi, ohdsiApi } from '../../api/client';
 import type { CdmConfig } from '../../types';
 import { useAuth } from '../../auth/KeycloakContext';
 import { useNotificationWs } from '../../hooks/useNotificationWs';
@@ -149,9 +149,25 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
     }
   }, [authenticated, token]);
 
+  // OHDSI is opt-in (server-side OHDSI_MODE). Hide its nav item unless enabled.
+  const [ohdsiEnabled, setOhdsiEnabled] = useState(false);
+  useEffect(() => {
+    if (authenticated && token) {
+      ohdsiApi.config()
+        .then((res) => setOhdsiEnabled(!!res.data.enabled))
+        .catch(() => setOhdsiEnabled(false));
+    }
+  }, [authenticated, token]);
+
+  // /ohdsi is shown only when the server reports OHDSI enabled.
+  const isVisible = useCallback(
+    (key: string) => hasPageAccess(key) && (key !== '/ohdsi' || ohdsiEnabled),
+    [hasPageAccess, ohdsiEnabled]
+  );
+
   const mainItems = useMemo(
-    () => mainNav.filter((item) => hasPageAccess(item.key)),
-    [roles, hasPageAccess, i18n.language]
+    () => mainNav.filter((item) => isVisible(item.key)),
+    [roles, isVisible, i18n.language]
   );
 
   const adminItems = useMemo(
@@ -160,8 +176,8 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
   );
 
   const allItems = useMemo(
-    () => [...mainNav, ...adminNav].filter((item) => hasPageAccess(item.key)),
-    [roles, hasPageAccess, i18n.language]
+    () => [...mainNav, ...adminNav].filter((item) => isVisible(item.key)),
+    [roles, isVisible, i18n.language]
   );
 
   const toggleLang = () => {
