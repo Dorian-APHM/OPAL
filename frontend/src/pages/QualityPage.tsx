@@ -86,7 +86,7 @@ function ConformityTab({ selectedCdm }: { selectedCdm: string }) {
     qualityApi.activeAnalyses()
       .then(res => {
         if (!mountedRef.current) return;
-        const active = res.data.active.find(
+        const active = (res.data.active ?? []).find(
           a => a.type === 'conformity' && a.cdm_name === selectedCdm && !a.cancelled
         );
         if (active) {
@@ -400,7 +400,7 @@ export default function QualityPage({ selectedCdm }: Props) {
       if (!notif || notif.type !== 'quality_done') return;
       if (selectedCdm && notif.link && notif.link.includes(`cdm=${selectedCdm}`)) {
         qualityApi.timeline(selectedCdm).then((r) => {
-          if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines)));
+          if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines ?? {})));
         }).catch(() => {});
         if (selectedDomain) {
           loadLatestSnapshot();
@@ -413,13 +413,15 @@ export default function QualityPage({ selectedCdm }: Props) {
   }, [selectedCdm, selectedDomain]);
 
   useEffect(() => {
-    qualityApi.domains(selectedCdm || undefined).then((res) => setDomains(res.data.domains));
+    qualityApi.domains(selectedCdm || undefined)
+      .then((res) => setDomains(res.data.domains ?? []))
+      .catch(() => setDomains([]));
   }, [selectedCdm]);
 
   useEffect(() => {
     if (!selectedCdm) { setAnalyzedDomains(new Set()); return; }
     qualityApi.timeline(selectedCdm).then((res) => {
-      setAnalyzedDomains(new Set(Object.keys(res.data.timelines)));
+      setAnalyzedDomains(new Set(Object.keys(res.data.timelines ?? {})));
     }).catch(() => setAnalyzedDomains(new Set()));
   }, [selectedCdm]);
 
@@ -429,8 +431,9 @@ export default function QualityPage({ selectedCdm }: Props) {
     qualityApi.activeAnalyses()
       .then(res => {
         if (!mountedRef.current) return;
+        const active = res.data.active ?? [];
         // Resume batch if running
-        const batch = res.data.active.find(
+        const batch = active.find(
           a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled
         );
         if (batch) {
@@ -446,7 +449,7 @@ export default function QualityPage({ selectedCdm }: Props) {
           analysisIdRef.current = null;
         }
         // Resume single-domain if running
-        const single = res.data.active.find(
+        const single = active.find(
           a => a.type === 'single' && a.cdm_name === selectedCdm && !a.cancelled
         );
         if (single) {
@@ -469,6 +472,8 @@ export default function QualityPage({ selectedCdm }: Props) {
       qualityApi.activeAnalyses()
         .then(res => {
           if (!mountedRef.current) return;
+          // Malformed/partial response — keep polling rather than assuming finished.
+          if (!Array.isArray(res.data.active)) return;
           const entry = res.data.active.find(a => a.analysis_id === aid && !a.cancelled);
           if (entry) {
             // Update progress from server
@@ -482,10 +487,8 @@ export default function QualityPage({ selectedCdm }: Props) {
             }
             return;
           }
-          // No longer running — analysis finished
-          const stillRunning = false;
-          if (!stillRunning) {
-            // Batch finished — refresh data
+          // No longer in the active list — batch finished, refresh data.
+          {
             setBatchLoading(false);
             setBatchProgress(100);
             analysisIdRef.current = null;
@@ -495,7 +498,7 @@ export default function QualityPage({ selectedCdm }: Props) {
             // Refresh analyzed domains
             if (selectedCdm) {
               qualityApi.timeline(selectedCdm).then((r) => {
-                if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines)));
+                if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines ?? {})));
               }).catch(() => toast.error(t('quality.timeline_failed', 'Failed to refresh timeline')));
             }
             // Reload current snapshot if viewing an analyzed domain
@@ -562,6 +565,8 @@ export default function QualityPage({ selectedCdm }: Props) {
       qualityApi.activeAnalyses()
         .then(res => {
           if (!mountedRef.current) return;
+          // Malformed/partial response — keep polling rather than declaring success.
+          if (!Array.isArray(res.data.active)) return;
           const entry = res.data.active.find(a => a.analysis_id === aid);
           if (entry && !entry.cancelled) return; // still running
           // Finished or cancelled — stop polling
@@ -638,6 +643,7 @@ export default function QualityPage({ selectedCdm }: Props) {
           if (!mountedRef.current) return;
           const aid = analysisIdRef.current;
           if (!aid) return;
+          if (!Array.isArray(res.data.active)) return;
           const entry = res.data.active.find(a => a.analysis_id === aid && !a.cancelled);
           if (entry) {
             const pct = entry.total > 0 ? Math.round((entry.completed / entry.total) * 100) : 0;
@@ -670,7 +676,12 @@ export default function QualityPage({ selectedCdm }: Props) {
                   if (mountedRef.current) {
                     setBatchProgress(Math.round((event.completed / event.total) * 100));
                     if (event.domain && event.status && event.status !== 'running') {
-                      setBatchStatus(prev => [...prev, { domain: event.domain!, status: event.status! }]);
+                      // Dedupe by domain — the stream and the poll fallback both write
+                      // batchStatus, and a domain may emit several non-running events.
+                      setBatchStatus(prev => [
+                        ...prev.filter(s => s.domain !== event.domain),
+                        { domain: event.domain!, status: event.status! },
+                      ]);
                       if (event.status === 'success') setAnalyzedDomains(prev => new Set([...prev, event.domain!]));
                     }
                   }
@@ -693,7 +704,7 @@ export default function QualityPage({ selectedCdm }: Props) {
       if (!gotStart && !analysisIdRef.current) {
         try {
           const res = await qualityApi.activeAnalyses();
-          const batch = res.data.active.find(a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled);
+          const batch = (res.data.active ?? []).find(a => a.type === 'batch' && a.cdm_name === selectedCdm && !a.cancelled);
           if (batch) analysisIdRef.current = batch.analysis_id;
         } catch {}
       }

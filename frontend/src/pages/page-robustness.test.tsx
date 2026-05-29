@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Component, type ReactNode } from 'react';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../components/ui/Toast';
 import '../i18n';
@@ -35,6 +35,7 @@ vi.mock('../api/client', () => ({
   cdmApi: apiProxy,
   cohortApi: apiProxy,
   qualityApi: apiProxy,
+  conformityApi: apiProxy,
   authDownload: () => Promise.resolve(),
   setTokenGetter: () => {},
   default: apiProxy,
@@ -86,6 +87,15 @@ describe('page robustness against empty/partial API responses', () => {
     const { default: ConceptExplorerPage } = await import('./ConceptExplorerPage');
     const errors = renderPage(<ConceptExplorerPage selectedCdm="AuditCDM" />);
     await waitFor(() => {});
+    expect(errors).toEqual([]);
+  });
+
+  it('QualityPage mounts without crashing and without firing the status-check error toast', async () => {
+    const { default: QualityPage } = await import('./QualityPage');
+    const errors = renderPage(<QualityPage selectedCdm="AuditCDM" />);
+    await waitFor(() => {});
+    // A partial activeAnalyses() body must not be treated as an error (no toast storm).
+    expect(screen.queryByText(/Échec de la vérification du statut/)).toBeNull();
     expect(errors).toEqual([]);
   });
 });
