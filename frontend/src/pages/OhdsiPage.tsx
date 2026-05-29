@@ -72,7 +72,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   const [activeLogTab, setActiveLogTab] = useState<string>('achilles');
   const eventSourcesRef = useRef<Record<string, EventSource>>({});
   const logOffsetRef = useRef<Record<string, number>>({});
-  const logEndRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
   const prevLogCountRef = useRef<Record<string, number>>({});
 
   // File browser
@@ -227,13 +227,16 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     };
   }, [startSSE, enabled]);
 
-  // Auto-scroll logs only when new lines arrive
+  // Auto-scroll the log box (NOT the page) when new lines arrive — and only if the
+  // user is already near the bottom, so scrolling up to reach Stop isn't fought.
   useEffect(() => {
     const key = activeLogTab;
     const currentCount = services[key]?.logs?.length || 0;
     const prevCount = prevLogCountRef.current[key] || 0;
-    if (currentCount > prevCount) {
-      logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = logContainerRef.current;
+    if (currentCount > prevCount && el) {
+      const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+      if (nearBottom) el.scrollTop = el.scrollHeight;
     }
     prevLogCountRef.current[key] = currentCount;
   }, [services, activeLogTab]);
@@ -320,7 +323,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         </span>
       ),
       children: (
-        <div className="h-[300px] overflow-auto bg-deep-base text-text-bright font-mono text-xs p-3 rounded mb-3">
+        <div ref={logContainerRef} className="h-[300px] overflow-auto bg-deep-base text-text-bright font-mono text-xs p-3 rounded mb-3">
           {getLogs(key).length === 0 ? (
             <span className="text-text-dim">{t('ohdsi.no_logs')}</span>
           ) : (
@@ -330,7 +333,6 @@ export default function OhdsiPage({ selectedCdm }: Props) {
               </div>
             ))
           )}
-          <div ref={logEndRef} />
         </div>
       ),
     };

@@ -142,6 +142,7 @@ export default function CdmManagementPage() {
       toast.success(t('common.success'));
       resetForm();
       await loadCdms();
+      window.dispatchEvent(new Event('opal:cdm-changed'));  // refresh the TopNav CDM selector
     } catch (err: any) {
       toast.error(err?.response?.data?.detail || t('common.error'));
     } finally {
@@ -154,6 +155,7 @@ export default function CdmManagementPage() {
       await cdmApi.delete(cdmName);
       toast.success(t('common.success'));
       await loadCdms();
+      window.dispatchEvent(new Event('opal:cdm-changed'));  // refresh the TopNav CDM selector
     } catch {
       toast.error(t('common.error'));
     }

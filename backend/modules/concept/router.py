@@ -1075,6 +1075,16 @@ def source_value_cache_status(cdm_name: str, db: Session = Depends(get_db)):
     ).all()
     with _cache_populate_lock:
         populating = cdm_name in _active_cache_populates
+    # Reconcile rows left in 'running' by a crash/restart/cancel: with no active
+    # populate task, a 'running' status is stale (the spinner would spin forever).
+    if not populating:
+        stale = [r for r in rows if r.status == "running"]
+        if stale:
+            for r in stale:
+                r.status = "error"
+                if not r.error_message:
+                    r.error_message = "Build interrompu (redémarrage/arrêt) — relancer le build"
+            db.commit()
     return {
         "populating": populating,
         "domains": [
@@ -1130,6 +1140,14 @@ def populate_source_value_cache(
         raise HTTPException(status_code=404, detail="CDM not found")
     password = decrypt_password(cdm.db_password_encrypted)
     schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+
+    # Clean slate: drop previous per-domain status rows so a rebuild over an existing
+    # cache shows fresh progress (no stale 'running'/old rows polluting the UI).
+    from db.models import SourceValueCacheStatus
+    db.query(SourceValueCacheStatus).filter(
+        SourceValueCacheStatus.cdm_name == cdm_name
+    ).delete(synchronize_session=False)
+    db.commit()
 
     _cancelled = {"v": False}
     with _cache_populate_lock:

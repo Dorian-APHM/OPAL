@@ -137,7 +137,7 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
     return adminNav.reduce((sum, item) => sum + (routeBadges[item.key] || 0), 0);
   }, [routeBadges]);
 
-  useEffect(() => {
+  const loadCdms = useCallback(() => {
     if (authenticated && token) {
       // Use CDM access control: non-admin users only see CDMs they have access to
       cdmAccessApi.getAccessibleCdms()
@@ -148,6 +148,19 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
         });
     }
   }, [authenticated, token]);
+
+  useEffect(() => { loadCdms(); }, [loadCdms]);
+
+  // Refresh the CDM selector when a CDM is created/deleted (CdmManagementPage emits
+  // 'opal:cdm-changed') or when the user returns to the tab — no full reload needed.
+  useEffect(() => {
+    window.addEventListener('opal:cdm-changed', loadCdms);
+    window.addEventListener('focus', loadCdms);
+    return () => {
+      window.removeEventListener('opal:cdm-changed', loadCdms);
+      window.removeEventListener('focus', loadCdms);
+    };
+  }, [loadCdms]);
 
   // OHDSI is opt-in (server-side OHDSI_MODE). Hide its nav item unless enabled.
   const [ohdsiEnabled, setOhdsiEnabled] = useState(false);
