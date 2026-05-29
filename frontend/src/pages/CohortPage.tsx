@@ -32,7 +32,7 @@ import SqlEditor from '../components/SqlEditor';
 import { useNotifDots } from '../hooks/useNotifDots';
 import { useSessionState } from '../hooks/useSessionState';
 import type {
-  CohortCriterion, DemographicConstraints,
+  CohortCriterion, CriteriaGroup, DemographicConstraints,
   CohortCriteria, CohortSummary, CohortShareInfo, AttritionStep,
 } from '../types';
 
@@ -159,13 +159,18 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   /** Apply a validated AI draft: merge criteria + demographics, then switch to the builder. */
   const handleApplyAiDraft = (payload: {
-    inclusion: CohortCriterion[];
+    inclusionCriteria: CohortCriterion[];
+    inclusionGroups: CriteriaGroup[];
     exclusion: CohortCriterion[];
     demographics: DemographicConstraints;
   }) => {
     setCriteria(prev => ({
       ...prev,
-      inclusion: { ...prev.inclusion, criteria: [...prev.inclusion.criteria, ...payload.inclusion] },
+      inclusion: {
+        ...prev.inclusion,
+        criteria: [...prev.inclusion.criteria, ...payload.inclusionCriteria],
+        groups: [...(prev.inclusion.groups || []), ...payload.inclusionGroups],
+      },
       exclusion: { ...prev.exclusion, criteria: [...prev.exclusion.criteria, ...payload.exclusion] },
       demographics: { ...prev.demographics, ...payload.demographics },
     }));
