@@ -391,7 +391,7 @@ export default function UserManagementPage() {
       title: t('admin.name', 'Name'),
       key: 'name',
       width: 180,
-      render: (_: any, r: AccessRequest) => `${r.first_name} ${r.last_name}`,
+      render: (_: any, r: AccessRequest) => `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.username,
     },
     {
       title: 'Email',

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Component, type ReactNode } from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -39,29 +39,6 @@ vi.mock('../api/client', () => ({
   setTokenGetter: () => {},
   default: apiProxy,
 }));
-
-beforeAll(() => {
-  // jsdom lacks these — provide minimal stubs so hooks/charts can mount.
-  if (!window.matchMedia) {
-    window.matchMedia = ((query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia;
-  }
-  if (!(globalThis as any).ResizeObserver) {
-    (globalThis as any).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
-  }
-});
 
 // Captures any render error a page throws, so a "white-screen" turns into a failed assertion.
 class Catcher extends Component<{ onError: (e: Error) => void; children: ReactNode }, { failed: boolean }> {
