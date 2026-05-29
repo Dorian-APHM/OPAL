@@ -52,6 +52,7 @@ export default function UserManagementPage() {
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [opalUsers, setOpalUsers] = useState<string[]>([]);
+  const [roleBusy, setRoleBusy] = useState<Set<string>>(new Set());
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<GroupSummary | null>(null);
   const [groupForm, setGroupForm] = useState<{ name: string; description: string; members: string[] }>({ name: '', description: '', members: [] });
@@ -158,22 +159,32 @@ export default function UserManagementPage() {
   }, [fetchUsers, fetchRequests, fetchGroups, fetchOpalUsers]);
 
   const handleAssignRole = async (userId: string, role: string) => {
+    const key = `${userId}:${role}`;
+    if (roleBusy.has(key)) return; // guard against duplicate role calls
+    setRoleBusy(prev => new Set(prev).add(key));
     try {
       await adminApi.assignRole(userId, role);
       toast.success(t('admin.role_assigned', 'Role assigned'));
       fetchUsers();
     } catch (e: any) {
       toast.error(e.message || 'Failed to assign role');
+    } finally {
+      setRoleBusy(prev => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 
   const handleRemoveRole = async (userId: string, role: string) => {
+    const key = `${userId}:${role}`;
+    if (roleBusy.has(key)) return; // guard against duplicate role calls
+    setRoleBusy(prev => new Set(prev).add(key));
     try {
       await adminApi.removeRole(userId, role);
       toast.success(t('admin.role_removed', 'Role removed'));
       fetchUsers();
     } catch (e: any) {
       toast.error(e.message || 'Failed to remove role');
+    } finally {
+      setRoleBusy(prev => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 

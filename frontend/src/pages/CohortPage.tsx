@@ -73,6 +73,7 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   // Delete confirm state
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [executingId, setExecutingId] = useState<number | null>(null);
 
   // Favorites state
   const [favoriteCohortIds, setFavoriteCohortIds] = useState<Set<string>>(new Set());
@@ -94,7 +95,7 @@ export default function CohortPage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     try {
       const resp = await cohortApi.list(selectedCdm);
-      setCohorts(resp.data.cohorts);
+      setCohorts(resp.data.cohorts ?? []);
     } catch {
       // ignore
     }
@@ -944,12 +945,14 @@ export default function CohortPage({ selectedCdm }: Props) {
                   >
                     <Share2 className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="small" variant="link" onClick={() => {
-                    if (c.id) {
+                  <Button size="small" variant="link" loading={executingId === c.id} disabled={executingId === c.id} onClick={() => {
+                    if (c.id && executingId == null) {
+                      setExecutingId(c.id);
                       cohortApi.execute(c.id).then(resp => {
                         toast.success(`Count: ${resp.data.patient_count}`);
                         loadCohorts();
-                      }).catch(() => toast.error('Execution failed'));
+                      }).catch(() => toast.error('Execution failed'))
+                        .finally(() => setExecutingId(null));
                     }
                   }}>
                     <PlayCircle className="h-3.5 w-3.5" />

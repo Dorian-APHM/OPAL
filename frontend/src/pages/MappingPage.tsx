@@ -372,6 +372,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const [suggestWarnings, setSuggestWarnings] = useSessionState<string[]>('mapping:suggest:warnings', []);
   const [hasRun, setHasRun] = useSessionState('mapping:suggest:hasRun', false);
   const [loading, setLoading] = useSessionState('mapping:suggest:loading', false);
+  const [bulkLoading, setBulkLoading] = useState(false);
   const [taskId, setTaskId] = useSessionState<string | null>('mapping:suggest:taskId', null);
   const [limit, setLimit] = useSessionState('mapping:suggest:limit', 20);
   const [enableFuzzy, setEnableFuzzy] = useSessionState('mapping:suggest:enableFuzzy', true);
@@ -560,6 +561,9 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   };
 
   const handleBulkApprove = async (minConfidence: number) => {
+    if (bulkLoading) return; // guard against double-submit (duplicate decisions)
+    setBulkLoading(true);
+    try {
     const toApprove = results.filter(r =>
       r.suggestions.length > 0 && r.suggestions[0].confidence >= minConfidence
     );
@@ -584,6 +588,9 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
     setResults(prev => prev.filter(r =>
       !(r.suggestions.length > 0 && r.suggestions[0].confidence >= minConfidence)
     ));
+    } finally {
+      setBulkLoading(false);
+    }
   };
 
   const confidenceColor = (c: number): 'green' | 'orange' | 'red' => c >= 80 ? 'green' : c >= 50 ? 'orange' : 'red';
@@ -637,10 +644,10 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
           )}
           {results.length > 0 && (
             <>
-              <Button size="small" onClick={() => handleBulkApprove(80)}>
+              <Button size="small" loading={bulkLoading} disabled={bulkLoading} onClick={() => handleBulkApprove(80)}>
                 {t('mapping.bulk_approve_80', 'Bulk Approve ≥80%')}
               </Button>
-              <Button size="small" onClick={() => handleBulkApprove(90)}>
+              <Button size="small" loading={bulkLoading} disabled={bulkLoading} onClick={() => handleBulkApprove(90)}>
                 ≥90%
               </Button>
             </>
