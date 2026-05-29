@@ -43,14 +43,15 @@ authors <- strsplit(Sys.getenv("CDM_ONBOARDING_AUTHORS", "OPAL Team"), ",")[[1]]
 # (optional) URL to the WebAPI that your local Atlas instance uses, e.g. http://localhost:8080/WebAPI
 baseUrl <- Sys.getenv("WEBAPI_BASEURL")
 
-# Auto-detect : prend le JSON DQD le plus récent dans /input/dqd/
-dqdJsonFiles <- list.files('/input/dqd', pattern = '\\.json$', full.names = TRUE)
+# Auto-detect : prend le JSON DQD le plus récent dans le dossier d'entrée DQD.
+dqdInputDir <- Sys.getenv("DQD_INPUT_DIR", "/input/dqd")
+dqdJsonFiles <- list.files(dqdInputDir, pattern = '\\.json$', full.names = TRUE)
 if (length(dqdJsonFiles) == 0) {
-  stop("Aucun fichier JSON DQD trouvé dans /input/dqd/. Lancez DQD d'abord.")
+  stop(paste0("Aucun fichier JSON DQD trouvé dans ", dqdInputDir, ". Lancez DQD d'abord."))
 }
 dqdJsonPath <- dqdJsonFiles[which.max(file.info(dqdJsonFiles)$mtime)]
 cat("Utilisation du fichier DQD:", dqdJsonPath, "\n")
-outputFolder <- '/output'
+outputFolder <- Sys.getenv("OUTPUT_DIR", "/output")
 smallCellCount <- 5
 verboseMode <- TRUE
 

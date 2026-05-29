@@ -80,6 +80,14 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
 
+  // OHDSI feature flag (server-side OHDSI_MODE). null = loading.
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    ohdsiApi.config()
+      .then((res) => setEnabled(!!res.data.enabled))
+      .catch(() => setEnabled(false));
+  }, []);
+
   // Pre-fill config from CDM
   useEffect(() => {
     if (!selectedCdm) return;
@@ -96,6 +104,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
 
   // Poll status
   useEffect(() => {
+    if (enabled !== true) return;
     const poll = setInterval(() => {
       ohdsiApi.status().then((res) => {
         setServices((prev) => {
@@ -109,7 +118,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
       }).catch(() => {});
     }, 3000);
     return () => clearInterval(poll);
-  }, []);
+  }, [enabled]);
 
   // Load files
   const loadFiles = useCallback((path: string) => {
@@ -194,7 +203,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   // On mount: recover logs from backend for any non-idle service
   const recoveredRef = useRef(false);
   useEffect(() => {
-    if (recoveredRef.current) return;
+    if (enabled !== true || recoveredRef.current) return;
     recoveredRef.current = true;
     SERVICES.forEach(({ key }) => {
       ohdsiApi.logsHistory(key).then((res) => {
@@ -216,7 +225,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
       Object.values(eventSourcesRef.current).forEach((es) => es.close());
       eventSourcesRef.current = {};
     };
-  }, [startSSE]);
+  }, [startSSE, enabled]);
 
   // Auto-scroll logs only when new lines arrive
   useEffect(() => {
@@ -281,6 +290,16 @@ export default function OhdsiPage({ selectedCdm }: Props) {
 
   // Breadcrumb parts
   const pathParts = currentPath ? currentPath.split('/') : [];
+
+  if (enabled === false) {
+    return (
+      <div className="py-10 text-center">
+        <h4 className="text-lg font-semibold text-text-dim">
+          {t('ohdsi.disabled', 'OHDSI tools are disabled on this server (OHDSI_MODE=off).')}
+        </h4>
+      </div>
+    );
+  }
 
   if (!selectedCdm) {
     return (

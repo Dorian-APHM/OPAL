@@ -226,9 +226,19 @@ TABLE_CATEGORY: dict[str, str] = {
     for table in tables
 }
 
-# OHDSI Docker integration
-OHDSI_IMAGE_PREFIX = os.getenv("OHDSI_IMAGE_PREFIX", "ohdsi-docker")
-OHDSI_OUTPUT_DIR = os.getenv("OHDSI_OUTPUT_DIR", "/app/ohdsi_output")
-OHDSI_HOST_OUTPUT_DIR = os.getenv("OHDSI_HOST_OUTPUT_DIR", "")
-OHDSI_HOST_SCRIPTS_DIR = os.getenv("OHDSI_HOST_SCRIPTS_DIR", "")
-OHDSI_HOST_JDBC_DIR = os.getenv("OHDSI_HOST_JDBC_DIR", "")
+# OHDSI integration.
+# The backend no longer touches Docker. OHDSI tools run in a dedicated runner
+# service (see ohdsi-tools/runner) that the backend calls over an internal HTTP
+# API. Two modes only:
+#   OHDSI_MODE=off  -> feature disabled (endpoints return 503, tab hidden)
+#   OHDSI_MODE=on   -> backend talks to the runner at OHDSI_RUNNER_URL
+OHDSI_MODE = os.getenv("OHDSI_MODE", "off").strip().lower()
+OHDSI_ENABLED = OHDSI_MODE == "on"
+OHDSI_RUNNER_URL = os.getenv("OHDSI_RUNNER_URL", "http://opal-ohdsi-runner:9000").rstrip("/")
+OHDSI_RUNNER_TOKEN = os.getenv("OHDSI_RUNNER_TOKEN", "")
+
+if ENVIRONMENT == "production" and OHDSI_ENABLED and not OHDSI_RUNNER_TOKEN:
+    raise RuntimeError(
+        "FATAL: OHDSI_MODE=on requires OHDSI_RUNNER_TOKEN in production. "
+        "Generate one with: openssl rand -hex 32"
+    )
