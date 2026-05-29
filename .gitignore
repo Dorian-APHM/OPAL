@@ -40,6 +40,8 @@ scripts/setup_keycloak.sh
 
 # Data / reference CSV files (loaded via API, not tracked)
 *.csv
+# Référentiels locaux (CCAM, SapBERT…) — chargés via l'API, ne pas committer
+/data/
 
 # LibreOffice / Excel lock files
 .~lock.*#
