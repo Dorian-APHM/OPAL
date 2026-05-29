@@ -486,7 +486,7 @@ Voir [docs/adr/0001-ohdsi-runner-dedie.md](docs/adr/0001-ohdsi-runner-dedie.md).
 
 La fonctionnalite est **opt-in** (2 modes via `OHDSI_MODE`) :
 
-- `OHDSI_MODE=off` (defaut) : desactive, onglet masque.
+- `OHDSI_MODE=off` (defaut) : desactive, onglet masque. **Aucun token requis** — laissez `OHDSI_RUNNER_TOKEN` vide ; toutes les commandes `docker compose` fonctionnent sans lui.
 - `OHDSI_MODE=on` : renseignez `OHDSI_RUNNER_TOKEN` (`openssl rand -hex 32`) puis
   demarrez avec le profil `ohdsi` :
 
