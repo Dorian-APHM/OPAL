@@ -1,4 +1,8 @@
 import { useState, useEffect } from 'react';
+import {
+  useFloating, autoUpdate, offset, flip, shift, size,
+  useDismiss, useInteractions, FloatingPortal,
+} from '@floating-ui/react';
 import { Card, Input, Select, Tag, Empty, Spinner } from '../../components/ui';
 import { Search, Plus, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +14,38 @@ interface Props {
   onAddCriterion: (criterion: CohortCriterion) => void;
 }
 
+// A floating, portalled result list anchored to a search input: flips up near the
+// viewport bottom, caps its height to the available space (scrolls internally), and
+// closes on outside click / Escape. Lets the cramped left panel host full result lists.
+function useResultsDropdown(open: boolean, onOpenChange: (v: boolean) => void) {
+  const { refs, floatingStyles, context } = useFloating({
+    open,
+    onOpenChange,
+    placement: 'bottom-start',
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(4),
+      flip({ padding: 8 }),
+      shift({ padding: 8 }),
+      size({
+        padding: 8,
+        apply({ availableHeight, rects, elements }) {
+          Object.assign(elements.floating.style, {
+            maxHeight: `${Math.max(140, Math.min(availableHeight, 360))}px`,
+            minWidth: `${rects.reference.width}px`,
+          });
+        },
+      }),
+    ],
+  });
+  const dismiss = useDismiss(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
+  return { refs, floatingStyles, getReferenceProps, getFloatingProps };
+}
+
+const RESULTS_PANEL_CLASS =
+  'z-[9999] overflow-auto rounded-xl bg-surface border border-glass-border shadow-[0_8px_32px_rgba(0,0,0,0.4)]';
+
 export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
@@ -19,6 +55,12 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   const [loading, setLoading] = useState(false);
   const [selectedConcepts, setSelectedConcepts] = useState<OmopConcept[]>([]);
   const [domains, setDomains] = useState<{ name: string; table: string }[]>([]);
+
+  // Inline result lists behave like dropdowns: open while searching, close on outside click.
+  const [conceptResultsOpen, setConceptResultsOpen] = useState(false);
+  const [sourceResultsOpen, setSourceResultsOpen] = useState(false);
+  const conceptDd = useResultsDropdown(conceptResultsOpen, setConceptResultsOpen);
+  const sourceDd = useResultsDropdown(sourceResultsOpen, setSourceResultsOpen);
 
   useEffect(() => {
     cohortApi.listDomains().then(r => setDomains(r.data.domains));
@@ -193,7 +235,7 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   }));
 
   return (
-    <div className="h-full flex flex-col gap-2">
+    <div className="flex flex-col gap-2">
       {/* Concept Sets */}
         <Card
           size="small"
@@ -240,12 +282,15 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
             onChange={v => setSourceCodeDomain(v)}
             options={domainOptions}
           />
-          <Input
-            prefix={<Search className="h-3.5 w-3.5" />}
-            placeholder={t('cohort.search_source_placeholder', 'Search by keyword...')}
-            value={sourceSearchQuery}
-            onChange={e => setSourceSearchQuery(e.target.value)}
-          />
+          <div ref={sourceDd.refs.setReference} {...sourceDd.getReferenceProps()}>
+            <Input
+              prefix={<Search className="h-3.5 w-3.5" />}
+              placeholder={t('cohort.search_source_placeholder', 'Search by keyword...')}
+              value={sourceSearchQuery}
+              onChange={e => { setSourceSearchQuery(e.target.value); setSourceResultsOpen(true); }}
+              onFocus={() => setSourceResultsOpen(true)}
+            />
+          </div>
           {/* Selected source codes */}
           {selectedSourceCodes.length > 0 && (
             <div className="p-1 bg-surface-dark rounded">
@@ -262,50 +307,62 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
             </div>
           )}
 
-          {/* Source search results */}
-          {sourceSearchLoading ? (
-            <div className="p-2 space-y-1.5">
-              <div className="text-xs text-text-dim text-center">{t('cohort.searching_source_codes', 'Searching source codes...')}</div>
-              <div className="h-1.5 w-full bg-surface-dark rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-accent rounded-full animate-[progress_2s_ease-in-out_infinite]"
-                  style={{ width: '60%', animation: 'progress 2s ease-in-out infinite' }} />
-              </div>
-              <style>{`@keyframes progress { 0% { width: 5%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 5%; margin-left: 95%; } }`}</style>
-            </div>
-          ) : sourceSearchResults.length > 0 ? (
-            <div className="max-h-[160px] overflow-auto">
-              {sourceSearchResults.map(r => {
-                const isSelected = selectedSourceCodes.includes(r.source_value);
-                return (
-                  <div
-                    key={r.source_value}
-                    className={`cursor-pointer px-2 py-1 border-b border-border-subtle last:border-b-0 transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-emerald-accent/5'}`}
-                    onClick={() => toggleSourceCode(r.source_value)}
-                  >
-                    <div className="flex justify-between">
-                      <span className="text-xs font-semibold text-text-bright">{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}{(r as any).source_atc ? <span className="text-blue-400 ml-1">[{(r as any).source_atc}]</span> : null}</span>
-                      <span className="text-text-dim text-[10px]">{r.n_records.toLocaleString()} rec</span>
+          {/* Source search results — floating dropdown */}
+          {sourceResultsOpen && sourceSearchQuery.length >= 2 && (
+            <FloatingPortal>
+              <div
+                ref={sourceDd.refs.setFloating}
+                style={sourceDd.floatingStyles}
+                {...sourceDd.getFloatingProps()}
+                className={RESULTS_PANEL_CLASS}
+              >
+                {sourceSearchLoading ? (
+                  <div className="p-2 space-y-1.5">
+                    <div className="text-xs text-text-dim text-center">{t('cohort.searching_source_codes', 'Searching source codes...')}</div>
+                    <div className="h-1.5 w-full bg-surface-dark rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-accent rounded-full animate-[progress_2s_ease-in-out_infinite]"
+                        style={{ width: '60%', animation: 'progress 2s ease-in-out infinite' }} />
                     </div>
-                    <div className="text-[11px] text-text-dim">{t(`domains.${r.domain}`, r.domain)}{DOMAIN_NOMENCLATURE[r.domain] ? ` (${DOMAIN_NOMENCLATURE[r.domain]})` : ''} · {r.n_persons.toLocaleString()} pers</div>
+                    <style>{`@keyframes progress { 0% { width: 5%; margin-left: 0; } 50% { width: 60%; margin-left: 20%; } 100% { width: 5%; margin-left: 95%; } }`}</style>
                   </div>
-                );
-              })}
-            </div>
-          ) : sourceSearchQuery.length >= 2 ? (
-            <Empty description={t('cohort.no_source_codes', 'No source codes found')} className="!py-2" />
-          ) : null}
+                ) : sourceSearchResults.length > 0 ? (
+                  sourceSearchResults.map(r => {
+                    const isSelected = selectedSourceCodes.includes(r.source_value);
+                    return (
+                      <div
+                        key={r.source_value}
+                        className={`cursor-pointer px-2 py-1 border-b border-border-subtle last:border-b-0 transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-emerald-accent/5'}`}
+                        onClick={() => toggleSourceCode(r.source_value)}
+                      >
+                        <div className="flex justify-between">
+                          <span className="text-xs font-semibold text-text-bright">{r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value}{(r as any).source_atc ? <span className="text-blue-400 ml-1">[{(r as any).source_atc}]</span> : null}</span>
+                          <span className="text-text-dim text-[10px]">{r.n_records.toLocaleString()} rec</span>
+                        </div>
+                        <div className="text-[11px] text-text-dim">{t(`domains.${r.domain}`, r.domain)}{DOMAIN_NOMENCLATURE[r.domain] ? ` (${DOMAIN_NOMENCLATURE[r.domain]})` : ''} · {r.n_persons.toLocaleString()} pers</div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <Empty description={t('cohort.no_source_codes', 'No source codes found')} className="!py-2" />
+                )}
+              </div>
+            </FloatingPortal>
+          )}
         </div>
       </Card>
 
       {/* Concept search */}
-      <Card size="small" title={t('cohort.concept_search', 'Concept Search (OMOP)')} className="overflow-hidden flex flex-col">
-        <Input
-          prefix={<Search className="h-3.5 w-3.5" />}
-          placeholder={t('cohort.search_placeholder', 'Search by name or code...')}
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          className="mb-2"
-        />
+      <Card size="small" title={t('cohort.concept_search', 'Concept Search (OMOP)')}>
+        <div ref={conceptDd.refs.setReference} {...conceptDd.getReferenceProps()}>
+          <Input
+            prefix={<Search className="h-3.5 w-3.5" />}
+            placeholder={t('cohort.search_placeholder', 'Search by name or code...')}
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setConceptResultsOpen(true); }}
+            onFocus={() => setConceptResultsOpen(true)}
+            className="mb-2"
+          />
+        </div>
         <div className="flex items-center gap-1 mb-2">
           <Select
             size="small"
@@ -356,33 +413,42 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
           </div>
         )}
 
-        {/* Search results */}
-        <div className="max-h-[160px] overflow-auto">
-          {loading ? (
-            <div className="text-center p-3"><Spinner size="small" /></div>
-          ) : concepts.length > 0 ? (
-            concepts.map(c => {
-              const isSelected = selectedConcepts.some(s => s.concept_id === c.concept_id);
-              return (
-                <div
-                  key={c.concept_id}
-                  className={`cursor-pointer px-2 py-1 border-b border-border-subtle last:border-b-0 transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-emerald-accent/5'}`}
-                  onClick={() => toggleConcept(c)}
-                >
-                  <div className="flex justify-between">
-                    <span className="text-xs font-semibold text-text-bright">{c.concept_name}</span>
-                    {c.standard_concept === 'S' && <Tag color="green" className="text-[10px]">S</Tag>}
-                  </div>
-                  <div className="text-[11px] text-text-dim">
-                    {c.concept_code} · {c.vocabulary_id} · {t(`domains.${c.domain_id}`, c.domain_id)}{DOMAIN_NOMENCLATURE[c.domain_id] ? ` (${DOMAIN_NOMENCLATURE[c.domain_id]})` : ''}
-                  </div>
-                </div>
-              );
-            })
-          ) : searchQuery.length >= 2 ? (
-            <Empty description={t('cohort.no_concepts', 'No concepts found')} />
-          ) : null}
-        </div>
+        {/* Search results — floating dropdown */}
+        {conceptResultsOpen && searchQuery.length >= 2 && (
+          <FloatingPortal>
+            <div
+              ref={conceptDd.refs.setFloating}
+              style={conceptDd.floatingStyles}
+              {...conceptDd.getFloatingProps()}
+              className={RESULTS_PANEL_CLASS}
+            >
+              {loading ? (
+                <div className="text-center p-3"><Spinner size="small" /></div>
+              ) : concepts.length > 0 ? (
+                concepts.map(c => {
+                  const isSelected = selectedConcepts.some(s => s.concept_id === c.concept_id);
+                  return (
+                    <div
+                      key={c.concept_id}
+                      className={`cursor-pointer px-2 py-1 border-b border-border-subtle last:border-b-0 transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-emerald-accent/5'}`}
+                      onClick={() => toggleConcept(c)}
+                    >
+                      <div className="flex justify-between">
+                        <span className="text-xs font-semibold text-text-bright">{c.concept_name}</span>
+                        {c.standard_concept === 'S' && <Tag color="green" className="text-[10px]">S</Tag>}
+                      </div>
+                      <div className="text-[11px] text-text-dim">
+                        {c.concept_code} · {c.vocabulary_id} · {t(`domains.${c.domain_id}`, c.domain_id)}{DOMAIN_NOMENCLATURE[c.domain_id] ? ` (${DOMAIN_NOMENCLATURE[c.domain_id]})` : ''}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <Empty description={t('cohort.no_concepts', 'No concepts found')} />
+              )}
+            </div>
+          </FloatingPortal>
+        )}
       </Card>
     </div>
   );
