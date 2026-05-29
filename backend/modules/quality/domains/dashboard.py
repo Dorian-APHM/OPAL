@@ -21,7 +21,12 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
     then individual sparkline queries only for domains that have a date column.
     """
     schema = safe_identifier(omop_schema)
-    _s = psysql.Identifier(schema)
+
+    def _schema_name(table: str) -> str:
+        """Validated schema name that holds ``table`` (category-aware)."""
+        name = schema.schema_for(table) if hasattr(schema, "schema_for") else schema
+        return safe_identifier(name)
+
     _person = psysql.Identifier("person")
 
     res = {
@@ -32,7 +37,8 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
 
     with conn.cursor(cursor_factory=DictCursor) as cur:
         # Total persons
-        cur.execute(psysql.SQL("SELECT COUNT(*) AS total FROM {}.{}").format(_s, _person))
+        cur.execute(psysql.SQL("SELECT COUNT(*) AS total FROM {}.{}").format(
+            psysql.Identifier(_schema_name("person")), _person))
         total_persons = int(cur.fetchone()["total"] or 0)
 
         # Build a single UNION ALL query — only for domains whose table exists in the CDM
@@ -49,7 +55,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             table_name = cfg["table"]
             cur.execute(
                 "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s LIMIT 1",
-                (schema, table_name),
+                (_schema_name(table_name), table_name),
             )
             if not cur.fetchone():
                 continue
@@ -70,7 +76,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                 pid=psysql.Identifier(person_id),
                 sv=psysql.Identifier(source_value),
                 cid=psysql.Identifier(concept_id),
-                schema=_s,
+                schema=psysql.Identifier(_schema_name(table_name)),
                 table=psysql.Identifier(table),
             )
             union_parts.append(part)
@@ -125,7 +131,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                         FROM {schema}.{table}
                         WHERE {dc} >= (CURRENT_DATE - INTERVAL '12 months')
                         GROUP BY 1 ORDER BY 1
-                    """).format(dc=_dc, schema=_s, table=psysql.Identifier(table)))
+                    """).format(dc=_dc, schema=psysql.Identifier(_schema_name(cfg["table"])), table=psysql.Identifier(table)))
                     sparkline = [int(r["n"]) for r in cur.fetchall()]
                 except Exception:
                     logger.warning("Failed to fetch sparkline for %s", domain_name, exc_info=True)

@@ -26,6 +26,9 @@ def build_incidence_sql(
     Returns individual-level data with time and outcome status
     for aggregation in Python (allows flexible stratification).
     """
+    if not hasattr(omop_schema, "t"):
+        from utils.cdm_helper import SchemaMap
+        omop_schema = SchemaMap(omop_schema)
     # Determine TAR end expression
     if time_at_risk_end == "observation_end" or time_at_risk_end is None:
         tar_end_expr = "op.observation_period_end_date"
@@ -85,11 +88,11 @@ analysis AS (
         COALESCE(gc.concept_name, 'Unknown') AS gender_name,
         EXTRACT(YEAR FROM ({tar_start_expr}))::int AS calendar_year
     FROM cohort_entry ce
-    JOIN {omop_schema}.observation_period op
+    JOIN {omop_schema.t('observation_period')} op
         ON ce.person_id = op.person_id
         AND ce.cohort_start BETWEEN op.observation_period_start_date AND op.observation_period_end_date
-    JOIN {omop_schema}.person p ON ce.person_id = p.person_id
-    LEFT JOIN {omop_schema}.concept gc ON p.gender_concept_id = gc.concept_id
+    JOIN {omop_schema.t('person')} p ON ce.person_id = p.person_id
+    LEFT JOIN {omop_schema.t('concept')} gc ON p.gender_concept_id = gc.concept_id
     LEFT JOIN outcome_first o ON ce.person_id = o.person_id
     WHERE {tar_start_expr} < {tar_end_expr}
 {clean_filter})

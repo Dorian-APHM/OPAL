@@ -27,13 +27,17 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
     if cap_months is None:
         cap_months = DEFAULT_MAX_OBSERVATION_MONTHS
 
-    schema = safe_identifier(omop_schema)
-    _s = psysql.Identifier(schema)
+    # observation_period and person are both clinical; concept is vocabulary —
+    # they may live in different schemas when per-category schemas are configured.
+    clinical_schema = omop_schema.schema_for("person") if hasattr(omop_schema, "schema_for") else safe_identifier(omop_schema)
+    concept_schema = omop_schema.schema_for("concept") if hasattr(omop_schema, "schema_for") else safe_identifier(omop_schema)
+    _s = psysql.Identifier(safe_identifier(clinical_schema))
+    _sv = psysql.Identifier(safe_identifier(concept_schema))
     _obs = psysql.Identifier("observation_period")
     _person = psysql.Identifier("person")
     _concept = psysql.Identifier("concept")
 
-    obs_table_str = f"{schema}.observation_period"
+    obs_table_str = f"{clinical_schema}.observation_period"
 
     res = {
         "domain": "ObservationPeriod",
@@ -113,11 +117,11 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY a.age) AS p75,
                 PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY a.age) AS p90
             FROM ages a
-            LEFT JOIN {schema}.{concept} c ON c.concept_id = a.gender_concept_id
+            LEFT JOIN {vschema}.{concept} c ON c.concept_id = a.gender_concept_id
             GROUP BY a.gender_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
             ORDER BY n DESC
         """).format(
-            per_cte=per_cte, schema=_s, person=_person, concept=_concept,
+            per_cte=per_cte, schema=_s, vschema=_sv, person=_person, concept=_concept,
             birth_date=psysql.SQL(birth_date_expr),
         ))
         rows = []
@@ -190,10 +194,10 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
                 PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY per2.months) AS p90
             FROM per2
             JOIN {schema}.{person} p ON p.person_id = per2.person_id
-            LEFT JOIN {schema}.{concept} c ON c.concept_id = p.gender_concept_id
+            LEFT JOIN {vschema}.{concept} c ON c.concept_id = p.gender_concept_id
             GROUP BY p.gender_concept_id, COALESCE(c.concept_name, 'UNKNOWN')
             ORDER BY n DESC
-        """).format(per_cte=per_cte, schema=_s, person=_person, concept=_concept))
+        """).format(per_cte=per_cte, schema=_s, vschema=_sv, person=_person, concept=_concept))
         rows = []
         for r in cur.fetchall():
             rows.append({

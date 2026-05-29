@@ -27,6 +27,7 @@ from config import (
 )
 from db.app_db import get_db
 from db.models import CdmConfig
+from utils.cdm_helper import build_schema_map
 from utils.cdm_helper import check_cdm_access
 from utils.crypto import decrypt_password
 
@@ -277,7 +278,8 @@ def run_service(service_name: str, req: RunRequest, request: Request, db: Sessio
         "DB_USER": cdm.db_user,
         "DB_PASSWORD": password,
         "DB_SERVER": f"{cdm.db_host}/{cdm.db_name}",
-        "CDM_SCHEMA": cdm.omop_schema,
+        # OHDSI's "CDM schema" holds the clinical data tables.
+        "CDM_SCHEMA": build_schema_map(cdm).schema_for("person"),
         "RESULTS_SCHEMA": req.results_schema,
         "VOCABULARY_SCHEMA": req.vocabulary_schema,
         "CDM_VERSION": req.cdm_version,

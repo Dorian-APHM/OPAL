@@ -182,6 +182,50 @@ PERSON_DOMAIN_NAME = "Person"
 OBSERVATION_PERIOD_DOMAIN_NAME = "ObservationPeriod"
 DASHBOARD_DOMAIN_NAME = "Dashboard"
 
+# ── OMOP CDM table categories (official CDM v5.4 grouping) ──
+# Real-world OMOP deployments do not always store every table in the same
+# PostgreSQL schema (e.g. the vocabulary tables are frequently kept in a
+# separate, shared schema). Each OMOP table therefore belongs to an official
+# category, and a CDM may map each category to its own schema via the
+# `schema_categories` config. Tables whose category has no explicit override
+# fall back to the CDM's default `omop_schema`.
+OMOP_TABLE_CATEGORIES: dict[str, list[str]] = {
+    # Standardized clinical data
+    "clinical": [
+        "person", "observation_period", "visit_occurrence", "visit_detail",
+        "condition_occurrence", "drug_exposure", "procedure_occurrence",
+        "device_exposure", "measurement", "observation", "death", "note",
+        "note_nlp", "specimen", "fact_relationship",
+    ],
+    # Standardized health system data
+    "health_system": ["location", "care_site", "provider"],
+    # Standardized health economics
+    "health_economics": ["payer_plan_period", "cost"],
+    # Standardized derived elements
+    "derived": [
+        "condition_era", "drug_era", "dose_era", "episode", "episode_event",
+        "cohort", "cohort_definition",
+    ],
+    # Standardized metadata
+    "metadata": ["cdm_source", "metadata"],
+    # Standardized vocabularies
+    "vocabulary": [
+        "concept", "vocabulary", "domain", "concept_class",
+        "concept_relationship", "relationship", "concept_synonym",
+        "concept_ancestor", "source_to_concept_map", "drug_strength",
+    ],
+}
+
+# Ordered list of category keys (used by config UI / validation).
+OMOP_SCHEMA_CATEGORIES: list[str] = list(OMOP_TABLE_CATEGORIES.keys())
+
+# Reverse lookup: OMOP table name → category key.
+TABLE_CATEGORY: dict[str, str] = {
+    table: category
+    for category, tables in OMOP_TABLE_CATEGORIES.items()
+    for table in tables
+}
+
 # OHDSI Docker integration
 OHDSI_IMAGE_PREFIX = os.getenv("OHDSI_IMAGE_PREFIX", "ohdsi-docker")
 OHDSI_OUTPUT_DIR = os.getenv("OHDSI_OUTPUT_DIR", "/app/ohdsi_output")

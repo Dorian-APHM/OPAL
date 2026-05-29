@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.cdm_helper import check_cdm_access
+from utils.cdm_helper import check_cdm_access, build_schema_map
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
@@ -134,11 +134,11 @@ class ConceptSearchRequest(BaseModel):
 
 # ──── Helpers ────
 
-def _get_omop_schema(db: Session, cdm: CdmConfig) -> str:
+def _get_omop_schema(db: Session, cdm: CdmConfig):
     settings = db.query(AnalysisSettings).filter(
         AnalysisSettings.cdm_name == cdm.name
     ).first()
-    return settings.omop_schema if settings else cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    return build_schema_map(cdm, settings)
 
 
 def _get_cdm_conn(db: Session, cdm_name: str):
@@ -202,7 +202,7 @@ def search_concepts(req: ConceptSearchRequest, request: Request, db: Session = D
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.domain_id, c.vocabulary_id, c.concept_class_id,
                        c.standard_concept
-                FROM {schema}.concept c
+                FROM {schema.t('concept')} c
                 WHERE {where_clause}
                   AND c.invalid_reason IS NULL
                 ORDER BY
@@ -233,7 +233,7 @@ def list_vocabularies(cdm_name: str, db: Session = Depends(get_db)):
         with conn.cursor(cursor_factory=DictCursor) as cur:
             cur.execute(f"""
                 SELECT vocabulary_id, vocabulary_name, vocabulary_version
-                FROM {schema}.vocabulary
+                FROM {schema.t('vocabulary')}
                 ORDER BY vocabulary_id
             """)
             rows = [dict(r) for r in cur.fetchall()]
@@ -610,7 +610,7 @@ def cohort_count_approximate(req: CohortCountRequest, request: Request, db: Sess
         # Get total persons for scaling
         from psycopg2.extras import DictCursor
         with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(f"SELECT COUNT(*) AS n FROM {schema}.person")
+            cur.execute(f"SELECT COUNT(*) AS n FROM {schema.t('person')}")
             total_persons = cur.fetchone()["n"]
 
             # Run on a 10% sample
@@ -1564,10 +1564,10 @@ def patient_journey(
                        g.concept_name AS gender,
                        op.observation_period_start_date,
                        op.observation_period_end_date
-                FROM {schema}.person p
-                LEFT JOIN {schema}.concept g
+                FROM {schema.t('person')} p
+                LEFT JOIN {schema.t('concept')} g
                     ON g.concept_id = p.gender_concept_id
-                LEFT JOIN {schema}.observation_period op
+                LEFT JOIN {schema.t('observation_period')} op
                     ON op.person_id = p.person_id
                 WHERE p.person_id = %s
                 LIMIT 1
@@ -1606,18 +1606,18 @@ def patient_journey(
                     select_parts.append(f"t.{extra}")
 
                 join_clause = f"""
-                    LEFT JOIN {schema}.concept c
+                    LEFT JOIN {schema.t('concept')} c
                         ON c.concept_id = t.{concept_col}
                 """
                 if source_concept_col:
                     join_clause += f"""
-                    LEFT JOIN {schema}.concept sc
+                    LEFT JOIN {schema.t('concept')} sc
                         ON sc.concept_id = t.{source_concept_col}
                     """
 
                 sql = f"""
                     SELECT {', '.join(select_parts)}
-                    FROM {schema}.{table} t
+                    FROM {schema.t(table)} t
                     {join_clause}
                     WHERE t.person_id = %s
                     ORDER BY t.{date_col} NULLS LAST

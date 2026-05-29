@@ -24,6 +24,19 @@ def _validate_date_string(date_str: str) -> str:
 
 logger = logging.getLogger(__name__)
 
+
+def _smap(omop_schema):
+    """Normalize an ``omop_schema`` argument to a SchemaMap.
+
+    Accepts either a plain schema string (e.g. from tests or callers that pass a
+    single schema) or an existing SchemaMap, so that ``omop_schema.t(table)``
+    resolves the right schema per OMOP table category in either case."""
+    from utils.cdm_helper import SchemaMap
+    if isinstance(omop_schema, SchemaMap):
+        return omop_schema
+    return SchemaMap(omop_schema)
+
+
 # Mapping from domain names to OMOP table metadata
 _DOMAIN_TABLE_MAP = {
     name: {
@@ -74,6 +87,7 @@ def build_cohort_sql(
     the output includes visit_occurrence_id alongside person_id — useful for
     visit-level characterization.
     """
+    omop_schema = _smap(omop_schema)
     _validate_identifier(omop_schema)
     ctes: list[str] = []
     cte_names: list[str] = []
@@ -127,7 +141,7 @@ def build_cohort_sql(
     # --- Assemble final query ---
     if not inc_cte and not demo_cte:
         # No criteria at all — return all persons
-        return f"SELECT person_id FROM {omop_schema}.person"
+        return f"SELECT person_id FROM {omop_schema.t('person')}"
 
     select_cols = "person_id, visit_occurrence_id" if visit_in_output else "person_id"
 
@@ -199,6 +213,7 @@ def build_cohort_sql(
 
 def build_count_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
     """Build a SQL query that returns only the count of matching patients."""
+    omop_schema = _smap(omop_schema)
     inner = build_cohort_sql(criteria, omop_schema)
     return f"SELECT COUNT(DISTINCT person_id) AS patient_count FROM ({inner}) AS cohort"
 
@@ -209,6 +224,7 @@ def build_attrition_sql(criteria: dict, omop_schema: str = "omop_cdm") -> list[d
     Each step returns a cumulative count as criteria are added one by one.
     Returns list of {step, label, sql} dicts.
     """
+    omop_schema = _smap(omop_schema)
     steps = []
     inclusion = criteria.get("inclusion", {})
     exclusion = criteria.get("exclusion", {})
@@ -218,7 +234,7 @@ def build_attrition_sql(criteria: dict, omop_schema: str = "omop_cdm") -> list[d
     steps.append({
         "step": 0,
         "label": "All persons",
-        "sql": f"SELECT COUNT(DISTINCT person_id) AS n FROM {omop_schema}.person",
+        "sql": f"SELECT COUNT(DISTINCT person_id) AS n FROM {omop_schema.t('person')}",
     })
 
     # Accumulate inclusion criteria
@@ -259,6 +275,7 @@ def build_sample_sql(
     criteria: dict, omop_schema: str = "omop_cdm", limit: int = 10
 ) -> str:
     """Build SQL to return a random sample of patient data from the cohort."""
+    omop_schema = _smap(omop_schema)
     inner = build_cohort_sql(criteria, omop_schema)
     return (
         f"WITH cohort AS ({inner})\n"
@@ -268,12 +285,12 @@ def build_sample_sql(
         f"       op.observation_period_start_date,\n"
         f"       op.observation_period_end_date\n"
         f"FROM cohort c\n"
-        f"JOIN {omop_schema}.person p ON c.person_id = p.person_id\n"
-        f"LEFT JOIN {omop_schema}.concept g ON p.gender_concept_id = g.concept_id\n"
-        f"LEFT JOIN {omop_schema}.concept r ON p.race_concept_id = r.concept_id\n"
+        f"JOIN {omop_schema.t('person')} p ON c.person_id = p.person_id\n"
+        f"LEFT JOIN {omop_schema.t('concept')} g ON p.gender_concept_id = g.concept_id\n"
+        f"LEFT JOIN {omop_schema.t('concept')} r ON p.race_concept_id = r.concept_id\n"
         f"LEFT JOIN LATERAL (\n"
         f"  SELECT observation_period_start_date, observation_period_end_date\n"
-        f"  FROM {omop_schema}.observation_period\n"
+        f"  FROM {omop_schema.t('observation_period')}\n"
         f"  WHERE person_id = c.person_id\n"
         f"  ORDER BY observation_period_start_date DESC LIMIT 1\n"
         f") op ON TRUE\n"
@@ -293,6 +310,7 @@ def build_detailed_sample_sql(
     Each row has: person_id, year_of_birth, [visit_occurrence_id if sameVisit],
     and for each inclusion criterion: crit_<i>_code, crit_<i>_value (if Measurement).
     """
+    omop_schema = _smap(omop_schema)
     inner = build_cohort_sql(criteria, omop_schema)
 
     inclusion = criteria.get("inclusion", {})
@@ -310,7 +328,7 @@ def build_detailed_sample_sql(
             continue
 
         dmeta = _DOMAIN_TABLE_MAP[domain]
-        full_table = f"{omop_schema}.{dmeta['table']}"
+        full_table = f"{omop_schema.t(dmeta['table'])}"
         pid_col = dmeta["person_id"]
         concept_col = dmeta["concept_id"]
         source_value_col = dmeta.get("source_value")
@@ -331,7 +349,7 @@ def build_detailed_sample_sql(
             )
             if use_descendants:
                 ancestor_subq = (
-                    f"SELECT descendant_concept_id FROM {omop_schema}.concept_ancestor "
+                    f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
                     f"WHERE ancestor_concept_id IN ({concept_list})"
                 )
                 concept_filter = f"t.{concept_col} IN (SELECT v FROM (SELECT unnest(ARRAY[{concept_list}]) AS v UNION {ancestor_subq}) _exp)"
@@ -379,7 +397,7 @@ def build_detailed_sample_sql(
             f"LEFT JOIN LATERAL (\n"
             f"  SELECT {lat_select}\n"
             f"  FROM {full_table} t\n"
-            f"  LEFT JOIN {omop_schema}.concept con ON t.{concept_col} = con.concept_id\n"
+            f"  LEFT JOIN {omop_schema.t('concept')} con ON t.{concept_col} = con.concept_id\n"
             f"  WHERE t.{pid_col} = c.person_id AND {where_clause}\n"
             f"  LIMIT 1\n"
             f") {alias} ON TRUE"
@@ -437,7 +455,7 @@ def build_detailed_sample_sql(
         f"WITH cohort AS ({inner})\n"
         f"SELECT p.person_id, p.year_of_birth{extra_cols}\n"
         f"FROM (SELECT DISTINCT person_id FROM cohort) c\n"
-        f"JOIN {omop_schema}.person p ON c.person_id = p.person_id\n"
+        f"JOIN {omop_schema.t('person')} p ON c.person_id = p.person_id\n"
         f"{lateral_joins}\n"
         f"ORDER BY RANDOM()\n"
         f"LIMIT {int(limit)}"
@@ -447,6 +465,7 @@ def build_detailed_sample_sql(
 
 def build_export_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
     """Build SQL to export all patients with demographics (no limit, no random)."""
+    omop_schema = _smap(omop_schema)
     inner = build_cohort_sql(criteria, omop_schema)
     return (
         f"WITH cohort AS ({inner})\n"
@@ -456,12 +475,12 @@ def build_export_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
         f"       op.observation_period_start_date,\n"
         f"       op.observation_period_end_date\n"
         f"FROM cohort c\n"
-        f"JOIN {omop_schema}.person p ON c.person_id = p.person_id\n"
-        f"LEFT JOIN {omop_schema}.concept g ON p.gender_concept_id = g.concept_id\n"
-        f"LEFT JOIN {omop_schema}.concept r ON p.race_concept_id = r.concept_id\n"
+        f"JOIN {omop_schema.t('person')} p ON c.person_id = p.person_id\n"
+        f"LEFT JOIN {omop_schema.t('concept')} g ON p.gender_concept_id = g.concept_id\n"
+        f"LEFT JOIN {omop_schema.t('concept')} r ON p.race_concept_id = r.concept_id\n"
         f"LEFT JOIN LATERAL (\n"
         f"  SELECT observation_period_start_date, observation_period_end_date\n"
-        f"  FROM {omop_schema}.observation_period\n"
+        f"  FROM {omop_schema.t('observation_period')}\n"
         f"  WHERE person_id = c.person_id\n"
         f"  ORDER BY observation_period_start_date DESC LIMIT 1\n"
         f") op ON TRUE\n"
@@ -692,7 +711,7 @@ def _build_criterion_cte(
         raise ValueError(f"Unknown domain: {domain}")
 
     dmeta = _DOMAIN_TABLE_MAP[domain]
-    full_table = f"{omop_schema}.{dmeta['table']}"
+    full_table = f"{omop_schema.t(dmeta['table'])}"
     pid_col = dmeta["person_id"]
     concept_col = dmeta["concept_id"]
     date_col = dmeta["date_col"]
@@ -712,7 +731,7 @@ def _build_criterion_cte(
                 str(int(c["concept_id"] if isinstance(c, dict) else c)) for c in concepts
             )
             ancestor_subq = (
-                f"SELECT descendant_concept_id FROM {omop_schema}.concept_ancestor "
+                f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
                 f"WHERE ancestor_concept_id IN ({concept_list})"
             )
             concept_filter = f"t.{concept_col} IN (SELECT v FROM (SELECT unnest(ARRAY[{concept_list}]) AS v UNION {ancestor_subq}) _exp)"
@@ -1003,7 +1022,7 @@ def _build_demographics_cte(
     next_cte_name,
 ) -> str:
     """Build a CTE for demographic constraints (age, gender, race)."""
-    person_table = f"{omop_schema}.person"
+    person_table = f"{omop_schema.t('person')}"
     wheres: list[str] = []
 
     # Gender
@@ -1062,6 +1081,7 @@ def build_cohort_dated_sql(
     Uses exit_criteria if present in the criteria JSON, otherwise defaults
     to end_of_observation.
     """
+    omop_schema = _smap(omop_schema)
     _validate_identifier(omop_schema)
     base_sql = build_cohort_sql(criteria, omop_schema)
 
@@ -1093,7 +1113,7 @@ def build_cohort_dated_sql(
             f"       op.observation_period_start_date AS cohort_start_date,\n"
             f"       op.observation_period_end_date AS cohort_end_date\n"
             f"FROM ({base_sql}) p\n"
-            f"JOIN {omop_schema}.observation_period op ON p.person_id = op.person_id"
+            f"JOIN {omop_schema.t('observation_period')} op ON p.person_id = op.person_id"
         )
 
     exit_criteria = criteria.get("exit_criteria")
@@ -1123,13 +1143,13 @@ def build_cohort_dated_sql(
                 f"cohort_start AS (\n"
                 f"  SELECT cb.person_id, MIN(t.{date_col}) AS cohort_start_date\n"
                 f"  FROM cohort_base cb\n"
-                f"  JOIN {omop_schema}.{domain_table} t ON cb.person_id = t.person_id\n"
+                f"  JOIN {omop_schema.t(domain_table)} t ON cb.person_id = t.person_id\n"
                 f"  GROUP BY cb.person_id\n"
                 f"),\n"
                 f"exit_events AS (\n"
                 f"  SELECT ep.person_id, MIN(et.{exit_date_col}) AS exit_date\n"
                 f"  FROM ({exit_sql}) ep\n"
-                f"  JOIN {omop_schema}.{exit_table} et ON ep.person_id = et.person_id\n"
+                f"  JOIN {omop_schema.t(exit_table)} et ON ep.person_id = et.person_id\n"
                 f"  GROUP BY ep.person_id\n"
                 f")\n"
                 f"SELECT cs.person_id,\n"
@@ -1139,7 +1159,7 @@ def build_cohort_dated_sql(
                 f"         op.observation_period_end_date\n"
                 f"       ) AS cohort_end_date\n"
                 f"FROM cohort_start cs\n"
-                f"JOIN {omop_schema}.observation_period op\n"
+                f"JOIN {omop_schema.t('observation_period')} op\n"
                 f"  ON cs.person_id = op.person_id\n"
                 f"  AND cs.cohort_start_date BETWEEN op.observation_period_start_date AND op.observation_period_end_date\n"
                 f"LEFT JOIN exit_events ee ON cs.person_id = ee.person_id"
@@ -1153,8 +1173,8 @@ def build_cohort_dated_sql(
         f"       MIN(t.{date_col}) AS cohort_start_date,\n"
         f"       {end_expr} AS cohort_end_date\n"
         f"FROM ({base_sql}) cb\n"
-        f"JOIN {omop_schema}.{domain_table} t ON cb.person_id = t.person_id\n"
-        f"JOIN {omop_schema}.observation_period op\n"
+        f"JOIN {omop_schema.t(domain_table)} t ON cb.person_id = t.person_id\n"
+        f"JOIN {omop_schema.t('observation_period')} op\n"
         f"  ON cb.person_id = op.person_id\n"
         f"GROUP BY cb.person_id, op.observation_period_end_date"
     )

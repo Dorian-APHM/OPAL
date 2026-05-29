@@ -38,6 +38,9 @@ def run_characterization(
     Demographics remain patient-level.
     """
     from psycopg2.extras import RealDictCursor
+    from modules.cohort.sql_builder import _smap
+
+    omop_schema = _smap(omop_schema)
 
     # Check if visit-level mode is applicable
     has_same_visit = bool(criteria.get("inclusion", {}).get("sameVisit", False))
@@ -189,7 +192,7 @@ def _query_demographics(cur, schema: str) -> dict:
         WITH ages AS (
             SELECT EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth AS age
             FROM _coh_char coh
-            JOIN {schema}.person p ON coh.person_id = p.person_id
+            JOIN {schema.t('person')} p ON coh.person_id = p.person_id
         )
         SELECT
             COUNT(*)                                           AS n,
@@ -212,7 +215,7 @@ def _query_demographics(cur, schema: str) -> dict:
         WITH ages AS (
             SELECT EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth AS age
             FROM _coh_char coh
-            JOIN {schema}.person p ON coh.person_id = p.person_id
+            JOIN {schema.t('person')} p ON coh.person_id = p.person_id
         )
         SELECT
             CASE
@@ -243,10 +246,10 @@ def _query_demographics(cur, schema: str) -> dict:
             p.ethnicity_concept_id,
             COUNT(*) AS count
         FROM _coh_char coh
-        JOIN {schema}.person p ON coh.person_id = p.person_id
-        LEFT JOIN {schema}.concept cg ON p.gender_concept_id = cg.concept_id
-        LEFT JOIN {schema}.concept cr ON p.race_concept_id = cr.concept_id
-        LEFT JOIN {schema}.concept ce ON p.ethnicity_concept_id = ce.concept_id
+        JOIN {schema.t('person')} p ON coh.person_id = p.person_id
+        LEFT JOIN {schema.t('concept')} cg ON p.gender_concept_id = cg.concept_id
+        LEFT JOIN {schema.t('concept')} cr ON p.race_concept_id = cr.concept_id
+        LEFT JOIN {schema.t('concept')} ce ON p.ethnicity_concept_id = ce.concept_id
         GROUP BY p.gender_concept_id, cg.concept_name,
                  p.race_concept_id, cr.concept_name,
                  p.ethnicity_concept_id, ce.concept_name
@@ -293,7 +296,7 @@ def _query_domain_prevalence(
     visit_level: bool = False,
 ) -> dict:
     """For a clinical domain, return % of cohort with data + top concepts."""
-    table = f"{schema}.{cfg['table']}"
+    table = f"{schema.t(cfg['table'])}"
     pid = cfg["person_id"]
     cid = cfg["concept_id"]
 
@@ -336,7 +339,7 @@ def _query_domain_prevalence(
             top.n_records
         FROM top
         CROSS JOIN total
-        LEFT JOIN {schema}.concept c ON top.concept_id = c.concept_id
+        LEFT JOIN {schema.t('concept')} c ON top.concept_id = c.concept_id
         ORDER BY top.n_persons DESC
     """)
     rows = cur.fetchall()
@@ -368,7 +371,7 @@ def _query_measurement_stats(
     if not mcfg:
         return []
 
-    table = f"{schema}.{mcfg['table']}"
+    table = f"{schema.t(mcfg['table'])}"
     pid = mcfg["person_id"]
     cid = mcfg["concept_id"]
 
@@ -409,7 +412,7 @@ def _query_measurement_stats(
             MODE() WITHIN GROUP (ORDER BY COALESCE(m.unit_source_value, '')) AS unit
         FROM ranked r
         JOIN meas m ON r.concept_id = m.concept_id
-        LEFT JOIN {schema}.concept c ON r.concept_id = c.concept_id
+        LEFT JOIN {schema.t('concept')} c ON r.concept_id = c.concept_id
         GROUP BY r.concept_id, r.n_persons, c.concept_name, c.concept_code
         ORDER BY r.n_persons DESC
     """)
@@ -438,7 +441,7 @@ def _query_visit_types(
     if not vcfg:
         return []
 
-    table = f"{schema}.{vcfg['table']}"
+    table = f"{schema.t(vcfg['table'])}"
     pid = vcfg["person_id"]
     cid = vcfg["concept_id"]
 
@@ -456,7 +459,7 @@ def _query_visit_types(
             COUNT(*) AS n_records
         FROM _coh_char coh
         {visit_join}
-        LEFT JOIN {schema}.concept c ON t.{cid} = c.concept_id
+        LEFT JOIN {schema.t('concept')} c ON t.{cid} = c.concept_id
         GROUP BY t.{cid}, c.concept_name
         ORDER BY n_persons DESC
         LIMIT 15
@@ -479,7 +482,7 @@ def _query_observation_period(cur, schema: str) -> dict:
                 op.observation_period_end_date,
                 (op.observation_period_end_date - op.observation_period_start_date) AS days
             FROM _coh_char coh
-            JOIN {schema}.observation_period op ON coh.person_id = op.person_id
+            JOIN {schema.t('observation_period')} op ON coh.person_id = op.person_id
         )
         SELECT
             COUNT(*) AS n_periods,
@@ -509,9 +512,9 @@ def _query_observation_period(cur, schema: str) -> dict:
 def _query_visit_duration(cur, schema: str, visit_level: bool = False) -> dict:
     """Average visit duration in days, overall and by visit type."""
     visit_join = (
-        f"JOIN {schema}.visit_occurrence v ON coh.person_id = v.person_id AND coh.visit_occurrence_id = v.visit_occurrence_id"
+        f"JOIN {schema.t('visit_occurrence')} v ON coh.person_id = v.person_id AND coh.visit_occurrence_id = v.visit_occurrence_id"
         if visit_level else
-        f"JOIN {schema}.visit_occurrence v ON coh.person_id = v.person_id"
+        f"JOIN {schema.t('visit_occurrence')} v ON coh.person_id = v.person_id"
     )
 
     cur.execute(f"""
@@ -522,7 +525,7 @@ def _query_visit_duration(cur, schema: str, visit_level: bool = False) -> dict:
                 GREATEST(v.visit_end_date - v.visit_start_date, 0) AS days
             FROM _coh_char coh
             {visit_join}
-            LEFT JOIN {schema}.concept c ON v.visit_concept_id = c.concept_id
+            LEFT JOIN {schema.t('concept')} c ON v.visit_concept_id = c.concept_id
             WHERE v.visit_start_date IS NOT NULL AND v.visit_end_date IS NOT NULL
         )
         SELECT
@@ -551,7 +554,7 @@ def _query_visit_duration(cur, schema: str, visit_level: bool = False) -> dict:
                 GREATEST(v.visit_end_date - v.visit_start_date, 0) AS days
             FROM _coh_char coh
             {visit_join}
-            LEFT JOIN {schema}.concept c ON v.visit_concept_id = c.concept_id
+            LEFT JOIN {schema.t('concept')} c ON v.visit_concept_id = c.concept_id
             WHERE v.visit_start_date IS NOT NULL AND v.visit_end_date IS NOT NULL
         )
         SELECT

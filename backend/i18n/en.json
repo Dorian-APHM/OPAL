@@ -33,7 +33,18 @@
     "connection_success": "Connection successful",
     "connection_failed": "Connection failed",
     "registered_cdms": "Registered CDMs",
-    "no_cdms": "No CDM registered"
+    "no_cdms": "No CDM registered",
+    "schema_categories": "Per-category schemas (advanced)",
+    "schema_categories_help": "Leave a field empty to use the default schema. Set a schema to read that category of tables from a different schema (e.g. shared vocabulary).",
+    "tables": "tables",
+    "category": {
+      "clinical": "Clinical data",
+      "health_system": "Health system",
+      "health_economics": "Health economics",
+      "derived": "Derived elements",
+      "metadata": "Metadata",
+      "vocabulary": "Vocabulary"
+    }
   },
   "quality": {
     "title": "Quality Analysis",

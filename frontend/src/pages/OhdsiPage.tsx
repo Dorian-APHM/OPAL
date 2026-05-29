@@ -84,9 +84,11 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   useEffect(() => {
     if (!selectedCdm) return;
     cdmApi.getSettings(selectedCdm).then((res) => {
+      const cats = res.data.schema_categories || {};
       if (res.data.omop_schema) {
-        setResultsSchema(res.data.omop_schema);
-        setVocabSchema(res.data.omop_schema);
+        // Results use the clinical schema; vocabulary uses its category schema when set.
+        setResultsSchema(cats.clinical || res.data.omop_schema);
+        setVocabSchema(cats.vocabulary || res.data.omop_schema);
       }
     }).catch(() => toast.error('Failed to load CDM settings'));
     setCdmSourceName(selectedCdm);
