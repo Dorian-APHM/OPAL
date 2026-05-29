@@ -38,11 +38,12 @@ export default function SnapshotTimeline({ selectedCdm }: Props) {
     setLoading(true);
     qualityApi.timeline(selectedCdm)
       .then((res) => {
-        setTimelines(res.data.timelines || {});
-        const keys = Object.keys(res.data.timelines || {});
-        if (keys.length > 0 && !selectedDomain) {
-          setSelectedDomain(keys[0]);
-        }
+        const tl = res.data.timelines || {};
+        setTimelines(tl);
+        const keys = Object.keys(tl);
+        // Keep the current domain only if it still exists for this CDM, else
+        // fall back to the first available one (avoids a blank chart on CDM switch).
+        setSelectedDomain((prev) => (prev && keys.includes(prev) ? prev : keys[0] ?? null));
       })
       .catch(() => setTimelines({}))
       .finally(() => setLoading(false));

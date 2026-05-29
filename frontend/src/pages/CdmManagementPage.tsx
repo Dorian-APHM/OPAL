@@ -29,6 +29,7 @@ export default function CdmManagementPage() {
   const toast = useToast();
   const [cdms, setCdms] = useState<CdmConfig[]>([]);
   const [loading, setLoading] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   // Form state
   const [name, setName] = useState('');
@@ -125,13 +126,13 @@ export default function CdmManagementPage() {
 
   const handleTestConnection = async () => {
     try {
-      setLoading(true);
+      setTesting(true);
       await cdmApi.test(getFormValues());
       toast.success(t('cdm.connection_success'));
     } catch {
       toast.error(t('cdm.connection_failed'));
     } finally {
-      setLoading(false);
+      setTesting(false);
     }
   };
 
@@ -419,10 +420,10 @@ export default function CdmManagementPage() {
             defaultSchema={omopSchema}
           />
           <div className="flex items-center gap-2">
-            <Button onClick={handleTestConnection} loading={loading} icon={<Plug className="h-4 w-4" />}>
+            <Button onClick={handleTestConnection} loading={testing} disabled={loading} icon={<Plug className="h-4 w-4" />}>
               {t('cdm.test_connection')}
             </Button>
-            <Button variant="primary" onClick={handleRegister} loading={loading} icon={<Plus className="h-4 w-4" />}>
+            <Button variant="primary" onClick={handleRegister} loading={loading} disabled={testing} icon={<Plus className="h-4 w-4" />}>
               {t('cdm.save')}
             </Button>
           </div>

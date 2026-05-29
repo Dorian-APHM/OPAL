@@ -59,6 +59,7 @@ interface SourceValueSearchResult {
   domain: string;
   source_value: string;
   source_name: string | null;
+  source_atc?: string | null;
   n_records: number;
   n_persons: number;
   mapped_concept_id: number | null;
@@ -284,7 +285,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true,
       render: (_: string, r: SourceValueSearchResult) => {
         let label = r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value;
-        if ((r as any).source_atc) label += ` [ATC: ${(r as any).source_atc}]`;
+        if (r.source_atc) label += ` [ATC: ${r.source_atc}]`;
         return label;
       },
     },
@@ -598,7 +599,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
                     const csvRows = [header.join(',')];
                     for (const r of sourceResults) {
                       csvRows.push([
-                        r.source_value, r.source_name || '', (r as any).source_atc || '', r.domain,
+                        r.source_value, r.source_name || '', r.source_atc || '', r.domain,
                         r.n_records, r.n_persons, r.mapped_concept_id ?? '', r.mapped_concept_name || '',
                         r.mapped_vocabulary_id || '', r.mapped_standard_concept || '',
                       ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
