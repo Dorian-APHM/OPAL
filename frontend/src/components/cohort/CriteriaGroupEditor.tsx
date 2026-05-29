@@ -210,7 +210,14 @@ export default function CriteriaGroupEditor({
             color={normalised.operator === 'AND' ? 'blue' : 'orange'}
             className="cursor-pointer font-bold text-xs"
           >
-            <span onClick={toggleOperator} className="flex items-center gap-1">
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={`Toggle operator (${normalised.operator})`}
+              onClick={toggleOperator}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleOperator(); } }}
+              className="flex items-center gap-1"
+            >
               {normalised.operator} <ArrowLeftRight className="h-2.5 w-2.5" />
             </span>
           </Tag>
@@ -263,7 +270,13 @@ export default function CriteriaGroupEditor({
                   color={opBefore(idx) === 'AND' ? 'blue' : 'orange'}
                   className="text-[11px] font-bold cursor-pointer"
                 >
-                  <span onClick={() => toggleOpBefore(idx)}>{opBefore(idx)}</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Toggle operator (${opBefore(idx)})`}
+                    onClick={() => toggleOpBefore(idx)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleOpBefore(idx); } }}
+                  >{opBefore(idx)}</span>
                 </Tag>
               </div>
             )}

@@ -77,6 +77,14 @@ export default function TopNav({ selectedCdm, onCdmChange }: TopNavProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifCenterOpen, setNotifCenterOpen] = useState(false);
+
+  // Close the user menu on Escape (keyboard dismissal).
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setUserMenuOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [userMenuOpen]);
   const { username, roles, logout, hasPageAccess, authenticated, token } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
 

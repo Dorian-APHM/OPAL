@@ -26,14 +26,32 @@ export function Tabs({ items, activeKey, onChange, extra, className = '' }: Tabs
 
   const activeTab = items.find((t) => t.key === current);
 
+  // Arrow-key navigation between tabs (ARIA tablist pattern).
+  const handleKeyNav = (e: React.KeyboardEvent, idx: number) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    e.preventDefault();
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    const n = items.length;
+    for (let step = 1; step <= n; step++) {
+      const next = items[(idx + dir * step + n * step) % n];
+      if (next && !next.disabled) { handleChange(next.key); break; }
+    }
+  };
+
   return (
     <div className={className}>
       <div className="flex items-center justify-between border-b border-glass-border mb-4">
-        <div className="flex gap-0 -mb-px">
-          {items.map((tab) => (
+        <div className="flex gap-0 -mb-px" role="tablist">
+          {items.map((tab, idx) => (
             <button
               key={tab.key}
+              role="tab"
+              id={`tab-${tab.key}`}
+              aria-selected={current === tab.key}
+              aria-controls={`tabpanel-${tab.key}`}
+              tabIndex={current === tab.key ? 0 : -1}
               onClick={() => !tab.disabled && handleChange(tab.key)}
+              onKeyDown={(e) => handleKeyNav(e, idx)}
               disabled={tab.disabled}
               className={`
                 relative px-4 py-2.5 text-sm font-medium transition-colors duration-200 cursor-pointer
@@ -54,7 +72,9 @@ export function Tabs({ items, activeKey, onChange, extra, className = '' }: Tabs
         </div>
         {extra && <div className="pb-2">{extra}</div>}
       </div>
-      <div>{activeTab?.children}</div>
+      <div role="tabpanel" id={`tabpanel-${current}`} aria-labelledby={`tab-${current}`}>
+        {activeTab?.children}
+      </div>
     </div>
   );
 }
