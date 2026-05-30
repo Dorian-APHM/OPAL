@@ -66,3 +66,7 @@ exports/
 backend/test_opal.db
 .coverage
 htmlcov/
+
+# Dev audit reports — internal working docs, never commit to the repo
+/AUDIT_*.md
+/*_AUDIT.md
