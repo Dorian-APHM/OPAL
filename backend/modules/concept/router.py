@@ -1139,7 +1139,12 @@ def populate_source_value_cache(
     if not cdm:
         raise HTTPException(status_code=404, detail="CDM not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
+    # Build a proper SchemaMap so per-category schemas resolve correctly: the
+    # clinical domain tables and the vocabulary `concept` table may live in
+    # different schemas. A plain string would route everything to the default
+    # schema and break population on multi-schema CDMs.
+    _settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
+    schema = build_schema_map(cdm, _settings)
 
     # Clean slate + pre-seed: drop old status rows, then create one 'pending' row per
     # domain so the UI shows 0/total immediately (total known upfront) instead of a
