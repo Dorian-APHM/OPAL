@@ -899,3 +899,31 @@ def test_initial_event_affects_cohort_dated():
     # The initial event is Drug, so the date column should be drug_exposure_start_date
     assert "drug_exposure_start_date" in sql
     assert "cohort_start_date" in sql
+
+
+# ── same-visit semantics (regression: OR must NOT impose a visit JOIN) ──
+
+def _sv_crit(cid):
+    return {"domain": "Condition", "concepts": [cid],
+            "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}}
+
+
+def test_same_visit_and_uses_visit_join():
+    """AND + sameVisit must constrain criteria to the same visit_occurrence_id."""
+    import re
+    criteria = {"inclusion": {"operator": "AND", "sameVisit": True,
+                              "criteria": [_sv_crit(1), _sv_crit(2)]}}
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert re.search(r"a\.visit_occurrence_id\s*=\s*\w+\.visit_occurrence_id", sql)
+
+
+def test_same_visit_or_does_not_impose_visit_join():
+    """OR + sameVisit must UNION (either criterion matches); 'same visit' is an
+    AND-only constraint. Regression guard against re-introducing a visit JOIN
+    for OR groups."""
+    import re
+    criteria = {"inclusion": {"operator": "OR", "sameVisit": True,
+                              "criteria": [_sv_crit(1), _sv_crit(2)]}}
+    sql = build_cohort_sql(criteria, SCHEMA)
+    assert "UNION" in sql
+    assert not re.search(r"a\.visit_occurrence_id\s*=\s*\w+\.visit_occurrence_id", sql)
