@@ -73,9 +73,12 @@ def list_concept_sets(
     domain: str | None = None,
     db=Depends(get_db),
 ):
-    q = db.query(ConceptSet)
-    if cdm_name:
-        q = q.filter(ConceptSet.cdm_name == cdm_name)
+    # SECURITY: scope to a single CDM the user can access. Without a cdm_name
+    # this used to return every concept set of every CDM (incl. out-of-ACL ones).
+    if not cdm_name:
+        return {"concept_sets": []}
+    check_cdm_access(request, cdm_name)
+    q = db.query(ConceptSet).filter(ConceptSet.cdm_name == cdm_name)
     if domain:
         q = q.filter(ConceptSet.domain == domain)
     sets = q.order_by(ConceptSet.updated_at.desc()).all()
