@@ -67,3 +67,26 @@ def test_filter_by_cdm(client):
 def test_delete_nonexistent(client):
     resp = client.delete("/api/saved-queries/9999")
     assert resp.status_code == 404
+
+
+def test_list_queries_isolated_per_user(client):
+    """IDOR regression: a user must not see another user's saved queries."""
+    # Alice saves a query.
+    resp = client.post(
+        "/api/saved-queries/",
+        json={"cdm_name": "cdm_a", "name": "Alice secret", "sql": "SELECT 1"},
+        headers={"X-Test-Username": "alice"},
+    )
+    assert resp.status_code == 200
+
+    # Bob lists — must not see Alice's query.
+    resp = client.get("/api/saved-queries/", headers={"X-Test-Username": "bob"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["queries"] == []
+    assert body["total"] == 0
+
+    # Alice still sees her own.
+    resp = client.get("/api/saved-queries/", headers={"X-Test-Username": "alice"})
+    names = [q["name"] for q in resp.json()["queries"]]
+    assert names == ["Alice secret"]

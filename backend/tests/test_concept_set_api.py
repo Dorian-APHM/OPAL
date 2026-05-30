@@ -41,7 +41,8 @@ def test_create_concept_set(client):
 
 
 def test_list_concept_sets(client, concept_set_id):
-    resp = client.get("/api/concept-sets/")
+    # Listing is scoped to a CDM (security: no cross-CDM leak).
+    resp = client.get("/api/concept-sets/?cdm_name=test_cdm")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["concept_sets"]) >= 1
@@ -59,7 +60,7 @@ def test_list_filter_by_cdm(client, concept_set_id):
 
 
 def test_list_filter_by_domain(client, concept_set_id):
-    resp = client.get("/api/concept-sets/?domain=Condition")
+    resp = client.get("/api/concept-sets/?cdm_name=test_cdm&domain=Condition")
     assert resp.status_code == 200
     assert len(resp.json()["concept_sets"]) >= 1
 

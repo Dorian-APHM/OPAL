@@ -98,8 +98,13 @@ def populate_domain(
     """
 
     from psycopg2.extras import RealDictCursor
+    import uuid
 
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    # Server-side (named) cursor: streams rows from PostgreSQL in batches instead
+    # of materialising the entire GROUP-BY result of a whole clinical table in
+    # client memory before the first fetchmany().
+    cur = conn.cursor(name=f"svcache_{uuid.uuid4().hex}", cursor_factory=RealDictCursor)
+    cur.itersize = _BATCH_SIZE
     cur.execute(sql)
 
     app_db = SessionLocal()

@@ -116,6 +116,19 @@ class PooledConnection:
 
     # -- make sure the connection is returned if the wrapper is GC'd -------
     def __del__(self):
+        # Reaching __del__ without an explicit close() means a caller forgot the
+        # try/finally (a connection leak). Surface it as a warning instead of
+        # silently relying on the garbage collector — which may also run on a
+        # different thread — then best-effort return the connection to the pool.
+        if not self._closed:
+            try:
+                logger.warning(
+                    "PooledConnection for %s was garbage-collected without an explicit "
+                    "close() — likely a missing try/finally (connection leak).",
+                    self._pool_key,
+                )
+            except Exception:
+                pass
         self.close()
 
 
@@ -185,9 +198,20 @@ def get_omop_connection(host: str, port: int, dbname: str, user: str, password: 
     try:
         conn.rollback()
     except Exception:
-        # Dead connection – discard and get a fresh one
-        entry.pool.putconn(conn, close=True)
-        conn = entry.pool.getconn()
+        # Dead connection – discard and get a fresh one. The replacement getconn
+        # must also translate pool exhaustion into a clean ConnectionError instead
+        # of leaking a raw PoolError.
+        try:
+            entry.pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        try:
+            conn = entry.pool.getconn()
+        except psycopg2.pool.PoolError:
+            raise ConnectionError(
+                f"Connection pool exhausted for CDM {key} "
+                f"(max {POOL_MAX_CONN} connections). Try again shortly."
+            )
 
     conn.autocommit = False
     return PooledConnection(conn, entry, key)

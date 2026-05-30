@@ -61,6 +61,10 @@ def _validate_criteria(criteria: dict, _depth: int = 0) -> dict:
             for crit in group.get("criteria", []):
                 if not isinstance(crit, dict):
                     raise ValueError(f"Each criterion in '{group_key}' must be a JSON object")
+                # SECURITY: reject any client-supplied raw SQL field (was an
+                # injection vector via the cohort SQL builder).
+                if "nested_cohort_sql" in crit:
+                    raise ValueError("Unsupported field 'nested_cohort_sql' in criterion")
                 cids = crit.get("concept_ids", [])
                 if not isinstance(cids, list):
                     raise ValueError("concept_ids must be a list")
@@ -420,6 +424,17 @@ def _can_access_cohort(db: Session, cohort: Cohort, username: str, user_roles: l
         if group_share:
             return True
     return False
+
+
+def _require_cohort_access(db: Session, cohort_id: int, request: Request) -> Cohort:
+    """Fetch a cohort and enforce the caller's access (404 if missing, 403 if denied)."""
+    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
+    if not cohort:
+        raise HTTPException(status_code=404, detail="Cohort not found")
+    user = getattr(request.state, "user", {}) or {}
+    if not _can_access_cohort(db, cohort, user.get("preferred_username", ""), user.get("roles", [])):
+        raise HTTPException(status_code=403, detail="You do not have access to this cohort")
+    return cohort
 
 
 @router.get("/{cohort_id}")
@@ -1229,19 +1244,16 @@ class CohortCompareRequest(BaseModel):
 
 
 @router.post("/compare")
-def compare_cohorts_endpoint(req: CohortCompareRequest, db: Session = Depends(get_db)):
+def compare_cohorts_endpoint(req: CohortCompareRequest, request: Request, db: Session = Depends(get_db)):
     """
     Compare two saved cohorts using their characterization results.
     Computes SMD (Standardized Mean Difference) for every variable.
     If a cohort has no saved characterization, runs it on-the-fly.
     """
-    # Load both cohorts
-    cohort_a = db.query(Cohort).filter(Cohort.id == req.cohort_id_a).first()
-    if not cohort_a:
-        raise HTTPException(status_code=404, detail=f"Cohort A (id={req.cohort_id_a}) not found")
-    cohort_b = db.query(Cohort).filter(Cohort.id == req.cohort_id_b).first()
-    if not cohort_b:
-        raise HTTPException(status_code=404, detail=f"Cohort B (id={req.cohort_id_b}) not found")
+    # SECURITY: enforce CDM access and per-cohort access on BOTH cohorts.
+    check_cdm_access(request, req.cdm_name)
+    cohort_a = _require_cohort_access(db, req.cohort_id_a, request)
+    cohort_b = _require_cohort_access(db, req.cohort_id_b, request)
 
     # Verify both belong to the requested CDM
     for label, cohort in [("A", cohort_a), ("B", cohort_b)]:
@@ -1337,11 +1349,9 @@ def save_characterization(cohort_id: int, payload: dict, request: Request, db: S
 
 
 @router.get("/{cohort_id}/characterization")
-def get_characterization(cohort_id: int, db: Session = Depends(get_db)):
+def get_characterization(cohort_id: int, request: Request, db: Session = Depends(get_db)):
     """Get saved characterization results from the latest version of a cohort."""
-    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
-    if not cohort:
-        raise HTTPException(status_code=404, detail="Cohort not found")
+    _require_cohort_access(db, cohort_id, request)
 
     latest = (
         db.query(CohortVersion)
@@ -1388,11 +1398,9 @@ def save_pathways_result(cohort_id: int, payload: dict, request: Request, db: Se
 
 
 @router.get("/{cohort_id}/pathways-result")
-def get_pathways_result(cohort_id: int, db: Session = Depends(get_db)):
+def get_pathways_result(cohort_id: int, request: Request, db: Session = Depends(get_db)):
     """Get saved pathways analysis results from the latest version of a cohort."""
-    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
-    if not cohort:
-        raise HTTPException(status_code=404, detail="Cohort not found")
+    _require_cohort_access(db, cohort_id, request)
 
     latest = (
         db.query(CohortVersion)
@@ -1411,14 +1419,12 @@ def get_pathways_result(cohort_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{cohort_id}/execute")
-def execute_cohort(cohort_id: int, db: Session = Depends(get_db)):
+def execute_cohort(cohort_id: int, request: Request, db: Session = Depends(get_db)):
     """
     Execute a saved cohort's latest version against its CDM,
     store the patient count in the version record.
     """
-    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
-    if not cohort:
-        raise HTTPException(status_code=404, detail="Cohort not found")
+    cohort = _require_cohort_access(db, cohort_id, request)
 
     latest = (
         db.query(CohortVersion)
@@ -1458,13 +1464,12 @@ def execute_cohort(cohort_id: int, db: Session = Depends(get_db)):
 @router.get("/{cohort_id}/export")
 def export_cohort(
     cohort_id: int,
+    request: Request,
     format: str = Query(default="csv", description="csv or sql"),
     db: Session = Depends(get_db),
 ):
     """Export cohort as CSV (patient_ids) or SQL."""
-    cohort = db.query(Cohort).filter(Cohort.id == cohort_id).first()
-    if not cohort:
-        raise HTTPException(status_code=404, detail="Cohort not found")
+    cohort = _require_cohort_access(db, cohort_id, request)
 
     latest = (
         db.query(CohortVersion)

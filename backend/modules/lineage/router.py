@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from db.app_db import get_db
 from db.models import LineageDoc
 from modules.lineage.parser import build_lineage
+from utils.cdm_helper import check_cdm_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/lineage", tags=["lineage"])
@@ -40,6 +41,7 @@ async def upload_lineage_doc(
     db: Session = Depends(get_db),
 ):
     """Upload an ETL HTML doc and parse it into a lineage graph for a CDM."""
+    check_cdm_access(request, cdm_name)
     user = getattr(request.state, "user", {})
     username = user.get("preferred_username", "anonymous")
 
@@ -82,8 +84,9 @@ async def upload_lineage_doc(
 
 
 @router.get("/{cdm_name}")
-def get_lineage(cdm_name: str, db: Session = Depends(get_db)):
+def get_lineage(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     """Get the full lineage graph for a CDM."""
+    check_cdm_access(request, cdm_name)
     doc = db.query(LineageDoc).filter(LineageDoc.cdm_name == cdm_name).first()
     if not doc:
         raise HTTPException(status_code=404, detail="No lineage doc found for this CDM")
@@ -98,8 +101,9 @@ def get_lineage(cdm_name: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{cdm_name}/omop-chains")
-def get_omop_chains(cdm_name: str, table: str | None = None, db: Session = Depends(get_db)):
+def get_omop_chains(cdm_name: str, request: Request, table: str | None = None, db: Session = Depends(get_db)):
     """Get OMOP lineage chains, optionally filtered to a single table."""
+    check_cdm_access(request, cdm_name)
     doc = db.query(LineageDoc).filter(LineageDoc.cdm_name == cdm_name).first()
     if not doc:
         raise HTTPException(status_code=404, detail="No lineage doc found for this CDM")
@@ -115,8 +119,9 @@ def get_omop_chains(cdm_name: str, table: str | None = None, db: Session = Depen
 
 
 @router.get("/{cdm_name}/summary")
-def get_lineage_summary(cdm_name: str, db: Session = Depends(get_db)):
+def get_lineage_summary(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     """Get a summary of the lineage: counts, OMOP tables, source systems."""
+    check_cdm_access(request, cdm_name)
     doc = db.query(LineageDoc).filter(LineageDoc.cdm_name == cdm_name).first()
     if not doc:
         raise HTTPException(status_code=404, detail="No lineage doc found for this CDM")
@@ -148,6 +153,7 @@ def get_lineage_summary(cdm_name: str, db: Session = Depends(get_db)):
 @router.delete("/{cdm_name}")
 def delete_lineage(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     """Delete lineage doc for a CDM."""
+    check_cdm_access(request, cdm_name)
     doc = db.query(LineageDoc).filter(LineageDoc.cdm_name == cdm_name).first()
     if not doc:
         raise HTTPException(status_code=404, detail="No lineage doc found for this CDM")

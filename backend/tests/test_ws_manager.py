@@ -340,3 +340,63 @@ async def test_count_total_multiple_users(mgr, make_ws):
     await mgr.connect(make_ws(), "alice")
     await mgr.connect(make_ws(), "bob")
     assert mgr._count_total() == 3
+
+
+# ── Concurrency regression (lock + snapshot iteration) ──
+
+@pytest.mark.asyncio
+async def test_send_while_disconnecting_does_not_raise(make_ws):
+    """Regression: mutating connections while send_to_user iterates them must
+    not raise 'set changed size during iteration'."""
+    mgr = ConnectionManager()
+
+    # A websocket whose send_text yields control, giving disconnect a chance to
+    # interleave and mutate the underlying set mid-iteration.
+    def slow_ws():
+        ws = AsyncMock()
+        async def _send_text(msg):
+            await asyncio.sleep(0)
+        ws.send_text = AsyncMock(side_effect=_send_text)
+        return ws
+
+    wss = [slow_ws() for _ in range(5)]
+    for ws in wss:
+        await mgr.connect(ws, "alice")
+
+    async def spam_send():
+        for _ in range(50):
+            await mgr.send_to_user("alice", {"x": 1})
+
+    async def churn():
+        for ws in list(wss):
+            mgr.disconnect(ws, "alice")
+            await asyncio.sleep(0)
+
+    # Must complete without raising.
+    await asyncio.gather(spam_send(), spam_send(), churn())
+
+
+def test_concurrent_thread_access_is_safe():
+    """Regression: _count_total / mutations from many threads must not crash."""
+    import threading
+    mgr = ConnectionManager()
+    errors = []
+
+    def worker(n):
+        try:
+            for i in range(200):
+                ws = MagicMock()
+                # disconnect is the only sync mutator; exercise it with _count_total.
+                mgr._connections[f"u{n}"].add(ws)
+                mgr._count_total()
+                mgr.disconnect(ws, f"u{n}")
+        except Exception as e:  # pragma: no cover - failure path
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, f"thread-safety errors: {errors[:3]}"
+    assert mgr._count_total() == 0

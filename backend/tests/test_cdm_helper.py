@@ -112,3 +112,55 @@ class TestCheckCdmAccess:
              patch("auth.keycloak._check_cdm_access", return_value=True):
             # Should not raise
             check_cdm_access(request, "test_cdm")
+
+
+class TestColumnExistsCache:
+    """Regression: a transient failure must not be cached (would permanently
+    disable a column that actually exists)."""
+
+    def _make_conn(self, behaviors):
+        """behaviors: list of callables run on each execute() call."""
+        import itertools
+        from unittest.mock import MagicMock
+        calls = iter(behaviors)
+
+        class _Cur:
+            def execute(self, *a, **k):
+                next(calls)()  # may raise
+
+            def fetchone(self):
+                return (1,)
+
+            def close(self):
+                pass
+
+        conn = MagicMock()
+        conn.dsn = "host=h port=5432 dbname=d user=u"
+        conn.cursor = lambda *a, **k: _Cur()
+        return conn
+
+    def test_transient_error_is_not_cached(self):
+        from utils import cdm_helper
+        cdm_helper._column_exists_cache.clear()
+
+        def boom():
+            raise RuntimeError("connection reset")
+
+        def ok():
+            return None
+
+        conn = self._make_conn([boom, ok])
+        # First call hits the error → False, and must NOT be cached.
+        assert cdm_helper._column_exists(conn, "omop", "drug_exposure", "drug_source_atc") is False
+        assert len(cdm_helper._column_exists_cache) == 0
+        # Second call succeeds → True, and is cached.
+        assert cdm_helper._column_exists(conn, "omop", "drug_exposure", "drug_source_atc") is True
+        assert len(cdm_helper._column_exists_cache) == 1
+
+    def test_success_is_cached(self):
+        from utils import cdm_helper
+        cdm_helper._column_exists_cache.clear()
+        conn = self._make_conn([lambda: None, lambda: (_ for _ in ()).throw(AssertionError("should be cached"))])
+        assert cdm_helper._column_exists(conn, "omop", "person", "x") is True
+        # Second call must come from cache (execute would assert if hit again).
+        assert cdm_helper._column_exists(conn, "omop", "person", "x") is True

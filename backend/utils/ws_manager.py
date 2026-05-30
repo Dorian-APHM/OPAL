@@ -8,6 +8,7 @@ clients of the target user (and optionally to all users with a target role).
 import asyncio
 import json
 import logging
+import threading
 from collections import defaultdict
 from fastapi import WebSocket
 
@@ -15,7 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
-    """Thread-safe WebSocket connection manager."""
+    """Thread-safe WebSocket connection manager.
+
+    All mutations of the shared connection/role maps are protected by a lock.
+    The lock is only ever held for short, synchronous critical sections — never
+    across an ``await`` (network I/O) — so it cannot block the event loop or
+    deadlock. Iterations always operate on snapshots taken under the lock, which
+    prevents "set changed size during iteration" when coroutines interleave at
+    await points or when a background thread schedules a push.
+    """
 
     MAX_CONNECTIONS_PER_USER = 5
 
@@ -24,70 +33,94 @@ class ConnectionManager:
         self._connections: dict[str, set[WebSocket]] = defaultdict(set)
         # role → set of usernames (for role-based broadcasting)
         self._user_roles: dict[str, set[str]] = defaultdict(set)
+        self._lock = threading.Lock()
 
     async def connect(self, websocket: WebSocket, username: str, roles: list[str] | None = None):
-        existing = self._connections.get(username)
-        if existing and len(existing) >= self.MAX_CONNECTIONS_PER_USER:
-            # Evict the oldest connection (FIFO approximation)
-            oldest = next(iter(existing))
+        # Decide on eviction under the lock, but await the close() outside it.
+        with self._lock:
+            existing = self._connections.get(username)
+            evict = None
+            if existing and len(existing) >= self.MAX_CONNECTIONS_PER_USER:
+                # Evict an arbitrary existing connection (sets are unordered).
+                evict = next(iter(existing))
+                existing.discard(evict)
+        if evict is not None:
             try:
-                await oldest.close(code=1008, reason="Too many connections")
+                await evict.close(code=1008, reason="Too many connections")
             except Exception:
                 pass
-            existing.discard(oldest)
-            logger.warning("WS evicted oldest connection for %s (limit=%d)", username, self.MAX_CONNECTIONS_PER_USER)
+            logger.warning("WS evicted a connection for %s (limit=%d)", username, self.MAX_CONNECTIONS_PER_USER)
+
         await websocket.accept()
-        self._connections[username].add(websocket)
-        if roles:
-            for role in roles:
-                self._user_roles[role].add(username)
-        logger.info("WS connected: %s (roles=%s, total=%d)", username, roles, self._count_total())
+        with self._lock:
+            self._connections[username].add(websocket)
+            if roles:
+                for role in roles:
+                    self._user_roles[role].add(username)
+            total = self._count_total_locked()
+        logger.info("WS connected: %s (roles=%s, total=%d)", username, roles, total)
 
     def disconnect(self, websocket: WebSocket, username: str):
-        conns = self._connections.get(username)
-        if conns:
-            conns.discard(websocket)
-            if not conns:
-                del self._connections[username]
-                # Clean up role mappings and remove empty role sets
-                empty_roles = []
-                for role, role_users in self._user_roles.items():
-                    role_users.discard(username)
-                    if not role_users:
-                        empty_roles.append(role)
-                for role in empty_roles:
-                    del self._user_roles[role]
-        logger.info("WS disconnected: %s (total=%d)", username, self._count_total())
+        with self._lock:
+            conns = self._connections.get(username)
+            if conns:
+                conns.discard(websocket)
+                if not conns:
+                    del self._connections[username]
+                    empty_roles = []
+                    for role, role_users in self._user_roles.items():
+                        role_users.discard(username)
+                        if not role_users:
+                            empty_roles.append(role)
+                    for role in empty_roles:
+                        del self._user_roles[role]
+            total = self._count_total_locked()
+        logger.info("WS disconnected: %s (total=%d)", username, total)
 
     async def send_to_user(self, username: str, data: dict):
         """Send a message to all connections of a specific user."""
-        conns = self._connections.get(username)
-        if not conns:
+        with self._lock:
+            conns = self._connections.get(username)
+            targets = list(conns) if conns else []
+        if not targets:
             return
         message = json.dumps(data)
         dead = []
-        for ws in conns:
+        for ws in targets:
             try:
                 await ws.send_text(message)
             except Exception:
                 logger.debug("WebSocket send failed for %s, marking connection dead", username)
                 dead.append(ws)
-        for ws in dead:
-            conns.discard(ws)
+        if dead:
+            with self._lock:
+                conns = self._connections.get(username)
+                if conns:
+                    for ws in dead:
+                        conns.discard(ws)
+                    if not conns:
+                        del self._connections[username]
 
     async def send_to_role(self, role: str, data: dict):
         """Send a message to all users with a specific role."""
-        usernames = self._user_roles.get(role, set())
-        for username in list(usernames):
+        with self._lock:
+            usernames = list(self._user_roles.get(role, set()))
+        for username in usernames:
             await self.send_to_user(username, data)
 
     async def broadcast(self, data: dict):
         """Send a message to all connected users."""
-        for username in list(self._connections.keys()):
+        with self._lock:
+            usernames = list(self._connections.keys())
+        for username in usernames:
             await self.send_to_user(username, data)
 
-    def _count_total(self) -> int:
+    def _count_total_locked(self) -> int:
         return sum(len(conns) for conns in self._connections.values())
+
+    def _count_total(self) -> int:
+        with self._lock:
+            return self._count_total_locked()
 
 
 # Singleton instance
@@ -116,9 +149,8 @@ def push_notification_sync(username: str, notif_data: dict, target_role: str = "
 
         loop.create_task(_push())
     else:
-        # Fallback: try to push from a new thread-safe call
+        # Fallback: schedule onto the main loop from this background thread.
         try:
-            import concurrent.futures
             _push_via_main_loop(username, notif_data, target_role)
         except Exception:
             logger.debug("WS push fallback failed for %s, client will poll", username)

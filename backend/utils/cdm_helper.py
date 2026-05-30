@@ -5,6 +5,7 @@ Avoids duplicating the CDM lookup + decrypt + connect + schema logic
 across 5+ routers.
 """
 import logging
+import threading
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
@@ -103,8 +104,12 @@ def get_cdm_connection(db: Session, cdm_name: str):
 
 _logger = logging.getLogger(__name__)
 
-# Cache for column existence checks: (cdm_name, schema, table, column) -> bool
+# Cache for column existence checks, keyed on the physical location
+# (dsn, schema, table, column). Column existence is a property of the physical
+# schema, so the dsn+schema key is correct across CDMs. Guarded by a lock because
+# it is read/written from concurrent worker threads.
 _column_exists_cache: dict[tuple[str, str, str, str], bool] = {}
+_column_exists_lock = threading.Lock()
 
 
 def _column_exists(conn, schema: str, table: str, column: str) -> bool:
@@ -112,8 +117,10 @@ def _column_exists(conn, schema: str, table: str, column: str) -> bool:
     # Use the CDM connection's dsn as part of the cache key
     dsn = conn.dsn if hasattr(conn, 'dsn') else str(id(conn))
     cache_key = (dsn, schema, table, column)
-    if cache_key in _column_exists_cache:
-        return _column_exists_cache[cache_key]
+    with _column_exists_lock:
+        cached = _column_exists_cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         cur = conn.cursor()
         cur.execute(
@@ -124,8 +131,12 @@ def _column_exists(conn, schema: str, table: str, column: str) -> bool:
         exists = cur.fetchone() is not None
         cur.close()
     except Exception:
-        exists = False
-    _column_exists_cache[cache_key] = exists
+        # Do NOT cache failures: a transient error must not permanently disable
+        # a column that actually exists. Return False for this call only.
+        _logger.warning("Column existence check failed for %s.%s.%s", schema, table, column)
+        return False
+    with _column_exists_lock:
+        _column_exists_cache[cache_key] = exists
     return exists
 
 
