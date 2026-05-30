@@ -703,12 +703,13 @@ def _build_criterion_cte(
     occurrence = criterion.get("occurrence", {})
     value = criterion.get("value", {})
 
-    # Special case: nested cohort reference
+    # SECURITY: a `nested_cohort_sql` field used to be interpolated raw into the
+    # SQL here, which was an arbitrary SQL injection vector (the criteria come
+    # straight from the client body). The field is not produced anywhere, so it
+    # is rejected outright. Nested cohort references must be resolved server-side
+    # from a validated cohort id, never from client-supplied SQL.
     if criterion.get("nested_cohort_sql"):
-        cte_sql = f"{cte_name} AS (\n  {criterion['nested_cohort_sql']}\n)"
-        ctes.append(cte_sql)
-        cte_names.append(cte_name)
-        return cte_name
+        raise ValueError("Unsupported field 'nested_cohort_sql' in criterion")
 
     # Get domain table info
     if domain not in _DOMAIN_TABLE_MAP:

@@ -61,6 +61,10 @@ def _validate_criteria(criteria: dict, _depth: int = 0) -> dict:
             for crit in group.get("criteria", []):
                 if not isinstance(crit, dict):
                     raise ValueError(f"Each criterion in '{group_key}' must be a JSON object")
+                # SECURITY: reject any client-supplied raw SQL field (was an
+                # injection vector via the cohort SQL builder).
+                if "nested_cohort_sql" in crit:
+                    raise ValueError("Unsupported field 'nested_cohort_sql' in criterion")
                 cids = crit.get("concept_ids", [])
                 if not isinstance(cids, list):
                     raise ValueError("concept_ids must be a list")
