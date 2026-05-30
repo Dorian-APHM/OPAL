@@ -36,8 +36,13 @@ def list_queries(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """List saved queries, optionally filtered by CDM."""
-    q = db.query(SavedQuery)
+    """List the current user's saved queries, optionally filtered by CDM."""
+    # SECURITY (IDOR): only return queries owned by the requesting user.
+    # Previously every user could read every other user's saved SQL (and the
+    # CDM names they target), across CDMs they have no ACL access to.
+    user = getattr(request.state, "user", {}) or {}
+    current_user = user.get("preferred_username", "system")
+    q = db.query(SavedQuery).filter(SavedQuery.created_by == current_user)
     if cdm_name:
         q = q.filter(SavedQuery.cdm_name == cdm_name)
     total = q.count()
