@@ -99,7 +99,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                     prefix={<IdCard className="h-4 w-4" />}
                     placeholder="ex: jdupont"
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => { setUsername(e.target.value); setErrors((prev) => ({ ...prev, username: '' })); }}
                     error={errors.username}
                     required
                   />
@@ -108,7 +108,7 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
                       label="Rôle demandé *"
                       placeholder="Choisir un rôle"
                       value={role}
-                      onChange={setRole}
+                      onChange={(v) => { setRole(v); setErrors((prev) => ({ ...prev, role: '' })); }}
                       options={ROLES}
                     />
                     {errors.role && <p className="text-xs text-red-400 mt-1">{errors.role}</p>}

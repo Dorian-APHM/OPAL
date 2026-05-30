@@ -337,7 +337,7 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
         <div className="space-y-1.5">
           {eventCohorts.map((ec, i) => (
             <div
-              key={i}
+              key={`${ec.name}-${i}`}
               className="flex items-center gap-2 px-3 py-2 bg-surface-dark rounded-lg border border-border-subtle"
             >
               <div className="flex-1 min-w-0">

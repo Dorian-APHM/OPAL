@@ -99,7 +99,7 @@ export function Table<T extends Record<string, any>>({
 
   return (
     <div className={`w-full ${className}`}>
-      <div className={`overflow-auto ${scroll?.y ? `max-h-[${scroll.y}px]` : ''}`} style={scroll?.y ? { maxHeight: scroll.y } : undefined}>
+      <div className="overflow-auto" style={scroll?.y ? { maxHeight: scroll.y } : undefined}>
         <table className="w-full border-collapse" role="table">
           <thead>
             <tr>
@@ -109,6 +109,8 @@ export function Table<T extends Record<string, any>>({
                   className={`${px} ${py} text-left text-xs font-semibold uppercase tracking-wider text-text-muted bg-surface-dark border-b border-glass-border sticky top-0 ${col.sorter ? 'cursor-pointer select-none hover:text-emerald-accent' : ''}`}
                   style={{ width: col.width, textAlign: col.align }}
                   onClick={() => handleSort(col)}
+                  tabIndex={col.sorter ? 0 : undefined}
+                  onKeyDown={col.sorter ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSort(col); } } : undefined}
                   aria-sort={col.sorter && sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : col.sorter ? 'none' : undefined}
                   scope="col"
                 >
@@ -181,22 +183,37 @@ export function Table<T extends Record<string, any>>({
             {((page - 1) * pageSize) + 1}–{Math.min(page * pageSize, pagination.total ?? dataSource.length)} of {pagination.total ?? dataSource.length}
           </span>
           <div className="flex items-center gap-1">
-            {Array.from({ length: Math.min(totalPages, 7) }).map((_, i) => {
-              const pageNum = i + 1;
+            {(() => {
+              const goTo = (p: number) => { setPage(p); pagination.onChange?.(p); };
+              // Sliding window of up to 7 page numbers around the current page,
+              // so every page stays reachable even beyond page 7.
+              const windowSize = 7;
+              const start = Math.max(1, Math.min(page - 3, totalPages - windowSize + 1));
+              const end = Math.min(totalPages, start + windowSize - 1);
+              const nums: number[] = [];
+              for (let p = start; p <= end; p++) nums.push(p);
+              const navBtn = 'min-w-[32px] h-8 px-2 rounded-lg text-xs font-medium transition-colors cursor-pointer border bg-surface-light border-glass-border text-text-muted hover:border-border-glow hover:text-emerald-accent disabled:opacity-40 disabled:cursor-not-allowed';
               return (
-                <button
-                  key={pageNum}
-                  onClick={() => { setPage(pageNum); pagination.onChange?.(pageNum); }}
-                  className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-medium transition-colors cursor-pointer border ${
-                    page === pageNum
-                      ? 'bg-emerald-accent/12 border-emerald-accent text-emerald-accent'
-                      : 'bg-surface-light border-glass-border text-text-muted hover:border-border-glow hover:text-emerald-accent'
-                  }`}
-                >
-                  {pageNum}
-                </button>
+                <>
+                  <button aria-label="Previous page" disabled={page === 1} onClick={() => goTo(page - 1)} className={navBtn}>‹</button>
+                  {nums.map((pageNum) => (
+                    <button
+                      key={pageNum}
+                      aria-current={page === pageNum ? 'page' : undefined}
+                      onClick={() => goTo(pageNum)}
+                      className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-medium transition-colors cursor-pointer border ${
+                        page === pageNum
+                          ? 'bg-emerald-accent/12 border-emerald-accent text-emerald-accent'
+                          : 'bg-surface-light border-glass-border text-text-muted hover:border-border-glow hover:text-emerald-accent'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  ))}
+                  <button aria-label="Next page" disabled={page === totalPages} onClick={() => goTo(page + 1)} className={navBtn}>›</button>
+                </>
               );
-            })}
+            })()}
           </div>
         </div>
       )}

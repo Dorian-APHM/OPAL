@@ -73,6 +73,7 @@ export default function CohortPage({ selectedCdm }: Props) {
 
   // Delete confirm state
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [executingId, setExecutingId] = useState<number | null>(null);
 
   // Favorites state
   const [favoriteCohortIds, setFavoriteCohortIds] = useState<Set<string>>(new Set());
@@ -94,7 +95,7 @@ export default function CohortPage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     try {
       const resp = await cohortApi.list(selectedCdm);
-      setCohorts(resp.data.cohorts);
+      setCohorts(resp.data.cohorts ?? []);
     } catch {
       // ignore
     }
@@ -393,6 +394,9 @@ export default function CohortPage({ selectedCdm }: Props) {
   const [resultsDrawerOpen, setResultsDrawerOpen] = useSessionState('cohort:resultsDrawerOpen', false);
   const [patientCount, setPatientCount] = useSessionState<number | null>(`cohort:results:count:${cohortKey}`, null);
   const [countLoading, setCountLoading] = useState(false);
+  // Monotonic token: bumped on cancel / new request so a stale (or cancelled)
+  // count response can't overwrite the displayed value after the fact.
+  const countReqId = useRef(0);
   const [attrition, setAttrition] = useSessionState<AttritionStep[]>(`cohort:results:attrition:${cohortKey}`, []);
   const [attritionLoading, setAttritionLoading] = useState(false);
   const [generatedSql, setGeneratedSql] = useSessionState<string>(`cohort:results:sql:${cohortKey}`, '');
@@ -402,17 +406,20 @@ export default function CohortPage({ selectedCdm }: Props) {
   const anyResultsLoading = countLoading || attritionLoading;
 
   const runCount = async () => {
-    if (!selectedCdm || !hasCriteria) return;
+    if (!selectedCdm || !hasCriteria || countLoading) return;
+    const reqId = ++countReqId.current;
     setCountLoading(true);
     setResultsError('');
     try {
       const resp = await cohortApi.count(selectedCdm, toBackendCriteria(criteria));
+      if (reqId !== countReqId.current) return; // cancelled or superseded
       setPatientCount(resp.data.patient_count);
       setGeneratedSql(resp.data.sql);
     } catch (e: any) {
+      if (reqId !== countReqId.current) return;
       setResultsError(e.response?.data?.detail || 'Count failed');
     } finally {
-      setCountLoading(false);
+      if (reqId === countReqId.current) setCountLoading(false);
     }
   };
 
@@ -748,7 +755,7 @@ export default function CohortPage({ selectedCdm }: Props) {
                     </div>
                     <div className="flex items-center justify-center gap-2">
                       {anyResultsLoading ? (
-                        <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={() => { setCountLoading(false); setAttritionLoading(false); }} size="small">
+                        <Button variant="danger" icon={<X className="h-3.5 w-3.5" />} onClick={() => { countReqId.current++; setCountLoading(false); setAttritionLoading(false); }} size="small">
                           {t('common.cancel')}
                         </Button>
                       ) : (
@@ -761,17 +768,21 @@ export default function CohortPage({ selectedCdm }: Props) {
                           <Button
                             icon={<Play className="h-3.5 w-3.5" />}
                             onClick={async () => {
+                              if (anyResultsLoading) return;
+                              const reqId = ++countReqId.current;
                               setCountLoading(true);
                               try {
                                 const resp = await cohortApi.countApprox(selectedCdm!, toBackendCriteria(criteria));
+                                if (reqId !== countReqId.current) return;
                                 setPatientCount(resp.data.patient_count);
                               } catch (e: any) {
+                                if (reqId !== countReqId.current) return;
                                 setResultsError(e.response?.data?.detail || 'Error');
                               } finally {
-                                setCountLoading(false);
+                                if (reqId === countReqId.current) setCountLoading(false);
                               }
                             }}
-                            disabled={!hasCriteria || !selectedCdm}
+                            disabled={!hasCriteria || !selectedCdm || anyResultsLoading}
                             size="small"
                           >
                             ~
@@ -944,12 +955,14 @@ export default function CohortPage({ selectedCdm }: Props) {
                   >
                     <Share2 className="h-3.5 w-3.5" />
                   </Button>
-                  <Button size="small" variant="link" onClick={() => {
-                    if (c.id) {
+                  <Button size="small" variant="link" loading={executingId === c.id} disabled={executingId === c.id} onClick={() => {
+                    if (c.id && executingId == null) {
+                      setExecutingId(c.id);
                       cohortApi.execute(c.id).then(resp => {
                         toast.success(`Count: ${resp.data.patient_count}`);
                         loadCohorts();
-                      }).catch(() => toast.error('Execution failed'));
+                      }).catch(() => toast.error('Execution failed'))
+                        .finally(() => setExecutingId(null));
                     }
                   }}>
                     <PlayCircle className="h-3.5 w-3.5" />

@@ -61,8 +61,8 @@ export default function AuditPage() {
       if (actionFilter) params.action = actionFilter;
 
       const resp = await auditApi.logs(params);
-      setEntries(resp.data.entries);
-      setTotal(resp.data.total);
+      setEntries(resp.data.entries ?? []);
+      setTotal(resp.data.total ?? 0);
     } catch {
       toast.error(t('audit.load_error', 'Failed to load audit logs'));
     } finally {
@@ -180,14 +180,14 @@ export default function AuditPage() {
           <Card size="small">
             <Statistic
               title={t('audit.active_users', 'Active Users')}
-              value={stats.by_user.length}
+              value={stats.by_user?.length ?? 0}
               prefix={<User className="h-5 w-5" />}
             />
           </Card>
           <Card size="small">
             <Statistic
               title={t('audit.action_types', 'Action Types')}
-              value={stats.by_action.length}
+              value={stats.by_action?.length ?? 0}
               prefix={<Clock className="h-5 w-5" />}
             />
           </Card>
@@ -199,13 +199,17 @@ export default function AuditPage() {
         <div className="flex items-center gap-2 flex-wrap">
           <input
             type="date"
+            aria-label={t('audit.date_from', 'From date')}
             value={dateFrom}
+            max={dateTo || undefined}
             onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
             className="bg-deep-base border border-glass-border rounded-[10px] px-3 py-1.5 text-sm text-text-bright outline-none focus:border-emerald-accent/40 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.1)] transition-all duration-200"
           />
           <input
             type="date"
+            aria-label={t('audit.date_to', 'To date')}
             value={dateTo}
+            min={dateFrom || undefined}
             onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
             className="bg-deep-base border border-glass-border rounded-[10px] px-3 py-1.5 text-sm text-text-bright outline-none focus:border-emerald-accent/40 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.1)] transition-all duration-200"
           />

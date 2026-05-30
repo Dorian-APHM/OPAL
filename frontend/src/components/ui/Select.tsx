@@ -60,8 +60,12 @@ export function Select({
             <span className="absolute inset-y-0 right-0 flex items-center pr-2 gap-1">
               {allowClear && value && (
                 <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Clear selection"
                   className="text-text-dim hover:text-text-muted cursor-pointer"
                   onClick={(e) => { e.stopPropagation(); onChange('' as any); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onChange('' as any); } }}
                 >
                   <X className="h-3.5 w-3.5" />
                 </span>
@@ -137,14 +141,16 @@ export function MultiSelect({ options, value, onChange, placeholder = 'Select...
         {options
           .filter((o) => value.includes(o.value))
           .map((o) => (
-            <span
+            <button
+              type="button"
               key={o.value}
+              aria-label={`Remove ${labelToString(o.label)}`}
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-accent/15 text-emerald-accent text-xs font-medium cursor-pointer hover:bg-emerald-accent/25"
               onClick={() => toggle(o.value)}
             >
               {o.label}
               <X className="h-3 w-3" />
-            </span>
+            </button>
           ))}
       </div>
     </div>

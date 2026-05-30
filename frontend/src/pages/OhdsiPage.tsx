@@ -71,6 +71,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   const [services, setServices] = useState<Record<string, ServiceState>>({});
   const [activeLogTab, setActiveLogTab] = useState<string>('achilles');
   const eventSourcesRef = useRef<Record<string, EventSource>>({});
+  const reconnectTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const logOffsetRef = useRef<Record<string, number>>({});
   const logContainerRef = useRef<HTMLDivElement>(null);
   const prevLogCountRef = useRef<Record<string, number>>({});
@@ -187,8 +188,9 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     es.onerror = () => {
       es.close();
       delete eventSourcesRef.current[service];
-      // Auto-reconnect after 2s if still running
-      setTimeout(() => {
+      // Auto-reconnect after 2s if still running (tracked so it can be cleared on unmount)
+      const tm = setTimeout(() => {
+        reconnectTimersRef.current = reconnectTimersRef.current.filter((t) => t !== tm);
         setServices((prev) => {
           const svc = prev[service];
           if (svc && svc.status === 'running') {
@@ -197,6 +199,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
           return prev;
         });
       }, 2000);
+      reconnectTimersRef.current.push(tm);
     };
   }, [currentPath, loadFiles]);
 
@@ -221,9 +224,11 @@ export default function OhdsiPage({ selectedCdm }: Props) {
       }).catch(() => toast.error(`Failed to recover logs for ${key}`));
     });
     return () => {
-      // Cleanup SSE connections on unmount
+      // Cleanup SSE connections + pending reconnect timers on unmount
       Object.values(eventSourcesRef.current).forEach((es) => es.close());
       eventSourcesRef.current = {};
+      reconnectTimersRef.current.forEach(clearTimeout);
+      reconnectTimersRef.current = [];
     };
   }, [startSSE, enabled]);
 

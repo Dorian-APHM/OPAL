@@ -210,13 +210,13 @@ export default function IncidencePage({ selectedCdm }: { selectedCdm: string | n
               <Statistic title={t('incidence.persons_with_outcome', 'With Outcome')} value={result.outcome_count?.toLocaleString()} />
             </Card>
             <Card size="small">
-              <Statistic title={t('incidence.person_years', 'Person-Years')} value={result.person_years.toFixed(1)} />
+              <Statistic title={t('incidence.person_years', 'Person-Years')} value={(result.person_years ?? 0).toFixed(1)} />
             </Card>
             <Card size="small">
               <Statistic
                 title="IR / 1000 PY"
-                value={(result.incidence_rate * 1000).toFixed(2)}
-                suffix={`[${(result.ci_lower * 1000).toFixed(1)}-${(result.ci_upper * 1000).toFixed(1)}]`}
+                value={((result.incidence_rate ?? 0) * 1000).toFixed(2)}
+                suffix={`[${((result.ci_lower ?? 0) * 1000).toFixed(1)}-${((result.ci_upper ?? 0) * 1000).toFixed(1)}]`}
               />
             </Card>
           </div>

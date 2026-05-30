@@ -54,6 +54,7 @@ export default function ComparisonView({ cdmNameA, cdmNameB, domain, onCdmBChang
       render: (v: any) => typeof v === 'number' ? v.toLocaleString() : String(v ?? '-') },
     { title: 'Change', dataIndex: 'pct_change', key: 'pct_change',
       render: (v: number) => {
+        if (v == null || Number.isNaN(v)) return <Tag>—</Tag>;
         const color = Math.abs(v) > 10 ? 'red' : 'orange';
         const icon = v > 0
           ? <TrendingUp className="h-3 w-3 inline mr-1" />

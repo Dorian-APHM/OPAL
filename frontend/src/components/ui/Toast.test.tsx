@@ -121,6 +121,33 @@ describe('ToastProvider', () => {
     expect(screen.getByText('Error!')).toBeInTheDocument();
   });
 
+  it('clears the auto-dismiss timer when a toast is closed manually (no leak)', () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    render(
+      <ToastProvider>
+        <ToastTrigger />
+      </ToastProvider>
+    );
+    fireEvent.click(screen.getByText('Success'));
+    fireEvent.click(screen.getByLabelText('Close notification'));
+    expect(clearSpy).toHaveBeenCalled();
+    clearSpy.mockRestore();
+  });
+
+  it('clears pending auto-dismiss timers on unmount (no setState-after-unmount leak)', () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = render(
+      <ToastProvider>
+        <ToastTrigger />
+      </ToastProvider>
+    );
+    fireEvent.click(screen.getByText('Success'));
+    const before = clearSpy.mock.calls.length;
+    unmount();
+    expect(clearSpy.mock.calls.length).toBeGreaterThan(before);
+    clearSpy.mockRestore();
+  });
+
   it('has correct role=alert for accessibility', () => {
     render(
       <ToastProvider>

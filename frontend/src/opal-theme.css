@@ -399,3 +399,17 @@ code, pre, .opal-mono {
 [data-theme="light"] .shadow-\[0_4px_16px_rgba\(0\2c 0\2c 0\2c 0\.3\)\] {
   box-shadow: 0 4px 16px rgba(45, 59, 30, 0.10) !important;
 }
+
+/* Accessibility: honor the user's reduced-motion preference.
+   Neutralizes CSS transitions/animations (Framer Motion is handled via
+   <MotionConfig reducedMotion="user"> in main.tsx). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

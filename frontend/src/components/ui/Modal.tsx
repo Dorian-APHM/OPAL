@@ -39,6 +39,8 @@ export function Modal({ open, onClose, title, children, footer, width = 'max-w-l
               leaveTo="opacity-0 scale-95"
             >
               <DialogPanel className={`${width} w-full bg-surface border border-glass-border rounded-[20px] shadow-[0_20px_60px_rgba(0,0,0,0.5),0_0_40px_rgba(16,185,129,0.08)] transform transition-all`}>
+                {/* Always provide an accessible name for the dialog, even untitled ones. */}
+                {!title && <DialogTitle className="sr-only">Dialog</DialogTitle>}
                 {title && (
                   <div className="flex items-center justify-between px-6 py-4 border-b border-glass-border">
                     <DialogTitle className="text-base font-semibold text-text-bright">{title}</DialogTitle>

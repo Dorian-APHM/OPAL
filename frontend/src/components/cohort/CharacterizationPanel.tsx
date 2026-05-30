@@ -62,6 +62,8 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId, coh
   const [characterizedAt, setCharacterizedAt] = useSessionState<string | null>(`cohort:char:at:${ck}`, null);
   const [visitLevel, setVisitLevel] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const hasCriteria =
     criteria.inclusion.criteria.length > 0 ||
@@ -85,6 +87,7 @@ export default function CharacterizationPanel({ cdmName, criteria, cohortId, coh
     pollingRef.current = setInterval(async () => {
       try {
         const resp = await cohortApi.characterizeStatus(tid);
+        if (!mountedRef.current) { stopPolling(); return; } // bail if unmounted mid-request
         // Update progress
         if (resp.data.completed != null) setProgressCompleted(resp.data.completed);
         if (resp.data.total != null) setProgressTotal(resp.data.total);

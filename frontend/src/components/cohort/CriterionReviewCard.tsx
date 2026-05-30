@@ -92,7 +92,7 @@ export default function CriterionReviewCard({ criterion, selected, onChange, onR
             </span>
           )}
         </div>
-        <button onClick={onRemove} className="text-text-dim hover:text-red-400 shrink-0" title="Retirer ce critère">
+        <button onClick={onRemove} className="text-text-dim hover:text-red-400 shrink-0" title="Retirer ce critère" aria-label="Retirer ce critère">
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -116,7 +116,7 @@ export default function CriterionReviewCard({ criterion, selected, onChange, onR
               <div key={key} className="rounded border border-white/5 bg-black/20">
                 <div className="flex items-center gap-2 px-2 py-1.5">
                   <Checkbox checked={st.all} indeterminate={st.some} onChange={(c) => toggleGroup(g, c)} />
-                  <button onClick={() => toggleOpen(key)} className="flex items-center gap-1 text-text-dim hover:text-text-bright">
+                  <button onClick={() => toggleOpen(key)} aria-label={open ? 'Réduire' : 'Développer'} aria-expanded={open} className="flex items-center gap-1 text-text-dim hover:text-text-bright">
                     {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                   </button>
                   <span className="text-[12px] font-mono text-emerald-accent">{g.group_key}</span>

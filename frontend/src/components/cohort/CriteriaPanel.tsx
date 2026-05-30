@@ -299,7 +299,13 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                   <Tag key={code} closable onClose={() => toggleSourceCode(code)} color="blue">{code}</Tag>
                 ))}
                 <Tag color="green" className="cursor-pointer" style={{ cursor: 'pointer' }}>
-                  <span onClick={addSelectedSourceCodes} className="flex items-center gap-0.5">
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={addSelectedSourceCodes}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addSelectedSourceCodes(); } }}
+                    className="flex items-center gap-0.5"
+                  >
                     <Plus className="h-2.5 w-2.5" /> {t('cohort.add_criterion', 'Add as criterion')}
                   </span>
                 </Tag>
@@ -405,7 +411,13 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
                 className="cursor-pointer"
                 style={{ cursor: 'pointer' }}
               >
-                <span onClick={() => addAsCriterion()} className="flex items-center gap-0.5">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => addAsCriterion()}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addAsCriterion(); } }}
+                  className="flex items-center gap-0.5"
+                >
                   <Plus className="h-2.5 w-2.5" /> {t('cohort.add_criterion', 'Add as criterion')}
                 </span>
               </Tag>

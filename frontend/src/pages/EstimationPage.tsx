@@ -189,12 +189,12 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
           {result.log_rank && (
             <Card size="small" className="mb-4">
               <div className="flex items-center gap-3">
-                <Tag color={result.log_rank.p_value < 0.05 ? 'red' : 'green'}>
+                <Tag color={(result.log_rank.p_value ?? 1) < 0.05 ? 'red' : 'green'}>
                   {t('estimation.log_rank', 'Log-Rank Test')}
                 </Tag>
-                <span className="text-sm text-text-bright">Chi² = {result.log_rank.chi_square}</span>
+                <span className="text-sm text-text-bright">Chi² = {result.log_rank.chi_square ?? '—'}</span>
                 <span className="text-sm font-semibold text-text-bright">
-                  {t('estimation.p_value', 'p-value')} = {result.log_rank.p_value < 0.001 ? '< 0.001' : result.log_rank.p_value.toFixed(4)}
+                  {t('estimation.p_value', 'p-value')} = {result.log_rank.p_value == null ? '—' : result.log_rank.p_value < 0.001 ? '< 0.001' : result.log_rank.p_value.toFixed(4)}
                 </span>
                 <span className="text-sm text-text-dim">(df = {result.log_rank.df})</span>
               </div>
@@ -246,7 +246,7 @@ export default function EstimationPage({ selectedCdm }: { selectedCdm: string | 
                     type="stepAfter"
                     dataKey="ci_lower"
                     stroke="none"
-                    fill={ct.label}
+                    fill={ct.tooltipBg}
                     fillOpacity={1}
                   />
                   <Line type="stepAfter" dataKey="survival" stroke={ct.blue} dot={false} strokeWidth={2} />

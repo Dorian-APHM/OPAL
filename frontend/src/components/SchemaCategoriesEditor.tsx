@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cdmApi } from '../api/client';
@@ -39,9 +39,15 @@ export default function SchemaCategoriesEditor({ value, onChange, defaultSchema 
       .catch(() => { /* keep fallback */ });
   }, []);
 
-  // Auto-expand when overrides already exist (so the user sees them).
+  // Auto-expand once when overrides already exist (so the user sees them), but
+  // don't force it open afterwards — otherwise the section can't be collapsed
+  // while editing.
+  const didAutoOpen = useRef(false);
   useEffect(() => {
-    if (Object.keys(value).length > 0) setOpen(true);
+    if (!didAutoOpen.current && Object.keys(value).length > 0) {
+      setOpen(true);
+      didAutoOpen.current = true;
+    }
   }, [value]);
 
   const setCategory = (category: string, schema: string) => {

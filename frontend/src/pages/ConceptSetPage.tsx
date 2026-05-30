@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { conceptSetApi, cohortApi, conceptApi } from '../api/client';
 import type { ConceptSetSummary, ConceptSetDetail, OmopConcept } from '../types';
 import {
-  Card, Table, Button, Input, Select, TextArea, Modal, Tag, Empty, Spinner,
+  Card, Table, Button, Input, Select, TextArea, Modal, Tag, Empty, Spinner, Confirm,
 } from '../components/ui';
 import { useToast } from '../components/ui';
 import type { Column } from '../components/ui';
@@ -19,6 +19,7 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
   const { t } = useTranslation();
   const toast = useToast();
   const [sets, setSets] = useState<ConceptSetSummary[]>([]);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -174,7 +175,6 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
   };
 
   const handleDelete = async (id: number) => {
-    if (!window.confirm('Delete this concept set?')) return;
     try {
       await conceptSetApi.delete(id);
       toast.success('Deleted');
@@ -206,7 +206,7 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
       render: (_: any, record: ConceptSetSummary) => (
         <div className="flex items-center gap-1">
           <Button size="small" icon={<Eye className="h-3.5 w-3.5" />} onClick={() => openDetail(record.id)} />
-          <Button size="small" variant="danger" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => handleDelete(record.id)} />
+          <Button size="small" variant="danger" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => setDeleteId(record.id)} />
         </div>
       ),
     },
@@ -460,6 +460,16 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
           </>
         )}
       </Modal>
+
+      <Confirm
+        open={deleteId !== null}
+        onClose={() => setDeleteId(null)}
+        onConfirm={() => { if (deleteId !== null) handleDelete(deleteId); }}
+        title="Delete concept set"
+        description="Delete this concept set?"
+        confirmText="Delete"
+        danger
+      />
     </div>
   );
 }

@@ -52,6 +52,7 @@ export default function UserManagementPage() {
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [opalUsers, setOpalUsers] = useState<string[]>([]);
+  const [roleBusy, setRoleBusy] = useState<Set<string>>(new Set());
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<GroupSummary | null>(null);
   const [groupForm, setGroupForm] = useState<{ name: string; description: string; members: string[] }>({ name: '', description: '', members: [] });
@@ -109,7 +110,7 @@ export default function UserManagementPage() {
       if (resp.data.error) {
         setError(resp.data.error);
       }
-      setUsers(resp.data.users);
+      setUsers(resp.data.users ?? []);
     } catch (e: any) {
       setError(e.message || 'Failed to fetch users');
     } finally {
@@ -121,7 +122,7 @@ export default function UserManagementPage() {
     setRequestsLoading(true);
     try {
       const resp = await adminApi.accessRequests('pending');
-      setRequests(resp.data.requests);
+      setRequests(resp.data.requests ?? []);
     } catch {
       // silently fail
     } finally {
@@ -133,7 +134,7 @@ export default function UserManagementPage() {
     setGroupsLoading(true);
     try {
       const resp = await groupApi.list();
-      setGroups(resp.data.groups);
+      setGroups(resp.data.groups ?? []);
     } catch {
       // silently fail
     } finally {
@@ -144,7 +145,7 @@ export default function UserManagementPage() {
   const fetchOpalUsers = useCallback(async () => {
     try {
       const resp = await usersApi.listOpalUsers();
-      setOpalUsers(resp.data.users);
+      setOpalUsers(resp.data.users ?? []);
     } catch {
       // silently fail
     }
@@ -158,22 +159,32 @@ export default function UserManagementPage() {
   }, [fetchUsers, fetchRequests, fetchGroups, fetchOpalUsers]);
 
   const handleAssignRole = async (userId: string, role: string) => {
+    const key = `${userId}:${role}`;
+    if (roleBusy.has(key)) return; // guard against duplicate role calls
+    setRoleBusy(prev => new Set(prev).add(key));
     try {
       await adminApi.assignRole(userId, role);
       toast.success(t('admin.role_assigned', 'Role assigned'));
       fetchUsers();
     } catch (e: any) {
       toast.error(e.message || 'Failed to assign role');
+    } finally {
+      setRoleBusy(prev => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 
   const handleRemoveRole = async (userId: string, role: string) => {
+    const key = `${userId}:${role}`;
+    if (roleBusy.has(key)) return; // guard against duplicate role calls
+    setRoleBusy(prev => new Set(prev).add(key));
     try {
       await adminApi.removeRole(userId, role);
       toast.success(t('admin.role_removed', 'Role removed'));
       fetchUsers();
     } catch (e: any) {
       toast.error(e.message || 'Failed to remove role');
+    } finally {
+      setRoleBusy(prev => { const n = new Set(prev); n.delete(key); return n; });
     }
   };
 
@@ -391,7 +402,7 @@ export default function UserManagementPage() {
       title: t('admin.name', 'Name'),
       key: 'name',
       width: 180,
-      render: (_: any, r: AccessRequest) => `${r.first_name} ${r.last_name}`,
+      render: (_: any, r: AccessRequest) => `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.username,
     },
     {
       title: 'Email',

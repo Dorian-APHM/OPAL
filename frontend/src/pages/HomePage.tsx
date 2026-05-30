@@ -134,26 +134,28 @@ export default function HomePage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) return;
+    let cancelled = false; // ignore responses if the CDM changed before they resolve
     setLoading(true);
     Promise.all([
       favoritesApi.list()
-        .then(r => setFavorites(r.data.favorites))
-        .catch(() => toast.error(t('dashboard.load_failed', 'Failed to load favorites'))),
+        .then(r => { if (!cancelled) setFavorites(r.data.favorites ?? []); })
+        .catch(() => { if (!cancelled) toast.error(t('dashboard.load_failed', 'Failed to load favorites')); }),
       qualityApi.getLatestSnapshot(selectedCdm, 'Dashboard')
-        .then(r => setQualitySummary(r.data.results))
-        .catch(() => setQualitySummary(null)),
+        .then(r => { if (!cancelled) setQualitySummary(r.data.results); })
+        .catch(() => { if (!cancelled) setQualitySummary(null); }),
       recentApi.list(selectedCdm)
-        .then(r => setRecentItems(
-          r.data.items.map(item => ({
+        .then(r => { if (!cancelled) setRecentItems(
+          (r.data.items ?? []).map(item => ({
             id: `${item.type}-${item.timestamp}`,
             label: item.label,
             type: item.type,
             timestamp: item.timestamp,
             onClick: () => navigate(item.route, item.nav_state ? { state: item.nav_state } : undefined),
           }))
-        ))
-        .catch(() => setRecentItems([])),
-    ]).finally(() => setLoading(false));
+        ); })
+        .catch(() => { if (!cancelled) setRecentItems([]); }),
+    ]).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [selectedCdm]);
 
   const removeFavorite = async (id: number) => {
@@ -206,9 +208,10 @@ export default function HomePage({ selectedCdm }: Props) {
     return (
       <div className="flex items-center justify-center" style={{ height: 'calc(100vh - 56px - 32px)' }}>
         <Empty variant="no-cdm">
-          <Button variant="primary" size="middle" icon={<Database className="h-4 w-4" />} onClick={() => {}}>
+          <span className="inline-flex items-center gap-2 text-sm text-text-muted">
+            <Database className="h-4 w-4" />
             {t('dashboard.select_cdm', 'Select a CDM database')}
-          </Button>
+          </span>
         </Empty>
       </div>
     );

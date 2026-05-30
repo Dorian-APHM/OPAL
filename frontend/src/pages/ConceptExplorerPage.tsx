@@ -59,6 +59,7 @@ interface SourceValueSearchResult {
   domain: string;
   source_value: string;
   source_name: string | null;
+  source_atc?: string | null;
   n_records: number;
   n_persons: number;
   mapped_concept_id: number | null;
@@ -116,8 +117,8 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) return;
-    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load domains')));
-    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies)).catch(() => toast.error(t('concepts.load_failed', 'Failed to load vocabularies')));
+    conceptApi.domains(selectedCdm).then((res) => setDomains(res.data.domains ?? [])).catch(() => toast.error(t('concepts.load_failed', 'Failed to load domains')));
+    conceptApi.vocabularies(selectedCdm).then((res) => setVocabs(res.data.vocabularies ?? [])).catch(() => toast.error(t('concepts.load_failed', 'Failed to load vocabularies')));
   }, [selectedCdm]);
 
   const doSearch = useCallback(async (p: number = 1) => {
@@ -132,11 +133,12 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         standard_only: standardOnly, limit: 50, offset: (p - 1) * 50,
       });
       if (ctrl.signal.aborted) return;
-      setConcepts(res.data.concepts);
-      setTotal(res.data.total);
+      const concepts = res.data.concepts ?? [];
+      setConcepts(concepts);
+      setTotal(res.data.total ?? 0);
       setPage(p);
       // Fetch record/person counts for returned concepts
-      const ids = res.data.concepts.map((c: ConceptItem) => c.concept_id);
+      const ids = concepts.map((c: ConceptItem) => c.concept_id);
       if (ids.length > 0 && selectedCdm) {
         setCountsLoading(true);
         conceptApi.counts(selectedCdm, ids)
@@ -172,8 +174,8 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
         q: query, domain: domainFilter, limit: 50, offset: (p - 1) * 50,
       });
       if (ctrl.signal.aborted) return;
-      setSourceResults(res.data.results);
-      setSourceTotal(res.data.total);
+      setSourceResults(res.data.results ?? []);
+      setSourceTotal(res.data.total ?? 0);
       setSourcePage(p);
     } catch {
       if (ctrl.signal.aborted) return;
@@ -283,7 +285,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       key: 'source_value', title: t('concept.source_value'), dataIndex: 'source_value', ellipsis: true,
       render: (_: string, r: SourceValueSearchResult) => {
         let label = r.source_name ? `${r.source_value} — ${r.source_name}` : r.source_value;
-        if ((r as any).source_atc) label += ` [ATC: ${(r as any).source_atc}]`;
+        if (r.source_atc) label += ` [ATC: ${r.source_atc}]`;
         return label;
       },
     },
@@ -597,7 +599,7 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
                     const csvRows = [header.join(',')];
                     for (const r of sourceResults) {
                       csvRows.push([
-                        r.source_value, r.source_name || '', (r as any).source_atc || '', r.domain,
+                        r.source_value, r.source_name || '', r.source_atc || '', r.domain,
                         r.n_records, r.n_persons, r.mapped_concept_id ?? '', r.mapped_concept_name || '',
                         r.mapped_vocabulary_id || '', r.mapped_standard_concept || '',
                       ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));

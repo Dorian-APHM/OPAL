@@ -224,6 +224,9 @@ export default function NotificationCenter({ open, onClose }: NotificationCenter
             return (
               <div
                 key={notif.id}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(notif); } }}
                 className={`group relative flex items-start gap-3 p-3 rounded-lg cursor-pointer transition-all duration-150 ${
                   notif.read
                     ? 'bg-transparent hover:bg-surface-light/50 opacity-60'
@@ -246,11 +249,12 @@ export default function NotificationCenter({ open, onClose }: NotificationCenter
                   )}
                 </div>
                 {/* Quick actions on hover */}
-                <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex gap-1">
                   {!notif.read && (
                     <button
                       onClick={(e) => { e.stopPropagation(); markRead(notif.id); }}
                       title="Mark as read"
+                      aria-label="Mark as read"
                       className="p-1 rounded bg-surface hover:bg-emerald-accent/20 text-text-dim hover:text-emerald-accent cursor-pointer border-none transition-colors"
                     >
                       <Check className="h-3 w-3" />
@@ -259,6 +263,7 @@ export default function NotificationCenter({ open, onClose }: NotificationCenter
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteNotif(notif.id); }}
                     title="Delete"
+                    aria-label="Delete notification"
                     className="p-1 rounded bg-surface hover:bg-red-400/20 text-text-dim hover:text-red-400 cursor-pointer border-none transition-colors"
                   >
                     <X className="h-3 w-3" />

@@ -280,6 +280,14 @@ export default function LineagePage({ selectedCdm }: Props) {
     if (dragRef.current) dragRef.current.dragging = false;
   }, []);
 
+  // End the pan even when the mouse is released outside the SVG (otherwise the
+  // drag stays "stuck" because onMouseUp only fires over the SVG element).
+  useEffect(() => {
+    const onUp = () => { if (dragRef.current) dragRef.current.dragging = false; };
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, []);
+
   // Edge paths
   const edgePaths = useMemo(() => {
     return filteredEdges.map((e, i) => {
