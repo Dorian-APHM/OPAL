@@ -8,6 +8,8 @@ OPAL (OMOP Platform for Analytics & Lineage) is a full-stack web application for
 
 ## Commands
 
+> **Network**: this environment has direct internet access — **no HTTP proxy is required** for any install or build (`npm install`, `pip install`, `docker compose build`, etc.). Do not pass `HTTP_PROXY`/`HTTPS_PROXY` build-args or `--build-arg` proxy flags.
+
 ### Full Stack (Docker Compose)
 ```bash
 export SECRET_KEY=$(openssl rand -hex 32)
