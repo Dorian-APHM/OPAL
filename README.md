@@ -228,7 +228,23 @@ Toutes les variables se definissent dans le fichier `.env` (cf. [.env.example](.
 | `ENVIRONMENT` | `development` | `development` ou `production` |
 | `KEYCLOAK_LDAP_ENABLED` | `false` | Activer la federation LDAP Keycloak |
 
-**Avancees** (optionnelles) : proxy (`HTTP_PROXY` / `HTTPS_PROXY`), runner OHDSI (`OHDSI_MODE`, `OHDSI_RUNNER_TOKEN`) et tuning de performance — toutes documentees et commentees dans [.env.example](.env.example).
+**Avancees** (optionnelles) : proxy (`HTTP_PROXY` / `HTTPS_PROXY`) et tuning de performance — documentes et commentes dans [.env.example](.env.example).
+
+### Fonctionnalites optionnelles (opt-in)
+
+Deux fonctionnalites sont **desactivees par defaut**. Chacune s'active via une variable du `.env` **et** le demarrage d'un profil Docker Compose dedie. Tant qu'elles sont sur `off`, leur onglet est masque dans l'UI et aucun conteneur supplementaire ne demarre.
+
+| Fonctionnalite | Variable `.env` | Valeurs | Demarrage | Detail |
+|----------------|-----------------|---------|-----------|--------|
+| **Outils OHDSI** (Achilles, DQD, CDM Onboarding) | `OHDSI_MODE` | `off` *(defaut)* · `on` | `docker compose --profile ohdsi up -d` | [§6 Outils OHDSI](#6-outils-ohdsi) |
+| **Assistant IA** (cohorte en langage naturel) | `COHORT_LLM_MODE` | `off` *(defaut)* · `embedded` · `on-premise` | `docker compose --profile cohort-llm up -d` | [docs/COHORT_LLM.md](docs/COHORT_LLM.md) |
+
+- **OHDSI** (`on`) : renseignez aussi `OHDSI_RUNNER_TOKEN` (`openssl rand -hex 32`). Les outils R tournent dans un runner dedie (`opal-ohdsi-runner`, sans socket Docker).
+- **Assistant IA** :
+  - `embedded` — LLM local (Ollama, telecharge au 1er demarrage ; runtime conteneur NVIDIA recommande, sinon `COHORT_LLM_DEVICE=cpu`) ;
+  - `on-premise` — branchez **votre propre LLM** (endpoint OpenAI-compatible) ; l'URL, le modele et la cle se configurent **dans l'UI (Reglages, admin)**, pas dans le `.env` (la cle est chiffree en base).
+
+Ces variables sont toutes commentees dans [.env.example](.env.example).
 
 ### Parametres d'analyse (par CDM)
 
