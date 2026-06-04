@@ -846,46 +846,60 @@ export default function CohortPage({ selectedCdm }: Props) {
         )}
 
         {mainTab === 'cohort-builder' && builderSubTab === 'characterization' && (
-          <CharacterizationPanel
-            cdmName={selectedCdm || ''}
-            criteria={toBackendCriteria(criteria)}
-            cohortId={savedCohortId}
-            cohortKey={cohortKey}
-          />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <CharacterizationPanel
+              cdmName={selectedCdm || ''}
+              criteria={toBackendCriteria(criteria)}
+              cohortId={savedCohortId}
+              cohortKey={cohortKey}
+            />
+          </div>
         )}
 
         {mainTab === 'cohort-builder' && builderSubTab === 'sql' && (
-          <SqlEditorPanel cdmName={selectedCdm || ''} />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <SqlEditorPanel cdmName={selectedCdm || ''} />
+          </div>
         )}
 
         {mainTab === 'cohort-builder' && builderSubTab === 'concept-sets' && (
-          <ConceptSetPage selectedCdm={selectedCdm} />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <ConceptSetPage selectedCdm={selectedCdm} />
+          </div>
         )}
 
         {/* Analyse content */}
         {mainTab === 'analyse' && analyseSubTab === 'comparison' && (
-          <CohortComparisonPanel
-            cdmName={selectedCdm || ''}
-            cohorts={cohorts}
-            cohortKey={cohortKey}
-          />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <CohortComparisonPanel
+              cdmName={selectedCdm || ''}
+              cohorts={cohorts}
+              cohortKey={cohortKey}
+            />
+          </div>
         )}
 
         {mainTab === 'analyse' && analyseSubTab === 'pathways' && (
-          <PathwaysPanel
-            cdmName={selectedCdm || ''}
-            criteria={toBackendCriteria(criteria)}
-            cohortKey={cohortKey}
-            cohortId={savedCohortId}
-          />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <PathwaysPanel
+              cdmName={selectedCdm || ''}
+              criteria={toBackendCriteria(criteria)}
+              cohortKey={cohortKey}
+              cohortId={savedCohortId}
+            />
+          </div>
         )}
 
         {mainTab === 'analyse' && analyseSubTab === 'incidence' && (
-          <IncidencePage selectedCdm={selectedCdm} />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <IncidencePage selectedCdm={selectedCdm} />
+          </div>
         )}
 
         {mainTab === 'analyse' && analyseSubTab === 'estimation' && (
-          <EstimationPage selectedCdm={selectedCdm} />
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+            <EstimationPage selectedCdm={selectedCdm} />
+          </div>
         )}
       </div>
 
