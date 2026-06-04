@@ -1,5 +1,10 @@
 """
-Reference label enrichment — fills empty source_name from ReferenceCodebook (CCAM_FR, CIM10_FR, etc.).
+Reference label enrichment — fills empty source_name from ReferenceCodebook.
+
+Codebook selection is **name-agnostic**: production codebooks are not necessarily
+named with an "_FR" suffix, so for a given domain we pick the codebook with the
+MOST codes as the primary source of labels and fall back to the other codebooks
+of the same domain for codes the primary doesn't cover.
 
 Usage:
     from utils.reference_labels import enrich_source_names, get_reference_label_map
@@ -13,34 +18,41 @@ Usage:
 import logging
 from typing import Sequence
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from db.models import ReferenceCodebook
 
 logger = logging.getLogger(__name__)
 
-# Domain → codebook name suffix pattern (matched by domain column)
-# We don't hardcode names — we match by domain so any codebook registered
-# for a domain will be used (CCAM_FR for Procedure, CIM10_FR for Condition, etc.)
-
 
 def get_reference_label_map(db: Session, domain: str, codes: Sequence[str]) -> dict[str, str]:
-    """Return {code: description} for the given codes from reference codebooks matching the domain.
+    """Return {code: description} for the given codes from the domain's codebooks.
 
-    If multiple codebooks exist for a domain (e.g. CCAM_FR and CCAM_EN),
-    ALL are queried — the first match wins (ordered by id, so oldest upload first).
-    For the enrichment use-case, the FR codebooks should be the ones with matching domain.
+    Selection is by **code count, not by name**: the codebook with the most codes
+    for the domain is primary; any other codebook of the same domain is a fallback
+    for codes the primary doesn't have (or has with an empty label). This works in
+    production where codebooks may carry arbitrary names (no "_FR" convention).
     """
     if not codes:
         return {}
 
-    # Deduplicate
     unique_codes = list(set(codes))
 
-    # Query in batches of 1000 to avoid oversized IN clauses
-    # Prioritize _FR codebooks — they are the authoritative labels for display.
-    # EN codebooks (e.g. CCAM_EN) are only used by the mapping module directly.
+    # Priority order for this domain: richest codebook (most codes) first.
+    counts = (
+        db.query(ReferenceCodebook.name, func.count(ReferenceCodebook.id))
+        .filter(ReferenceCodebook.domain == domain)
+        .group_by(ReferenceCodebook.name)
+        .order_by(func.count(ReferenceCodebook.id).desc())
+        .all()
+    )
+    if not counts:
+        return {}
+    rank = {name: i for i, (name, _n) in enumerate(counts)}  # 0 = richest = highest priority
+
     result: dict[str, str] = {}
+    best_rank: dict[str, int] = {}
     batch_size = 1000
     for i in range(0, len(unique_codes), batch_size):
         batch = unique_codes[i : i + batch_size]
@@ -52,13 +64,12 @@ def get_reference_label_map(db: Session, domain: str, codes: Sequence[str]) -> d
             )
             .all()
         )
-        # FR codebooks first, then others as fallback
-        fr_rows = [(code, desc) for code, desc, name in rows if name.endswith("_FR")]
-        other_rows = [(code, desc) for code, desc, name in rows if not name.endswith("_FR")]
-        for code, desc in fr_rows:
-            result[code] = desc
-        for code, desc in other_rows:
-            if code not in result:
+        for code, desc, name in rows:
+            if not (desc or "").strip():
+                continue  # empty label — let a lower-priority codebook fill it
+            r = rank.get(name, len(rank))
+            if code not in best_rank or r < best_rank[code]:
+                best_rank[code] = r
                 result[code] = desc
 
     return result
@@ -71,10 +82,11 @@ def enrich_source_names(
     source_value_key: str = "source_value",
     source_name_key: str = "source_name",
 ) -> None:
-    """Enrich rows in-place: set source_name from FR reference codebooks.
+    """Enrich rows in-place: set source_name from the domain's reference codebooks.
 
-    When a FR reference codebook exists for the domain, its labels take
-    priority over whatever the CDM provides (which may be EN or empty).
+    When a reference codebook exists for the domain, its label (from the richest
+    codebook, with fallback to the others) takes priority over whatever the CDM
+    provides (which may be empty or in another language).
     """
     codes_to_lookup = [
         r[source_value_key]

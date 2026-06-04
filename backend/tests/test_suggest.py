@@ -98,8 +98,7 @@ def test_suggest_mappings_deduplicates_concepts():
     """Suggestions from different strategies with the same concept_id are deduplicated."""
     with patch("modules.mapping.suggest._exact_match") as mock_exact, \
          patch("modules.mapping.suggest._relationship_match") as mock_rel, \
-         patch("modules.mapping.suggest._fuzzy_match") as mock_fuzzy, \
-         patch("modules.mapping.suggest._contextual_match") as mock_ctx:
+         patch("modules.mapping.suggest._ingredient_match") as mock_ingr:
 
         concept = {
             "concept_id": 42, "concept_name": "Diabetes mellitus",
@@ -108,8 +107,7 @@ def test_suggest_mappings_deduplicates_concepts():
         }
         mock_exact.return_value = [{**concept, "confidence": 95, "source": "exact"}]
         mock_rel.return_value = [{**concept, "confidence": 85, "source": "relationship"}]
-        mock_fuzzy.return_value = [{**concept, "confidence": 60, "source": "fuzzy"}]
-        mock_ctx.return_value = []
+        mock_ingr.return_value = [{**concept, "confidence": 80, "source": "ingredient"}]
 
         conn = MagicMock()
         conn.cursor.return_value.__enter__ = MagicMock(return_value=MagicMock())
@@ -128,41 +126,41 @@ def test_suggest_mappings_sorted_by_confidence():
     """Suggestions are returned sorted by confidence descending."""
     with patch("modules.mapping.suggest._exact_match") as mock_exact, \
          patch("modules.mapping.suggest._relationship_match") as mock_rel, \
-         patch("modules.mapping.suggest._fuzzy_match") as mock_fuzzy, \
-         patch("modules.mapping.suggest._contextual_match") as mock_ctx:
+         patch("modules.mapping.suggest._ingredient_match") as mock_ingr:
 
-        mock_exact.return_value = []
-        mock_rel.return_value = []
-        mock_fuzzy.return_value = [
+        mock_exact.return_value = [
             {"concept_id": 1, "concept_name": "A", "concept_code": "A1",
              "vocabulary_id": "V", "domain_id": "Condition", "standard_concept": "S",
-             "confidence": 60, "source": "fuzzy"},
+             "confidence": 60, "source": "exact"},
+        ]
+        mock_rel.return_value = [
             {"concept_id": 2, "concept_name": "B", "concept_code": "B1",
              "vocabulary_id": "V", "domain_id": "Condition", "standard_concept": "S",
-             "confidence": 75, "source": "fuzzy"},
+             "confidence": 90, "source": "relationship"},
         ]
-        mock_ctx.return_value = [
+        mock_ingr.return_value = [
             {"concept_id": 3, "concept_name": "C", "concept_code": "C1",
              "vocabulary_id": "V", "domain_id": "Condition", "standard_concept": "S",
-             "confidence": 40, "source": "contextual"},
+             "confidence": 75, "source": "ingredient"},
         ]
 
         conn = MagicMock()
         conn.cursor.return_value.__enter__ = MagicMock(return_value=MagicMock())
         conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        results = suggest_mappings(conn, "test", None, "Condition", "omop_cdm", max_suggestions=10)
+        # source_name set so relationship + ingredient run
+        results = suggest_mappings(conn, "test", "label", "Condition", "omop_cdm", max_suggestions=10)
 
         assert len(results) == 3
         assert results[0]["confidence"] >= results[1]["confidence"] >= results[2]["confidence"]
+        assert results[0]["confidence"] == 90
 
 
 def test_suggest_mappings_max_suggestions_limit():
     """Results are capped to max_suggestions."""
     with patch("modules.mapping.suggest._exact_match") as mock_exact, \
          patch("modules.mapping.suggest._relationship_match") as mock_rel, \
-         patch("modules.mapping.suggest._fuzzy_match") as mock_fuzzy, \
-         patch("modules.mapping.suggest._contextual_match") as mock_ctx:
+         patch("modules.mapping.suggest._ingredient_match") as mock_ingr:
 
         mock_exact.return_value = [
             {"concept_id": i, "concept_name": f"Concept {i}", "concept_code": f"C{i}",
@@ -171,8 +169,7 @@ def test_suggest_mappings_max_suggestions_limit():
             for i in range(10)
         ]
         mock_rel.return_value = []
-        mock_fuzzy.return_value = []
-        mock_ctx.return_value = []
+        mock_ingr.return_value = []
 
         conn = MagicMock()
         conn.cursor.return_value.__enter__ = MagicMock(return_value=MagicMock())
@@ -183,16 +180,14 @@ def test_suggest_mappings_max_suggestions_limit():
 
 
 def test_suggest_mappings_no_source_name_skips_relationship():
-    """When source_name is None, relationship strategy is still called (with source_value)."""
+    """When source_name is None, relationship and ingredient strategies are skipped."""
     with patch("modules.mapping.suggest._exact_match") as mock_exact, \
          patch("modules.mapping.suggest._relationship_match") as mock_rel, \
-         patch("modules.mapping.suggest._fuzzy_match") as mock_fuzzy, \
-         patch("modules.mapping.suggest._contextual_match") as mock_ctx:
+         patch("modules.mapping.suggest._ingredient_match") as mock_ingr:
 
         mock_exact.return_value = []
         mock_rel.return_value = []
-        mock_fuzzy.return_value = []
-        mock_ctx.return_value = []
+        mock_ingr.return_value = []
 
         conn = MagicMock()
         conn.cursor.return_value.__enter__ = MagicMock(return_value=MagicMock())
@@ -200,6 +195,7 @@ def test_suggest_mappings_no_source_name_skips_relationship():
 
         results = suggest_mappings(conn, "E11", None, "Condition")
 
-        # When source_name is None, relationship_match is not called
+        # When source_name is None, relationship + ingredient are not called
         mock_rel.assert_not_called()
+        mock_ingr.assert_not_called()
         assert results == []

@@ -183,12 +183,17 @@ def populate_all_domains(
     omop_schema: str,
     progress_callback: Callable | None = None,
     cancelled_check: Callable | None = None,
+    enable_sapbert: bool = False,
 ):
     """
     Populate cache for all domains that have source_value.
 
     progress_callback(domain, status, completed, total, row_count)
     cancelled_check() -> bool
+    enable_sapbert: after each domain's cache is built, also build SapBERT
+        suggestions for it (opt-in; no-op if the feature is off or the domain
+        has no labelled source values). A SapBERT failure is logged and recorded
+        per-domain but does not interrupt the cache build.
     """
     domains_with_source = domains_to_populate()
     total = len(domains_with_source)
@@ -224,6 +229,18 @@ def populate_all_domains(
 
                 if progress_callback:
                     progress_callback(domain_name, "done", completed, total, row_count)
+
+                # Opt-in: build SapBERT suggestions for this domain off the cache
+                # we just populated. Isolated from the cache build — its own state
+                # row and never fatal to the cache.
+                if enable_sapbert and not (cancelled_check and cancelled_check()):
+                    try:
+                        from modules.mapping.sapbert_build import build_domain_sapbert
+                        build_domain_sapbert(cdm_name, domain_name, conn, omop_schema)
+                    except Exception:
+                        logger.exception(
+                            "SapBERT build failed for domain %s / CDM %s", domain_name, cdm_name
+                        )
 
             except Exception as e:
                 logger.exception("Failed to cache domain %s for CDM %s", domain_name, cdm_name)

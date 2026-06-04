@@ -15,9 +15,9 @@ Metadata schema (from index_builder): {domain, source_value, source_atc, label, 
 from collections import defaultdict
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 import index_builder
+from embed_client import EmbeddingClient
 from llm import LLMClient, embedded_client
 
 MODEL_NAME = index_builder.MODEL_NAME
@@ -77,17 +77,21 @@ def cim10_prefix(code: str) -> str:
 
 class Retriever:
     # Per-domain absolute score gap (vs top-1) for accepting additional groups.
+    # Calibrated for SapBERT (XLM-R CLS cosine): correct-match scores sit LOWER and
+    # more spread out than e5's (~0.55-0.80 for a good hit vs e5's 0.80+), so both the
+    # gaps and min_top_score are looser than the original e5 values. First pass —
+    # refine against more queries if precision/recall needs it.
     DOMAIN_GAP = {
-        "Drug":        0.0,    # top-1 ATC only (drug embeddings saturate)
-        "Condition":   0.015,
-        "Procedure":   0.010,
-        "Measurement": 0.010,
+        "Drug":        0.0,    # top-1 ATC only
+        "Condition":   0.07,
+        "Procedure":   0.06,
+        "Measurement": 0.06,
     }
 
-    def __init__(self, cdm_name: str, model: SentenceTransformer, conn=None):
+    def __init__(self, cdm_name: str, client: EmbeddingClient, conn=None):
         self.cdm_name = cdm_name
-        self.model = model
-        self.emb, self.meta = index_builder.load_or_build(cdm_name, model, conn=conn)
+        self.client = client
+        self.emb, self.meta = index_builder.load_or_build(cdm_name, client, conn=conn)
         self.domains = sorted({m["domain"] for m in self.meta})
         self.mask = {
             d: np.array([m["domain"] == d for m in self.meta]) for d in self.domains
@@ -108,13 +112,19 @@ class Retriever:
         return None  # Procedure / Measurement : singleton
 
     def encode_query(self, text: str) -> np.ndarray:
-        return self.model.encode([f"query: {text}"], normalize_embeddings=True,
-                                 convert_to_numpy=True).astype("float32")[0]
+        # Runner returns L2-normalized vectors; no e5-style "query:" prefix for SapBERT.
+        return self.client.encode([text]).astype("float32")[0]
 
-    def search_concept_set(self, text: str, domain: str | None = None,
+    def search_concept_set(self, text: str | list[str], domain: str | None = None,
                            overfetch: int = OVERFETCH,
-                           min_top_score: float = 0.80) -> list[dict]:
-        sims = self.emb @ self.encode_query(text)
+                           min_top_score: float = 0.55) -> list[dict]:
+        # Accept several query forms (e.g. raw label + LLM expansion) and keep the best
+        # (max) similarity per concept: the raw mention wins where the expansion dilutes
+        # ("cancer de la prostate" -> C61, not the in-situ D07), the expansion wins where
+        # it resolves an abbreviation ("AVC" -> I64). Runner returns normalized vectors.
+        queries = [text] if isinstance(text, str) else [q for q in text if q]
+        qembs = self.client.encode(queries).astype("float32")   # (n_q, dim), normalized
+        sims = (self.emb @ qembs.T).max(axis=1)                  # best score per concept
         if domain in self.mask:
             sims = np.where(self.mask[domain], sims, -np.inf)
         if not np.isfinite(sims).any():
@@ -188,9 +198,9 @@ TESTS = [
 def main() -> None:
     import sys
     cdm = sys.argv[1] if len(sys.argv) > 1 else "cdm_omop_20260314"
-    print(f"Loading model {MODEL_NAME}...")
-    model = SentenceTransformer(MODEL_NAME, device="cuda")
-    r = Retriever(cdm, model)
+    print(f"Embeddings via opal-sapbert runner ({MODEL_NAME})...")
+    client = EmbeddingClient()
+    r = Retriever(cdm, client)
     print(f"Index {cdm}: {len(r.meta)} entries, domains={r.domains}\n")
     for label, dom in TESTS:
         exp = expand_label(label)

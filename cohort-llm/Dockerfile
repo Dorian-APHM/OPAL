@@ -1,5 +1,7 @@
-# opal-llm : cohort-from-text service (RAG + optional bundled LLM).
-# Bakes the multilingual-e5 embedder + our code. The generation model is NOT baked:
+# opal-llm : cohort-from-text service (RAG orchestration + optional bundled LLM).
+# Embeddings are NOT produced here — the RAG calls the shared opal-sapbert runner
+# (POST /encode), so this image carries no torch and no embedding model. The
+# generation model is also NOT baked:
 #   - embedded mode   -> Ollama pulls the model on first run (persisted in a volume)
 #   - on-premise mode -> Ollama is not started; an external LLM is used per request
 # At runtime it reads OPAL's source_value_cache (opal-db) to build per-CDM indexes.
@@ -7,7 +9,6 @@ FROM ollama/ollama:latest
 
 ENV DEBIAN_FRONTEND=noninteractive \
     OLLAMA_MODELS=/models \
-    HF_HOME=/hf-cache \
     COHORT_LLM_INDEX_CACHE=/app/index_cache \
     PYTHONUNBUFFERED=1
 
@@ -22,8 +23,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Torch (CUDA 11.8) first, then the rest
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu118
+# Python deps — no torch, no embedding model (embeddings come from opal-sapbert).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -31,10 +31,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # first run in embedded mode (entrypoint.sh) into the OLLAMA_MODELS volume, and
 # not used at all in on-premise mode. This keeps the image light (~no multi-GB
 # model layer) and lets the embedded model be swapped via COHORT_LLM_EMBEDDED_MODEL.
-
-# Bake the e5 embedding model into the image (HF cache) — used by RAG in BOTH modes
-RUN python -c "from sentence_transformers import SentenceTransformer; \
-    SentenceTransformer('intfloat/multilingual-e5-base')"
 
 # Application code
 COPY scripts/ /app/

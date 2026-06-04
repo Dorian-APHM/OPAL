@@ -28,16 +28,20 @@ def suggest_mappings(
     domain: str,
     omop_schema: str = "omop_cdm",
     max_suggestions: int = 5,
-    enable_fuzzy: bool = True,
-    enable_keyword: bool = True,
-    enable_contextual: bool = True,
+    enable_exact: bool = True,
+    enable_relationship: bool = True,
+    enable_ingredient: bool = True,
 ) -> list[dict]:
     """
     Generate mapping suggestions for a single source term.
     Returns a list of suggestions sorted by confidence score (desc).
 
-    Strategies 1-3 (exact, relationship, ingredient) always run (fast).
-    Strategies 4-5 (fuzzy, keyword, contextual) can be toggled via flags.
+    Deterministic SQL strategies, each independently toggleable:
+      - exact:        concept_code == source_value (btree index, conf 95)
+      - relationship: OMOP "Maps to" (conf 85)
+      - ingredient:   French DCI / galenic-form drug matching (conf 78-95) — only
+                      yields results for drug-like names (the Drug domain)
+    SapBERT suggestions are pre-computed and merged separately by the caller.
     """
     # Every suggestion query hits vocabulary tables (concept,
     # concept_relationship, concept_synonym) — resolve to the vocabulary schema.
@@ -54,37 +58,13 @@ def suggest_mappings(
                 seen_concept_ids.add(s["concept_id"])
 
     with conn.cursor(cursor_factory=DictCursor) as cur:
-        # Strategy 1: Exact match on concept_code (fast — uses btree index)
-        _add(_exact_match(cur, source_value, domain, omop_schema))
-
-        # Strategy 2: Concept relationships ("Maps to")
-        if source_name:
+        if enable_exact:
+            _add(_exact_match(cur, source_value, domain, omop_schema))
+        if enable_relationship and source_name:
             _add(_relationship_match(cur, source_value, domain, omop_schema))
-
-        # Strategy 3: Ingredient / DCI match (French→English bridge)
-        if source_name:
+        if enable_ingredient and source_name:
             _add(_ingredient_match(cur, source_name, domain, omop_schema))
 
-        # Early exit: if we already have enough high-confidence results, skip slow strategies
-        high_conf = [s for s in suggestions if s["confidence"] >= 75]
-        if len(high_conf) >= max_suggestions:
-            suggestions.sort(key=lambda x: x["confidence"], reverse=True)
-            return suggestions[:max_suggestions]
-
-        # Strategy 4: Fuzzy matching (trigram similarity)
-        if enable_fuzzy:
-            search_term = source_name or source_value
-            _add(_fuzzy_match(cur, search_term, domain, omop_schema, max_suggestions * 2))
-
-        # Strategy 4b: Keyword search
-        if enable_keyword and source_name and len(suggestions) < max_suggestions:
-            _add(_keyword_match(cur, source_name, domain, omop_schema, max_suggestions * 2))
-
-        # Strategy 5: Contextual (from already-mapped terms in same vocab)
-        if enable_contextual and len(suggestions) < max_suggestions:
-            _add(_contextual_match(cur, source_value, domain, omop_schema))
-
-    # Sort by confidence desc, return top N
     suggestions.sort(key=lambda x: x["confidence"], reverse=True)
     return suggestions[:max_suggestions]
 
@@ -95,9 +75,9 @@ def suggest_batch(
     domain: str,
     omop_schema: str = "omop_cdm",
     max_per_term: int = 5,
-    enable_fuzzy: bool = True,
-    enable_keyword: bool = True,
-    enable_contextual: bool = True,
+    enable_exact: bool = True,
+    enable_relationship: bool = True,
+    enable_ingredient: bool = True,
 ) -> list[dict]:
     """
     Generate suggestions for a batch of unmapped terms.
@@ -113,9 +93,9 @@ def suggest_batch(
         try:
             suggs = suggest_mappings(
                 conn, sv, sn, domain, omop_schema, max_per_term,
-                enable_fuzzy=enable_fuzzy,
-                enable_keyword=enable_keyword,
-                enable_contextual=enable_contextual,
+                enable_exact=enable_exact,
+                enable_relationship=enable_relationship,
+                enable_ingredient=enable_ingredient,
             )
         except Exception as e:
             logger.warning("Suggestion failed for %s: %s", sv, e)
@@ -595,255 +575,3 @@ def _ingredient_match(
         cur.connection.rollback()
 
     return results
-
-
-# ──── Strategy 4: Fuzzy Matching ────
-
-def _fuzzy_match(
-    cur, search_term: str, domain: str, schema: str, limit: int = 10
-) -> list[dict]:
-    """
-    Fuzzy match using ILIKE and trigram similarity.
-    Falls back to ILIKE if pg_trgm is not available.
-    """
-    results = []
-
-    # Try trigram similarity first
-    try:
-        cur.execute(psysql.SQL("""
-            SELECT c.concept_id, c.concept_name, c.concept_code,
-                   c.vocabulary_id, c.domain_id, c.standard_concept,
-                   similarity(c.concept_name, %(term)s) AS sim
-            FROM {}.{} c
-            WHERE c.concept_name %% %(term)s
-              AND c.standard_concept = 'S'
-              AND c.invalid_reason IS NULL
-            ORDER BY sim DESC,
-              CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END
-            LIMIT %(lim)s
-        """).format(psysql.Identifier(schema), psysql.Identifier('concept')), {"term": search_term, "domain": domain, "lim": limit})
-        rows = cur.fetchall()
-        for r in rows:
-            sim = float(r["sim"]) if r["sim"] else 0
-            results.append({
-                "concept_id": r["concept_id"],
-                "concept_name": r["concept_name"],
-                "concept_code": r["concept_code"],
-                "vocabulary_id": r["vocabulary_id"],
-                "domain_id": r["domain_id"],
-                "standard_concept": r["standard_concept"],
-                "confidence": min(int(sim * 80), 75),  # Cap at 75% for fuzzy
-                "source": "fuzzy",
-            })
-        return results
-    except Exception:
-        # pg_trgm not available — fall back to ILIKE on concept + synonym
-        try:
-            cur.connection.rollback()
-            cur.execute(psysql.SQL("""
-                SELECT concept_id, concept_name, concept_code,
-                       vocabulary_id, domain_id, standard_concept
-                FROM (
-                    SELECT c.concept_id, c.concept_name, c.concept_code,
-                           c.vocabulary_id, c.domain_id, c.standard_concept
-                    FROM {schema}.{concept} c
-                    WHERE unaccent(c.concept_name) ILIKE unaccent(%(term)s)
-                      AND c.standard_concept = 'S'
-                      AND c.invalid_reason IS NULL
-                    UNION
-                    SELECT c.concept_id, c.concept_name, c.concept_code,
-                           c.vocabulary_id, c.domain_id, c.standard_concept
-                    FROM {schema}.{syn_table} cs
-                    JOIN {schema}.{concept2} c ON cs.concept_id = c.concept_id
-                    WHERE unaccent(cs.concept_synonym_name) ILIKE unaccent(%(term)s)
-                      AND c.standard_concept = 'S'
-                      AND c.invalid_reason IS NULL
-                ) sub
-                ORDER BY LENGTH(concept_name),
-                  CASE WHEN domain_id = %(domain)s THEN 0 ELSE 1 END
-                LIMIT %(lim)s
-            """).format(
-                schema=psysql.Identifier(schema),
-                concept=psysql.Identifier('concept'),
-                syn_table=psysql.Identifier('concept_synonym'),
-                concept2=psysql.Identifier('concept'),
-            ), {"term": f"%{search_term}%", "domain": domain, "lim": limit})
-            rows = cur.fetchall()
-            for r in rows:
-                results.append({
-                    "concept_id": r["concept_id"],
-                    "concept_name": r["concept_name"],
-                    "concept_code": r["concept_code"],
-                    "vocabulary_id": r["vocabulary_id"],
-                    "domain_id": r["domain_id"],
-                    "standard_concept": r["standard_concept"],
-                    "confidence": 50,
-                    "source": "fuzzy",
-                })
-            return results
-        except Exception as e:
-            logger.warning("Fuzzy match error: %s", e)
-            return []
-
-
-# ──── Strategy 4b: Keyword Search ────
-
-_STOP_WORDS = {
-    "the", "of", "a", "an", "and", "or", "by", "for", "in", "on", "at",
-    "to", "with", "without", "from", "per", "via", "using", "not", "non",
-    "less", "more", "than", "other", "each", "that", "this", "which",
-}
-
-
-def _extract_keywords(text: str, min_len: int = 4) -> list[str]:
-    """Extract significant words from a description, filtering stop words."""
-    words = re.findall(r'[a-zA-Z]+', text.lower())
-    return [w for w in words if len(w) >= min_len and w not in _STOP_WORDS][:5]
-
-
-def _keyword_match(
-    cur, search_term: str, domain: str, schema: str, limit: int = 10
-) -> list[dict]:
-    """
-    Search concepts by significant keywords from the description.
-    Uses ILIKE with AND logic on top keywords for better recall than trigram.
-    """
-    keywords = _extract_keywords(search_term)
-    if not keywords:
-        return []
-
-    results = []
-    try:
-        # Strategy A: AND all keywords (precise)
-        if len(keywords) >= 2:
-            where_parts = []
-            params = {"domain": domain, "lim": limit}
-            for i, kw in enumerate(keywords[:4]):
-                pname = f"kw{i}"
-                where_parts.append(f"unaccent(c.concept_name) ILIKE unaccent(%({pname})s)")
-                params[pname] = f"%{kw}%"
-
-            where_sql = psysql.SQL(' AND ').join(psysql.SQL(wp) for wp in where_parts)
-            kw_query = psysql.SQL(
-                "SELECT c.concept_id, c.concept_name, c.concept_code,"
-                "       c.vocabulary_id, c.domain_id, c.standard_concept"
-                " FROM {schema}.{table} c"
-                " WHERE "
-            ).format(schema=psysql.Identifier(schema), table=psysql.Identifier('concept')) + where_sql + psysql.SQL(
-                "  AND c.standard_concept = 'S'"
-                "  AND c.invalid_reason IS NULL"
-                " ORDER BY"
-                "  CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,"
-                "  LENGTH(c.concept_name)"
-                " LIMIT %(lim)s"
-            )
-            cur.execute(kw_query, params)
-            rows = cur.fetchall()
-            seen = set()
-            for r in rows:
-                if r["concept_id"] not in seen:
-                    results.append({
-                        "concept_id": r["concept_id"],
-                        "concept_name": r["concept_name"],
-                        "concept_code": r["concept_code"],
-                        "vocabulary_id": r["vocabulary_id"],
-                        "domain_id": r["domain_id"],
-                        "standard_concept": r["standard_concept"],
-                        "confidence": 60,
-                        "source": "keyword",
-                    })
-                    seen.add(r["concept_id"])
-
-        # Strategy B: first keyword only (broader) if not enough results
-        if len(results) < 3 and keywords:
-            main_kw = max(keywords, key=len)  # longest keyword = most specific
-            params2 = {"kw": f"%{main_kw}%", "domain": domain, "lim": limit}
-            cur.execute(psysql.SQL("""
-                SELECT c.concept_id, c.concept_name, c.concept_code,
-                       c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.{table} c
-                WHERE unaccent(c.concept_name) ILIKE unaccent(%(kw)s)
-                  AND c.standard_concept = 'S'
-                  AND c.invalid_reason IS NULL
-                ORDER BY
-                  CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
-                  LENGTH(c.concept_name)
-                LIMIT %(lim)s
-            """).format(schema=psysql.Identifier(schema), table=psysql.Identifier('concept')), params2)
-            rows = cur.fetchall()
-            seen = {r["concept_id"] for r in results}
-            for r in rows:
-                if r["concept_id"] not in seen:
-                    results.append({
-                        "concept_id": r["concept_id"],
-                        "concept_name": r["concept_name"],
-                        "concept_code": r["concept_code"],
-                        "vocabulary_id": r["vocabulary_id"],
-                        "domain_id": r["domain_id"],
-                        "standard_concept": r["standard_concept"],
-                        "confidence": 50,
-                        "source": "keyword",
-                    })
-                    seen.add(r["concept_id"])
-
-    except Exception as e:
-        logger.warning("Keyword match error: %s", e)
-        try:
-            cur.connection.rollback()
-        except Exception:
-            pass
-
-    return results
-
-
-# ──── Strategy 5: Contextual ────
-
-def _contextual_match(cur, source_value: str, domain: str, schema: str) -> list[dict]:
-    """
-    Look at how similar source_values in the same vocabulary are mapped
-    via source_to_concept_map, and suggest similar target concepts.
-    """
-    try:
-        # Get the vocabulary prefix (e.g., first part of source_value before any separator)
-        prefix = source_value.split(".")[0].split("-")[0].split("_")[0][:5]
-        if len(prefix) < 2:
-            return []
-
-        cur.execute(psysql.SQL("""
-            SELECT
-                c.concept_id, c.concept_name, c.concept_code,
-                c.vocabulary_id, c.domain_id, c.standard_concept,
-                CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END AS domain_rank
-            FROM {schema}.{stcm} stcm
-            JOIN {schema}.{concept} c ON stcm.target_concept_id = c.concept_id
-            WHERE unaccent(stcm.source_code) ILIKE unaccent(%(prefix)s)
-              AND c.standard_concept = 'S'
-              AND c.invalid_reason IS NULL
-              AND stcm.target_concept_id != 0
-            GROUP BY c.concept_id, c.concept_name, c.concept_code,
-                     c.vocabulary_id, c.domain_id, c.standard_concept
-            ORDER BY domain_rank
-            LIMIT 5
-        """).format(
-            schema=psysql.Identifier(schema),
-            stcm=psysql.Identifier('source_to_concept_map'),
-            concept=psysql.Identifier('concept'),
-        ), {"prefix": f"{prefix}%", "domain": domain})
-        rows = cur.fetchall()
-        return [
-            {
-                "concept_id": r["concept_id"],
-                "concept_name": r["concept_name"],
-                "concept_code": r["concept_code"],
-                "vocabulary_id": r["vocabulary_id"],
-                "domain_id": r["domain_id"],
-                "standard_concept": r["standard_concept"],
-                "confidence": 40,
-                "source": "contextual",
-            }
-            for r in rows
-        ]
-    except Exception as e:
-        logger.warning("Contextual match error: %s", e)
-        cur.connection.rollback()
-        return []

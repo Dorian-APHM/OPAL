@@ -156,11 +156,21 @@ class ReferenceCodebook(Base):
 class SapbertMapping(Base):
     """
     Pre-computed SapBERT mapping suggestions.
-    Loaded from sapbert_mapping.py output CSV.
+
+    Generated in-app by the opal-sapbert service at Source Value Cache build time
+    (keyed per CDM). Legacy rows loaded from the sapbert_mapping.py output CSV have
+    cdm_name = NULL.
     """
     __tablename__ = "sapbert_mappings"
+    __table_args__ = (
+        # Per-CDM suggestion lookup; the (cdm_name, domain) prefix also serves
+        # per-domain queries. Covers the legacy NULL-cdm_name rows too.
+        Index("ix_sapbert_lookup", "cdm_name", "domain", "source_code"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # NULL for legacy CSV-uploaded rows; set per CDM for in-app builds.
+    cdm_name = Column(String(255), nullable=True)
     domain = Column(String(100), nullable=False, index=True)
     source_code = Column(String(255), nullable=False, index=True)
     source_name = Column(Text, default="")
@@ -171,6 +181,29 @@ class SapbertMapping(Base):
     target_vocabulary_id = Column(String(100), default="")
     similarity = Column(Float, nullable=False)
     uploaded_at = Column(DateTime, default=_utcnow)
+
+
+class SapbertDomainState(Base):
+    """Per-(CDM, domain) SapBERT build status + the persistent suggestion toggle.
+
+    Tracks which (cdm, domain) have SapBERT mappings built (`status`/`row_count`)
+    and whether SapBERT suggestions are enabled for that domain (`enabled`). Drives
+    the Settings build progress and the per-domain on/off toggle in mapping
+    suggestions. A domain is "available" to toggle once it has been built here.
+    """
+    __tablename__ = "sapbert_domain_state"
+    __table_args__ = (
+        UniqueConstraint("cdm_name", "domain", name="uq_sapbert_domain_state_cdm_domain"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False, index=True)
+    domain = Column(String(100), nullable=False)
+    row_count = Column(Integer, default=0)
+    status = Column(String(50), nullable=False, default="pending")  # pending|running|done|error
+    enabled = Column(Boolean, nullable=False, default=True)
+    error_message = Column(Text, nullable=True)
+    built_at = Column(DateTime, nullable=True)
 
 
 class ConceptSet(Base):

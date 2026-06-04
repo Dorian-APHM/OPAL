@@ -242,7 +242,18 @@ Deux fonctionnalites sont **desactivees par defaut**. Chacune s'active via une v
 - **OHDSI** (`on`) : renseignez aussi `OHDSI_RUNNER_TOKEN` (`openssl rand -hex 32`). Les outils R tournent dans un runner dedie (`opal-ohdsi-runner`, sans socket Docker).
 - **Assistant IA** :
   - `embedded` — LLM local (Ollama, telecharge au 1er demarrage ; runtime conteneur NVIDIA recommande, sinon `COHORT_LLM_DEVICE=cpu`) ;
-  - `on-premise` — branchez **votre propre LLM** (endpoint OpenAI-compatible) ; l'URL, le modele et la cle se configurent **dans l'UI (Reglages, admin)**, pas dans le `.env` (la cle est chiffree en base).
+  - `on-premise` — branchez **votre propre LLM** (endpoint OpenAI-compatible) ; l'URL, le modele et la cle se configurent **dans l'UI (Reglages, admin)**, pas dans le `.env` (la cle est chiffree en base) ;
+  - dans les deux modes, le **pre-remplissage automatique des concept-sets** (recherche semantique) s'appuie sur le module **SapBERT** ci-dessous (actif par defaut). SapBERT off => l'extraction des criteres fonctionne, mais les concept-sets ne sont plus pre-remplis.
+
+#### Module SapBERT (embedder medical partage -- **actif par defaut**)
+
+Contrairement aux deux fonctionnalites ci-dessus, **SapBERT est active par defaut** (`SAPBERT_MODE=on`, profil `sapbert` inclus dans `COMPOSE_PROFILES`). C'est l'**unique embedder** partage par deux features : les **suggestions de mapping** et le **RAG de l'assistant IA**. Le service `opal-sapbert` charge le modele multilingue une seule fois en VRAM.
+
+**Pour le desactiver** : retirez `sapbert` de `COMPOSE_PROFILES` **et** mettez `SAPBERT_MODE=off`. Impact :
+- **Mapping** : perd la strategie d'auto-mapping SapBERT ; les 3 autres strategies (exact, relationship, ingredient) restent.
+- **Assistant IA** : l'extraction des criteres fonctionne, mais plus de pre-remplissage automatique des concept-sets (a faire a la main).
+
+En production avec SapBERT on : renseignez `SAPBERT_RUNNER_TOKEN` (`openssl rand -hex 32`).
 
 Ces variables sont toutes commentees dans [.env.example](.env.example).
 

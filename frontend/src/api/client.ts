@@ -353,6 +353,9 @@ export const cohortLlmApi = {
   getSettings: () => api.get<CohortLlmSettings>('/cohort-llm/settings'),
   updateSettings: (data: { base_url?: string; model?: string; api_key?: string }) =>
     api.put<{ ok: boolean; has_api_key: boolean }>('/cohort-llm/settings', data),
+  // Force-rebuild a CDM's RAG index (admin). Long-running: re-encodes the cache via SapBERT.
+  rebuildRag: (cdmName: string) =>
+    api.post<{ status: string; cdm_name: string }>('/cohort-llm/rebuild', { cdm_name: cdmName }, { timeout: 600000 }),
 };
 
 // Mapping endpoints
@@ -374,8 +377,8 @@ export const mappingApi = {
       cdm_name: cdmName, domain, source_value: sourceValue, source_name: sourceName || '',
     }),
   suggestBatch: (cdmName: string, domain: string, limit?: number, options?: {
-    enable_fuzzy?: boolean; enable_keyword?: boolean;
-    enable_contextual?: boolean; enable_sapbert?: boolean;
+    enable_exact?: boolean; enable_relationship?: boolean;
+    enable_ingredient?: boolean; enable_sapbert?: boolean;
   }) =>
     api.post<{ task_id: string; status: string }>('/mapping/suggest/batch', {
       cdm_name: cdmName, domain, limit: limit || 20, ...options,
@@ -486,8 +489,10 @@ export const conceptApi = {
     ),
   clearSourceValueCache: (cdmName: string, domain?: string) =>
     api.delete('/concepts/source-value-cache', { params: { cdm_name: cdmName, domain } }),
-  populateSourceValueCacheUrl_post: (cdmName: string) =>
-    api.post('/concepts/source-value-cache/populate', null, { params: { cdm_name: cdmName } }),
+  populateSourceValueCacheUrl_post: (cdmName: string, enableSapbert = false) =>
+    api.post('/concepts/source-value-cache/populate', null, {
+      params: { cdm_name: cdmName, enable_sapbert: enableSapbert },
+    }),
   cancelSourceValueCachePopulate: (cdmName: string) =>
     api.post('/concepts/source-value-cache/cancel', null, { params: { cdm_name: cdmName } }),
   counts: (cdmName: string, conceptIds: number[]) =>
@@ -500,6 +505,40 @@ export const conceptApi = {
       `/concepts/counts/source?cdm_name=${encodeURIComponent(cdmName)}`,
       { concept_ids: conceptIds, domains: domains || null },
     ),
+};
+
+// SapBERT (semantic mapping suggestions) endpoints
+export interface SapbertDomainState {
+  domain: string;
+  status: string;
+  row_count: number;
+  enabled: boolean;
+  built_at: string | null;
+  error_message: string | null;
+}
+export const sapbertApi = {
+  config: () => api.get<{ enabled: boolean; mode: string }>('/sapbert/config'),
+  domains: (cdmName: string) =>
+    api.get<{ enabled: boolean; building: boolean; domains: SapbertDomainState[] }>(
+      `/sapbert/domains/${encodeURIComponent(cdmName)}`,
+    ),
+  toggle: (cdmName: string, domain: string, enabled: boolean) =>
+    api.put<{ cdm_name: string; domain: string; enabled: boolean }>(
+      '/sapbert/toggle', { cdm_name: cdmName, domain, enabled },
+    ),
+  // Domains that can be built (labelled source values cached), with their counts.
+  buildable: (cdmName: string) =>
+    api.get<{ enabled: boolean; domains: { domain: string; labelled: number }[] }>(
+      `/sapbert/buildable/${encodeURIComponent(cdmName)}`,
+    ),
+  // Build SapBERT over the existing cache. Pass `domains` to restrict the build.
+  build: (cdmName: string, domains?: string[]) => {
+    const qs = new URLSearchParams({ cdm_name: cdmName });
+    (domains || []).forEach(d => qs.append('domains', d));
+    return api.post<{ status: string; domains?: string[] }>(`/sapbert/build?${qs.toString()}`, null);
+  },
+  buildCancel: (cdmName: string) =>
+    api.post('/sapbert/build/cancel', null, { params: { cdm_name: cdmName } }),
 };
 
 // OHDSI Tools endpoints

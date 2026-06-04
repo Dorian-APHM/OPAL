@@ -13,6 +13,11 @@
 # OHDSI in production: the backend never touches Docker. To enable OHDSI, set
 # OHDSI_MODE=on + OHDSI_RUNNER_TOKEN in .env and start with the ohdsi profile:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile ohdsi up -d
+#
+# SapBERT in production: same pattern. Set SAPBERT_MODE=on + SAPBERT_RUNNER_TOKEN
+# in .env and start with the sapbert profile (the backend blocks at startup if
+# SAPBERT_MODE=on without a token):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile sapbert up -d
 
 services:
   opal-backend:

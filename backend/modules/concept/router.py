@@ -1124,9 +1124,13 @@ _cache_populate_lock = threading.Lock()
 def populate_source_value_cache(
     cdm_name: str,
     request: Request,
+    enable_sapbert: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Launch async cache population for a CDM. Poll /status for progress."""
+    """Launch async cache population for a CDM. Poll /status for progress.
+
+    enable_sapbert: also build SapBERT mapping suggestions per domain off the
+    freshly populated cache (opt-in; ignored if the SapBERT feature is off)."""
     from utils.thread_pool import submit_task
     from modules.concept.source_value_cache import populate_all_domains
 
@@ -1180,6 +1184,7 @@ def populate_source_value_cache(
             populate_all_domains(
                 cdm_name, conn, schema,
                 cancelled_check=lambda: _cancelled["v"],
+                enable_sapbert=enable_sapbert,
             )
         except Exception:
             logger.exception("Cache populate failed for CDM '%s'", cdm_name)

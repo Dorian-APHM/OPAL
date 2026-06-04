@@ -256,3 +256,28 @@ COHORT_LLM_ENABLED = COHORT_LLM_MODE != "off"
 COHORT_LLM_URL = os.getenv(
     "COHORT_LLM_URL", os.getenv("OPAL_LLM_URL", "http://opal-llm:8001")
 ).rstrip("/")
+
+# SapBERT — independent module (orthogonal to COHORT_LLM_MODE), ON BY DEFAULT.
+# opal-sapbert is the shared multilingual medical embedder for TWO consumers:
+#   - mapping suggestions: backend feeds it source labels + a domain's standard
+#     concepts (/index + /match), stores the top-K in sapbert_mappings;
+#   - cohort-llm RAG: opal-llm calls /encode for its retrieval embeddings.
+# The backend does no inference itself — it is a thin client of the runner.
+#   on  (default) -> talks to the runner at SAPBERT_URL
+#   off           -> mapping keeps its 5 other strategies (no SapBERT suggestions,
+#                    build checkbox hidden) AND the cohort assistant loses concept-set
+#                    auto-fill (extraction still works). No embedder is loaded.
+SAPBERT_MODE = os.getenv("SAPBERT_MODE", "on").strip().lower()
+SAPBERT_ENABLED = SAPBERT_MODE == "on"
+SAPBERT_URL = os.getenv("SAPBERT_URL", "http://opal-sapbert:8002").rstrip("/")
+SAPBERT_RUNNER_TOKEN = os.getenv("SAPBERT_RUNNER_TOKEN", "")
+# Kept for reference/UI; the model is baked into the opal-sapbert image.
+SAPBERT_MODEL = os.getenv(
+    "SAPBERT_MODEL", "cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR"
+)
+
+if ENVIRONMENT == "production" and SAPBERT_ENABLED and not SAPBERT_RUNNER_TOKEN:
+    raise RuntimeError(
+        "FATAL: SAPBERT_MODE=on requires SAPBERT_RUNNER_TOKEN in production. "
+        "Generate one with: openssl rand -hex 32"
+    )

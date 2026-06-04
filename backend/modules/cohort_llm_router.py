@@ -28,6 +28,9 @@ router = APIRouter(prefix="/api/cohort-llm", tags=["cohort-llm"])
 
 # /draft can take ~30s on the first request for a CDM (index build) + LLM calls.
 _TIMEOUT = httpx.Timeout(180.0, connect=5.0)
+# An explicit RAG rebuild re-encodes the whole source_value_cache via opal-sapbert;
+# it can take a couple of minutes on a large CDM.
+_REBUILD_TIMEOUT = httpx.Timeout(600.0, connect=5.0)
 
 
 def _require_enabled() -> None:
@@ -134,6 +137,36 @@ def draft(req: DraftRequest, request: Request, db: Session = Depends(get_db)):
     try:
         with httpx.Client(timeout=_TIMEOUT) as client:
             resp = client.post(f"{COHORT_LLM_URL}/draft", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"opal-llm error: {e.response.text[:300]}")
+    except httpx.RequestError as e:
+        raise HTTPException(503, f"opal-llm unreachable: {e}")
+
+
+class RebuildRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1)
+
+
+@router.post("/rebuild")
+def rebuild_rag(req: RebuildRequest, request: Request):
+    """Force-rebuild the RAG index for a CDM (admin only). Relays to opal-llm.
+
+    Re-encodes the CDM's source_value_cache via opal-sapbert and replaces the cached
+    index. The Source Value Cache must be populated first. Long-running (minutes on a
+    large CDM). The lazy build on first /draft does the same — this just pre-warms it
+    and refreshes a stale index after the cache is updated.
+    """
+    _require_enabled()
+    _require_admin(request)
+    check_cdm_access(request, req.cdm_name)
+    user = getattr(request.state, "user", {}) or {}
+    logger.info("cohort-llm RAG rebuild by %s on CDM %s",
+                user.get("preferred_username", "anonymous"), req.cdm_name)
+    try:
+        with httpx.Client(timeout=_REBUILD_TIMEOUT) as client:
+            resp = client.post(f"{COHORT_LLM_URL}/rebuild/{req.cdm_name}")
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as e:

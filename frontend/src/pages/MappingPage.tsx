@@ -15,7 +15,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
   ResponsiveContainer, LineChart, Line, Legend, Rectangle,
 } from 'recharts';
-import { mappingApi, cdmAccessApi, authDownload } from '../api/client';
+import { mappingApi, cdmAccessApi, authDownload, sapbertApi, type SapbertDomainState } from '../api/client';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAuth } from '../auth/KeycloakContext';
 import { useNotifDots } from '../hooks/useNotifDots';
@@ -375,13 +375,48 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [taskId, setTaskId] = useSessionState<string | null>('mapping:suggest:taskId', null);
   const [limit, setLimit] = useSessionState('mapping:suggest:limit', 20);
-  const [enableFuzzy, setEnableFuzzy] = useSessionState('mapping:suggest:enableFuzzy', true);
-  const [enableKeyword, setEnableKeyword] = useSessionState('mapping:suggest:enableKeyword', true);
-  const [enableContextual, setEnableContextual] = useSessionState('mapping:suggest:enableContextual', true);
+  const [enableExact, setEnableExact] = useSessionState('mapping:suggest:enableExact', true);
+  const [enableRelationship, setEnableRelationship] = useSessionState('mapping:suggest:enableRelationship', true);
+  const [enableIngredient, setEnableIngredient] = useSessionState('mapping:suggest:enableIngredient', true);
   const [enableSapbert, setEnableSapbert] = useSessionState('mapping:suggest:enableSapbert', true);
+  const [sapbertFeatureEnabled, setSapbertFeatureEnabled] = useState(false);
+  const [sapbertDomains, setSapbertDomains] = useState<SapbertDomainState[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+
+  // SapBERT feature flag + which domains have been built for this CDM.
+  useEffect(() => {
+    sapbertApi.config().then(r => setSapbertFeatureEnabled(!!r.data.enabled)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!cdmName) { setSapbertDomains([]); return; }
+    sapbertApi.domains(cdmName)
+      .then(r => setSapbertDomains(r.data.domains ?? []))
+      .catch(() => setSapbertDomains([]));
+  }, [cdmName]);
+
+  const sapbertBuilt = sapbertDomains.find(d => d.domain === domain && d.row_count > 0);
+
+  // Reflect the persisted per-domain toggle when switching to a built domain.
+  useEffect(() => {
+    if (sapbertBuilt) setEnableSapbert(sapbertBuilt.enabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domain, sapbertDomains]);
+
+  // Toggle SapBERT for the current domain: drives the request flag, and persists
+  // the per-domain choice when the domain has been built in-app.
+  const handleSapbertToggle = async (checked: boolean) => {
+    setEnableSapbert(checked);
+    if (sapbertBuilt) {
+      try {
+        await sapbertApi.toggle(cdmName, domain, checked);
+        setSapbertDomains(prev => prev.map(d => d.domain === domain ? { ...d, enabled: checked } : d));
+      } catch {
+        toast.error(t('mapping.sapbert_toggle_failed', 'Failed to save SapBERT setting'));
+      }
+    }
+  };
 
   // Poll for suggestion task completion
   const startPolling = useCallback((tid: string) => {
@@ -406,10 +441,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
             }
             // Show warnings about limited strategies
             if (w.includes('source_name_missing')) {
-              toast.warning(t('mapping.warn_no_source_name', 'No source_name column — relationship/ingredient/keyword strategies disabled'));
-            }
-            if (w.includes('no_reference_codebook')) {
-              toast.warning(t('mapping.warn_no_ref', 'No reference codebook uploaded — code descriptions unavailable'));
+              toast.warning(t('mapping.warn_no_source_name', 'No labels for these source values — Maps to and Ingredient unavailable (only Exact and SapBERT apply)'));
             }
             if (w.includes('no_sapbert_embeddings')) {
               toast.warning(t('mapping.warn_no_sapbert', 'No SapBERT embeddings — semantic matching disabled'));
@@ -468,30 +500,16 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
     };
   }, [cdmName]);
 
-  // Pre-configure strategies per domain
-  useEffect(() => {
-    if (domain === 'Procedure') {
-      setEnableFuzzy(false);
-      setEnableKeyword(false);
-      setEnableContextual(false);
-      setEnableSapbert(true);
-    } else {
-      setEnableFuzzy(true);
-      setEnableKeyword(true);
-      setEnableContextual(true);
-      setEnableSapbert(true);
-    }
-  }, [domain]);
-
   const runBatch = () => {
     setLoading(true);
     setResults([]);
     setHasRun(true);
     mappingApi.suggestBatch(cdmName, domain, limit, {
-      enable_fuzzy: enableFuzzy,
-      enable_keyword: enableKeyword,
-      enable_contextual: enableContextual,
-      enable_sapbert: enableSapbert,
+      enable_exact: enableExact,
+      enable_relationship: enableRelationship,
+      // ingredient only applies to drugs; SapBERT only when built for this domain
+      enable_ingredient: domain === 'Drug' ? enableIngredient : false,
+      enable_sapbert: sapbertBuilt ? enableSapbert : false,
     })
       .then(r => {
         if (!mountedRef.current) return;
@@ -618,18 +636,24 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
             className="w-[70px]"
           />
           <span className="border-l border-glass-border pl-3 ml-1 flex items-center gap-3">
-            <Checkbox checked={enableFuzzy} onChange={setEnableFuzzy}>
-              <span className="text-xs">Fuzzy</span>
+            <Checkbox checked={enableExact} onChange={setEnableExact}>
+              <span className="text-xs" title={t('mapping.exact_hint', 'Exact code match (concept_code == source value)')}>Exact</span>
             </Checkbox>
-            <Checkbox checked={enableKeyword} onChange={setEnableKeyword}>
-              <span className="text-xs">{t('mapping.keyword', 'Keyword')}</span>
+            <Checkbox checked={enableRelationship} onChange={setEnableRelationship}>
+              <span className="text-xs" title={t('mapping.mapsto_hint', 'OMOP "Maps to" relationship')}>Maps to</span>
             </Checkbox>
-            <Checkbox checked={enableContextual} onChange={setEnableContextual}>
-              <span className="text-xs">{t('mapping.contextual', 'Contextual')}</span>
-            </Checkbox>
-            {domain === 'Procedure' && (
-              <Checkbox checked={enableSapbert} onChange={setEnableSapbert}>
-                <span className="text-xs">SapBERT</span>
+            {domain === 'Drug' && (
+              <Checkbox checked={enableIngredient} onChange={setEnableIngredient}>
+                <span className="text-xs" title={t('mapping.ingredient_hint', 'French DCI / galenic-form drug matching')}>
+                  {t('mapping.ingredient', 'Ingredient')}
+                </span>
+              </Checkbox>
+            )}
+            {sapbertFeatureEnabled && sapbertBuilt && (
+              <Checkbox checked={enableSapbert} onChange={handleSapbertToggle}>
+                <span className="text-xs" title={t('mapping.sapbert_built', 'SapBERT — {{n}} suggestions for this domain', { n: sapbertBuilt.row_count })}>
+                  SapBERT
+                </span>
               </Checkbox>
             )}
           </span>
@@ -666,10 +690,7 @@ function SuggestionWorkflowTab({ cdmName }: { cdmName: string }) {
           message={
             <div className="space-y-1">
               {suggestWarnings.includes('source_name_missing') && (
-                <div>{t('mapping.warn_no_source_name', 'No source_name column found — relationship, ingredient, and keyword strategies are disabled. Only exact match and fuzzy search are available.')}</div>
-              )}
-              {suggestWarnings.includes('no_reference_codebook') && (
-                <div>{t('mapping.warn_no_ref', 'No reference codebook uploaded for this domain — code descriptions are unavailable. Upload one in the Reference tab to improve suggestions.')}</div>
+                <div>{t('mapping.warn_no_source_name', 'No labels for these source values — Maps to and Ingredient unavailable (only Exact and SapBERT apply)')}</div>
               )}
               {suggestWarnings.includes('no_sapbert_embeddings') && (
                 <div>{t('mapping.warn_no_sapbert', 'No SapBERT embeddings available — semantic matching is disabled.')}</div>

@@ -273,6 +273,19 @@ for _tbl in ("cdm_configs", "analysis_settings"):
             with engine.begin() as _conn:
                 _conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN schema_categories JSON"))
 
+# In-app SapBERT: per-CDM keying on the existing sapbert_mappings table.
+# (sapbert_domain_state is a new table, so create_all() above already made it;
+# only this pre-existing table needs the additive column + lookup index.)
+if _insp.has_table("sapbert_mappings"):
+    _sb_cols = {c["name"] for c in _insp.get_columns("sapbert_mappings")}
+    with engine.begin() as _conn:
+        if "cdm_name" not in _sb_cols:
+            _conn.execute(text("ALTER TABLE sapbert_mappings ADD COLUMN cdm_name VARCHAR(255)"))
+        _conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_sapbert_lookup "
+            "ON sapbert_mappings (cdm_name, domain, source_code)"
+        ))
+
 # Import and register routers
 from modules.cdm_router import router as cdm_router
 from modules.quality.router import router as quality_router
@@ -296,6 +309,7 @@ from modules.admin_router import router as admin_router
 from modules.lineage.router import router as lineage_router
 from modules.recent_router import router as recent_router
 from modules.cohort_llm_router import router as cohort_llm_router
+from modules.sapbert_router import router as sapbert_router
 
 app.include_router(cdm_router)
 app.include_router(quality_router)
@@ -319,6 +333,7 @@ app.include_router(admin_router)
 app.include_router(lineage_router)
 app.include_router(recent_router)
 app.include_router(cohort_llm_router)
+app.include_router(sapbert_router)
 
 
 # i18n endpoint

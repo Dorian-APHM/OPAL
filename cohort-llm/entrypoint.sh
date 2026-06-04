@@ -25,5 +25,5 @@ else
   echo "[on-premise] Ollama disabled; generation uses the external LLM provided per request."
 fi
 
-# Start the FastAPI service (loads e5 + serves /draft) in both modes.
+# Start the FastAPI service (RAG orchestration + /draft; embeddings via opal-sapbert).
 exec uvicorn service:app --host 0.0.0.0 --port 8001

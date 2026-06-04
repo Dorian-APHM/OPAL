@@ -90,6 +90,14 @@ class PooledConnection:
         self._closed = True
         try:
             self._conn.rollback()           # clean session state
+            # A caller may have changed session GUCs for a long-running op (e.g.
+            # `SET statement_timeout = 0` during cache / SapBERT builds). Restore
+            # the configured default so the next borrower of this pooled
+            # connection doesn't inherit the leaked value. SET is transactional,
+            # so commit it (no-op under autocommit).
+            with self._conn.cursor() as cur:
+                cur.execute("SET statement_timeout = %s", (STATEMENT_TIMEOUT_MS,))
+            self._conn.commit()
         except Exception:
             # connection is broken – discard it
             try:

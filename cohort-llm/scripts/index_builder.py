@@ -17,9 +17,12 @@ from pathlib import Path
 import numpy as np
 import psycopg2
 import psycopg2.extras
-from sentence_transformers import SentenceTransformer
 
-MODEL_NAME = "intfloat/multilingual-e5-base"
+from embed_client import EmbeddingClient, EMBED_MODEL_TAG
+
+# Embeddings come from the shared opal-sapbert runner (see embed_client). MODEL_NAME
+# tags each built index so a stale one (model swap, or a previous e5 build) is rebuilt.
+MODEL_NAME = EMBED_MODEL_TAG
 BATCH_SIZE = 64
 _DEFAULT_CACHE = Path(__file__).resolve().parent.parent / "index_cache"
 INDEX_CACHE = Path(os.environ.get("COHORT_LLM_INDEX_CACHE", str(_DEFAULT_CACHE)))
@@ -73,7 +76,7 @@ def fetch_cache_rows(cdm_name: str, conn) -> list[dict]:
     return rows
 
 
-def build_index_for_cdm(cdm_name: str, model: SentenceTransformer, conn) -> tuple[np.ndarray, list[dict]]:
+def build_index_for_cdm(cdm_name: str, client: EmbeddingClient, conn) -> tuple[np.ndarray, list[dict]]:
     """Build + persist the index for one CDM. Returns (embeddings, metadata)."""
     rows = fetch_cache_rows(cdm_name, conn)
     if not rows:
@@ -85,12 +88,11 @@ def build_index_for_cdm(cdm_name: str, model: SentenceTransformer, conn) -> tupl
     print(f"[{cdm_name}] {len(rows)} entries: "
           + ", ".join(f"{d}={n}" for d, n in sorted(by_domain.items())))
 
-    passages = [f"passage: {r['label']}" for r in rows]
+    # SapBERT encodes raw entity names (no e5-style "passage:"/"query:" prefix);
+    # the runner returns L2-normalized vectors, so cosine == dot product.
+    labels = [r["label"] for r in rows]
     t0 = time.time()
-    emb = model.encode(
-        passages, batch_size=BATCH_SIZE, show_progress_bar=False,
-        normalize_embeddings=True, convert_to_numpy=True,
-    ).astype("float32")
+    emb = client.encode(labels).astype("float32")
     print(f"[{cdm_name}] embedded {len(rows)} in {time.time()-t0:.1f}s, {emb.nbytes/1e6:.0f} MB")
 
     out = INDEX_CACHE / cdm_name
@@ -99,6 +101,7 @@ def build_index_for_cdm(cdm_name: str, model: SentenceTransformer, conn) -> tupl
     with open(out / "metadata.jsonl", "w", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    (out / "model.txt").write_text(EMBED_MODEL_TAG, encoding="utf-8")  # index provenance
     return emb, rows
 
 
@@ -107,13 +110,20 @@ def load_cached(cdm_name: str) -> tuple[np.ndarray, list[dict]] | None:
     emb_path, meta_path = out / "embeddings.npy", out / "metadata.jsonl"
     if not (emb_path.exists() and meta_path.exists()):
         return None
+    # Reject an index built by a different model (e.g. a previous e5 build, which
+    # has no model.txt): its vectors are incomparable with SapBERT queries.
+    tag_path = out / "model.txt"
+    tag = tag_path.read_text(encoding="utf-8").strip() if tag_path.exists() else None
+    if tag != EMBED_MODEL_TAG:
+        print(f"[{cdm_name}] cached index model={tag!r} != {EMBED_MODEL_TAG!r} — rebuilding")
+        return None
     emb = np.load(emb_path)
     with open(meta_path, encoding="utf-8") as f:
         meta = [json.loads(line) for line in f]
     return emb, meta
 
 
-def load_or_build(cdm_name: str, model: SentenceTransformer,
+def load_or_build(cdm_name: str, client: EmbeddingClient,
                   conn=None, force: bool = False) -> tuple[np.ndarray, list[dict]]:
     """Lazy: return cached index if present (unless force), else build from opal-db."""
     if not force:
@@ -125,7 +135,7 @@ def load_or_build(cdm_name: str, model: SentenceTransformer,
     if own_conn:
         conn = psycopg2.connect(_resolve_db_url())
     try:
-        return build_index_for_cdm(cdm_name, model, conn)
+        return build_index_for_cdm(cdm_name, client, conn)
     finally:
         if own_conn:
             conn.close()
@@ -136,7 +146,7 @@ if __name__ == "__main__":
     import sys
     cdm = sys.argv[1] if len(sys.argv) > 1 else "cdm_omop_20260314"
     force = "--force" in sys.argv
-    print(f"Loading model {MODEL_NAME}...")
-    m = SentenceTransformer(MODEL_NAME, device="cuda")
-    emb, meta = load_or_build(cdm, m, force=force)
+    print(f"Embeddings via opal-sapbert runner ({MODEL_NAME})...")
+    client = EmbeddingClient()
+    emb, meta = load_or_build(cdm, client, force=force)
     print(f"Done. Index: {emb.shape}, {len(meta)} entries.")

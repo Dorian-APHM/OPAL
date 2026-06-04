@@ -31,9 +31,16 @@ services:
       # Cohort-LLM: thin client of opal-llm (off | embedded | on-premise).
       - COHORT_LLM_MODE=${COHORT_LLM_MODE:-off}
       - COHORT_LLM_URL=http://opal-llm:8001
+      # SapBERT: thin client of opal-sapbert (off | on). On by default — shared embedder
+      # for semantic mapping suggestions AND the cohort-llm RAG. Off => mapping keeps its
+      # 5 other strategies and the cohort assistant loses concept-set auto-fill.
+      - SAPBERT_MODE=${SAPBERT_MODE:-on}
+      - SAPBERT_URL=http://opal-sapbert:8002
+      - SAPBERT_RUNNER_TOKEN=${SAPBERT_RUNNER_TOKEN:-}
     networks:
       - default
       - ohdsi-net
+      - sapbert-net
     depends_on:
       opal-db:
         condition: service_healthy
@@ -213,14 +220,22 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
       - OLLAMA_MODELS=/models
       - COHORT_LLM_INDEX_CACHE=/app/index_cache
+      # RAG embeddings come from the shared opal-sapbert runner (the SAME service the
+      # mapping uses — one medical embedder in VRAM). If SapBERT is off/down, retrieval
+      # is unavailable (criteria extraction still works). See SAPBERT_MODE.
+      - SAPBERT_URL=http://opal-sapbert:8002
+      - SAPBERT_RUNNER_TOKEN=${SAPBERT_RUNNER_TOKEN:-}
     volumes:
       - opal_llm_models:/models        # embedded model, pulled on first run
       - opal_llm_index:/app/index_cache # per-CDM RAG indexes
     networks:
       - default                         # needs opal-db for the source_value_cache
+      - sapbert-net                     # reaches opal-sapbert /encode for RAG embeddings
     depends_on:
       opal-db:
         condition: service_healthy
+      opal-sapbert:
+        condition: service_started
     # GPU (host needs the NVIDIA container runtime). Set COHORT_LLM_DEVICE=cpu to skip.
     deploy:
       resources:
@@ -237,6 +252,56 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # SapBERT runner — ON BY DEFAULT (shipped .env sets COMPOSE_PROFILES=sapbert).
+  # Independent module, orthogonal to COHORT_LLM_MODE: it is the shared medical
+  # embedder for BOTH mapping suggestions (POST /index + /match -> sapbert_mappings)
+  # AND the cohort-llm RAG (POST /encode). To disable: drop "sapbert" from
+  # COMPOSE_PROFILES and set SAPBERT_MODE=off (see .env.example for the impact).
+  # Pure compute with the multilingual SapBERT model baked into the image: NO DB and
+  # NO CDM access — clients feed it data over HTTP. Its only persistent store is the
+  # opal_sapbert_cache VOLUME (files: per-(cdm,domain) target embeddings), NOT the app
+  # database. Lives on a dedicated network reachable only by the backend and opal-llm.
+  opal-sapbert:
+    build:
+      context: ./sapbert-tools
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        # Baked model must match SAPBERT_MODEL at runtime, else it re-downloads.
+        SAPBERT_MODEL: ${SAPBERT_MODEL:-cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR}
+    container_name: opal-sapbert
+    profiles: ["sapbert"]
+    environment:
+      # Shared token backend<->runner. Same rationale as OHDSI: no `:?` here
+      # (Compose interpolates every service for any command); enforced at runtime
+      # (when set, server.py rejects requests with a wrong/missing token; the
+      # backend blocks in prod if MODE=on without a token. With an empty token the
+      # runner accepts any request — safe only because it lives on an internal,
+      # backend-only network). Generate with: openssl rand -hex 32
+      - SAPBERT_RUNNER_TOKEN=${SAPBERT_RUNNER_TOKEN:-}
+      - SAPBERT_MODEL=${SAPBERT_MODEL:-cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR}
+      - SAPBERT_DEVICE=${SAPBERT_DEVICE:-cuda}
+      - SAPBERT_BATCH_SIZE=${SAPBERT_BATCH_SIZE:-128}
+    volumes:
+      - opal_sapbert_cache:/cache       # per-(cdm,domain) target embeddings (files, not a DB)
+    networks:
+      - sapbert-net
+    # GPU (host needs the NVIDIA container runtime). Set SAPBERT_DEVICE=cpu to skip.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
 volumes:
   opal_pgdata:
   opal_data:
@@ -244,9 +309,12 @@ volumes:
   opal_ohdsi_data:
   opal_llm_models:
   opal_llm_index:
+  opal_sapbert_cache:
 
 networks:
   default:
     name: opal-network
   ohdsi-net:
     name: opal-ohdsi-network
+  sapbert-net:
+    name: opal-sapbert-network

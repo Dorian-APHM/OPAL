@@ -1,0 +1,9 @@
+# opal-sapbert service deps. torch (CUDA 11.8) is installed separately in the
+# Dockerfile from the PyTorch index. Versions pinned to the combo verified to
+# load cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR (XLM-R tokenizer).
+fastapi==0.136.3
+uvicorn==0.48.0
+transformers==4.49.0
+sentencepiece==0.2.0
+protobuf==5.29.3
+numpy

@@ -14,9 +14,12 @@ Le service `opal-llm` (port 8001, interne) fait **deux choses séparées** :
 
 1. **Génération (LLM)** — extrait la requête en JSON structuré (démographie,
    critères, temporalité) et enrichit chaque terme (synonymes/abréviations).
-2. **RAG (e5 + index)** — fait correspondre chaque terme aux **vrais
+2. **RAG (index + embeddings)** — fait correspondre chaque terme aux **vrais
    `source_value` du CDM**, via un index construit à partir de
-   `source_value_cache` (embeddings `intfloat/multilingual-e5-base`).
+   `source_value_cache`. Les embeddings ne sont **pas** calculés ici : `opal-llm`
+   appelle le service partagé **`opal-sapbert`** (`POST /encode`), le **même**
+   embedder médical multilingue que les suggestions de mapping (un seul modèle en
+   VRAM pour les deux features). Module SapBERT **actif par défaut**.
 
 Le backend OPAL est un **relais** : il appelle `opal-llm` en HTTP, ne fait
 aucune inférence lui-même. Le navigateur ne joint jamais `opal-llm` directement.
@@ -25,8 +28,13 @@ aucune inférence lui-même. Le navigateur ne joint jamais `opal-llm` directemen
 Navigateur → Backend (/api/cohort-llm/draft, auth Keycloak)
            → opal-llm (RAG + génération)
                  ├─ génération : LLM embarqué (Ollama) OU LLM externe (on-premise)
-                 └─ RAG : e5 + index source_value_cache (opal-db)
+                 └─ RAG : index source_value_cache (opal-db)
+                          + embeddings via opal-sapbert (/encode)
 ```
+
+> **Dépendance** : le RAG nécessite le module **SapBERT** (`opal-sapbert`, actif
+> par défaut). Si SapBERT est **off**, l'extraction des critères fonctionne mais
+> les concept-sets ne sont **pas** pré-remplis (voir §3 et le tableau des modes).
 
 ---
 
@@ -40,18 +48,24 @@ Navigateur → Backend (/api/cohort-llm/draft, auth Keycloak)
 
 > Le **RAG tourne dans `opal-llm` dans les deux modes actifs** ; seule la
 > génération change. En `on-premise`, aucun modèle n'est téléchargé et Ollama
-> n'est pas démarré — la génération part vers ton endpoint.
+> n'est pas démarré — la génération part vers ton endpoint. Dans les deux cas, le
+> RAG délègue ses embeddings à **`opal-sapbert`** (actif par défaut) ; SapBERT off
+> ⇒ critères extraits mais concept-sets non pré-remplis.
 
 ---
 
 ## 3. Pré-requis
 
+- Le **module SapBERT doit être actif** (`opal-sapbert`, par défaut `on`) : c'est
+  lui qui produit les embeddings du RAG. S'il est off, l'assistant extrait les
+  critères mais ne pré-remplit plus les concept-sets.
 - Le **`source_value_cache` du CDM doit être peuplé** (Réglages → *Source Value
   Cache* → *Build*). C'est la source de l'index RAG ; sans lui, les critères
   n'auront pas de codes.
-- Pour le mode `embedded` (et l'e5 sur GPU) : **runtime conteneur NVIDIA** sur
-  l'hôte. Sinon, mets `COHORT_LLM_DEVICE=cpu` (l'e5 tourne sur CPU ; un LLM
-  embarqué sur CPU est lent mais fonctionnel).
+- Pour le mode `embedded` (LLM local sur GPU) : **runtime conteneur NVIDIA** sur
+  l'hôte. Sinon, mets `COHORT_LLM_DEVICE=cpu` (LLM embarqué sur CPU, lent mais
+  fonctionnel). Note : les embeddings du RAG tournent désormais dans `opal-sapbert`,
+  pas dans `opal-llm`.
 
 ---
 
@@ -150,6 +164,7 @@ vLLM, Ollama (`/v1`), LocalAI, LM Studio, TGI, text-generation-webui, etc.
 
 **Env** : `COHORT_LLM_MODE` (off/embedded/on-premise), `COHORT_LLM_URL`
 (défaut `http://opal-llm:8001`), `COHORT_LLM_EMBEDDED_MODEL`, `COHORT_LLM_DEVICE`.
+Le RAG lit aussi `SAPBERT_URL` / `SAPBERT_RUNNER_TOKEN` (embeddings via `opal-sapbert`).
 
 **API backend** (préfixe `/api/cohort-llm`, sous auth) :
 - `GET /config` → `{enabled, mode}` (toujours dispo)

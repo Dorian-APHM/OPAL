@@ -52,8 +52,9 @@ def test_populate_passes_schema_map(client, monkeypatch):
 
     captured = {}
 
-    def fake_populate_all_domains(cdm_name, conn, schema, cancelled_check=None):
+    def fake_populate_all_domains(cdm_name, conn, schema, cancelled_check=None, enable_sapbert=False):
         captured["schema"] = schema
+        captured["enable_sapbert"] = enable_sapbert
 
     # Run the worker synchronously and stub the OMOP connection + populate.
     monkeypatch.setattr("utils.thread_pool.submit_task", lambda fn, *a, **k: fn())

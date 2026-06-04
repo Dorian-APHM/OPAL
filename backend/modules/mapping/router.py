@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from db.app_db import get_db
-from db.models import CdmConfig, AnalysisSettings, AnalysisSnapshot, MappingDecision, ReferenceCodebook, SapbertMapping
+from db.models import CdmConfig, AnalysisSettings, AnalysisSnapshot, MappingDecision, ReferenceCodebook, SapbertMapping, SapbertDomainState
 from utils.notifications import notify
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
@@ -167,9 +167,9 @@ class SuggestBatchRequest(BaseModel):
     cdm_name: str = Field(..., min_length=1, max_length=255)
     domain: str = Field(..., min_length=1, max_length=100)
     limit: int = Field(default=20, ge=1, le=200)
-    enable_fuzzy: bool = True
-    enable_keyword: bool = True
-    enable_contextual: bool = True
+    enable_exact: bool = True
+    enable_relationship: bool = True
+    enable_ingredient: bool = True
     enable_sapbert: bool = True
 
 
@@ -597,17 +597,43 @@ def concept_lookup(cdm_name: str, concept_id: int, db: Session = Depends(get_db)
 
 # ──── 5.3 Auto-Suggestion ────
 
-def _get_sapbert_suggestions(db: Session, source_value: str, domain: str) -> list[dict]:
-    """Look up pre-computed SapBERT suggestions for a source value."""
-    rows = (
-        db.query(SapbertMapping)
-        .filter(
-            SapbertMapping.domain == domain,
-            SapbertMapping.source_code == source_value,
-        )
-        .order_by(SapbertMapping.rank)
-        .all()
+def _sapbert_scope(db: Session, cdm_name: str, domain: str) -> tuple[bool, str | None]:
+    """Resolve how to read SapBERT rows for (cdm, domain), honoring the per-domain toggle.
+
+    Returns (enabled, cdm_filter):
+      - built in-app (a SapbertDomainState row exists): use this CDM's rows only,
+        and only if the toggle is on -> (state.enabled, cdm_name).
+      - never built: fall back to legacy global rows (cdm_name IS NULL), on by
+        default -> (True, None).
+    cdm_filter None means "match the legacy NULL-cdm_name rows".
+    """
+    state = (
+        db.query(SapbertDomainState)
+        .filter(SapbertDomainState.cdm_name == cdm_name, SapbertDomainState.domain == domain)
+        .first()
     )
+    if state is None:
+        return True, None
+    return bool(state.enabled), cdm_name
+
+
+def _filter_sapbert_cdm(query, cdm_filter: str | None):
+    """Apply the cdm_name scope: a specific CDM, or the legacy NULL rows."""
+    if cdm_filter is None:
+        return query.filter(SapbertMapping.cdm_name.is_(None))
+    return query.filter(SapbertMapping.cdm_name == cdm_filter)
+
+
+def _get_sapbert_suggestions(db: Session, source_value: str, domain: str, cdm_name: str) -> list[dict]:
+    """Look up pre-computed SapBERT suggestions for a source value (per CDM + toggle)."""
+    enabled, cdm_filter = _sapbert_scope(db, cdm_name, domain)
+    if not enabled:
+        return []
+    query = db.query(SapbertMapping).filter(
+        SapbertMapping.domain == domain,
+        SapbertMapping.source_code == source_value,
+    )
+    rows = _filter_sapbert_cdm(query, cdm_filter).order_by(SapbertMapping.rank).all()
     return [
         {
             "concept_id": r.target_concept_id,
@@ -646,8 +672,8 @@ def suggest_single(req: SuggestRequest, request: Request, db: Session = Depends(
         if ref:
             source_name = ref.description
 
-    # Check SapBERT pre-computed suggestions first
-    sapbert_suggs = _get_sapbert_suggestions(db, req.source_value, req.domain)
+    # Check SapBERT pre-computed suggestions first (per CDM + per-domain toggle)
+    sapbert_suggs = _get_sapbert_suggestions(db, req.source_value, req.domain, req.cdm_name)
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
@@ -737,9 +763,9 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
     # Capture request params for worker
     domain = req.domain
     limit = req.limit
-    enable_fuzzy = req.enable_fuzzy
-    enable_keyword = req.enable_keyword
-    enable_contextual = req.enable_contextual
+    enable_exact = req.enable_exact
+    enable_relationship = req.enable_relationship
+    enable_ingredient = req.enable_ingredient
     enable_sapbert = req.enable_sapbert
 
     def _worker():
@@ -791,68 +817,72 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                 from db.app_db import SessionLocal
                 _db = SessionLocal()
                 try:
-                    sapbert_rows = (
-                        _db.query(SapbertMapping)
-                        .filter(
+                    _enabled, _cdm_filter = _sapbert_scope(_db, req.cdm_name, sapbert_domain)
+                    if _enabled:
+                        _q = _db.query(SapbertMapping).filter(
                             SapbertMapping.domain == sapbert_domain,
                             SapbertMapping.source_code.in_(all_svs),
                         )
-                        .order_by(SapbertMapping.source_code, SapbertMapping.rank)
-                        .all()
-                    )
-                    for r in sapbert_rows:
-                        sapbert_map.setdefault(r.source_code, []).append({
-                            "concept_id": r.target_concept_id,
-                            "concept_name": r.target_concept_name,
-                            "concept_code": r.target_concept_code,
-                            "vocabulary_id": r.target_vocabulary_id,
-                            "domain_id": sapbert_domain,
-                            "standard_concept": "S",
-                            "confidence": int(r.similarity * 100),
-                            "source": "sapbert",
-                        })
+                        sapbert_rows = (
+                            _filter_sapbert_cdm(_q, _cdm_filter)
+                            .order_by(SapbertMapping.source_code, SapbertMapping.rank)
+                            .all()
+                        )
+                        for r in sapbert_rows:
+                            sapbert_map.setdefault(r.source_code, []).append({
+                                "concept_id": r.target_concept_id,
+                                "concept_name": r.target_concept_name,
+                                "concept_code": r.target_concept_code,
+                                "vocabulary_id": r.target_vocabulary_id,
+                                "domain_id": sapbert_domain,
+                                "standard_concept": "S",
+                                "confidence": int(r.similarity * 100),
+                                "source": "sapbert",
+                            })
                 finally:
                     _db.close()
 
-            terms_without_sapbert = [t for t in terms if t["source_value"] not in sapbert_map]
-
-            results_sapbert = []
-            for t in terms:
-                sv = t["source_value"]
-                if sv in sapbert_map:
-                    results_sapbert.append({
-                        "source_value": sv,
-                        "source_name": t.get("source_name", ""),
-                        "suggestions": list(sapbert_map[sv]),
-                    })
-
+            # Run the deterministic SQL strategies (exact / Maps to / ingredient)
+            # on ALL terms per their toggles, then merge SapBERT on top (SapBERT
+            # first, SQL deduped by concept_id). The strategies are independent.
             with _suggestions_lock:
                 if _active_suggestions.get(task_id, {}).get("cancelled"):
                     return
 
-            results_slow = []
-            if terms_without_sapbert:
-                results_slow = suggest_batch(conn, terms_without_sapbert, domain, schema,
-                                             enable_fuzzy=enable_fuzzy,
-                                             enable_keyword=enable_keyword,
-                                             enable_contextual=enable_contextual)
+            sql_map: dict[str, list[dict]] = {}
+            if enable_exact or enable_relationship or enable_ingredient:
+                for r in suggest_batch(conn, terms, domain, schema,
+                                       enable_exact=enable_exact,
+                                       enable_relationship=enable_relationship,
+                                       enable_ingredient=enable_ingredient):
+                    sql_map[r["source_value"]] = r.get("suggestions", [])
 
-            result_map = {}
-            for r in results_sapbert + results_slow:
-                result_map[r["source_value"]] = r
-            results = [result_map[t["source_value"]] for t in terms if t["source_value"] in result_map]
+            results = []
+            for t in terms:
+                sv = t["source_value"]
+                merged = list(sapbert_map.get(sv, []))
+                seen = {s["concept_id"] for s in merged}
+                for s in sql_map.get(sv, []):
+                    if s["concept_id"] not in seen:
+                        merged.append(s)
+                        seen.add(s["concept_id"])
+                results.append({
+                    "source_value": sv,
+                    "source_name": t.get("source_name", ""),
+                    "suggestions": merged,
+                })
 
-            # Build warnings about limited strategies
+            # Warnings about limited strategies (exact / Maps to / ingredient / SapBERT).
+            # Based on whether the terms actually carry a label (from the CDM column
+            # OR a reference codebook), not on whether a CDM source_name column exists.
             warnings = []
-            if not sn_col:
+            has_labels = any(t.get("source_name") for t in terms)
+            if not has_labels:
+                # No label -> "Maps to" and "Ingredient" can't run; only Exact
+                # (and SapBERT, if built) apply.
                 warnings.append("source_name_missing")
-            if not ref_map:
-                warnings.append("no_reference_codebook")
             if enable_sapbert and not sapbert_map:
                 warnings.append("no_sapbert_embeddings")
-            has_source_names = any(t.get("source_name") for t in terms)
-            if sn_col and not has_source_names and not ref_map:
-                warnings.append("source_names_empty")
 
             with _suggestions_lock:
                 if task_id in _active_suggestions:

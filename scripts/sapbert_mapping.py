@@ -1,5 +1,9 @@
 """
-SapBERT-based semantic mapping: CCAM (EN) → SNOMED Procedure.
+SapBERT-based semantic mapping: CCAM → SNOMED Procedure.
+
+Uses the multilingual SapBERT model (cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR)
+by default, so French source terms can be matched directly against the English SNOMED
+concept names (cross-lingual embeddings) — no prior EN translation required.
 
 Connects to the OPAL app DB to retrieve:
   - CDM connection details (to extract SNOMED standard concepts)
@@ -9,7 +13,8 @@ Then uses SapBERT to compute embeddings and find the top-N SNOMED matches
 for each CCAM source term.
 
 Usage:
-    pip install torch transformers numpy psycopg2-binary cryptography
+    pip install torch transformers sentencepiece numpy psycopg2-binary cryptography
+    # sentencepiece is required by the multilingual XLM-R tokenizer.
 
     # From CSV file (recommended — uses real CCAM codes like QCJA003):
     python scripts/sapbert_mapping.py --cdm <cdm_name> --csv ccam_athena.csv [--top 5]
@@ -17,7 +22,8 @@ Usage:
     # From OPAL reference_codebooks table:
     python scripts/sapbert_mapping.py --cdm <cdm_name> --ref CCAM_EN [--top 5]
 
-Output CSV can be loaded into OPAL as a reference or used to batch-approve mappings.
+Results are written to sapbert_multilingue.csv by default. The output CSV can be
+loaded into OPAL as a reference or used to batch-approve mappings.
 """
 import argparse
 import csv
@@ -35,18 +41,45 @@ from psycopg2.extras import DictCursor
 # ---------------------------------------------------------------------------
 OPAL_DB_URL = os.getenv("OPAL_DATABASE_URL", "postgresql://opal:opal@localhost:5434/opal")
 
-# Fernet key for CDM password decryption
-SECRET_KEY_FILE = Path(__file__).parent.parent / "backend" / "data" / ".secret_key"
+# Fernet key for CDM password decryption.
+# Resolved the SAME way as backend/utils/crypto.py: the ENCRYPTION_KEY env var
+# takes precedence, otherwise the .secret_key file (path overridable via
+# OPAL_SECRET_KEY_FILE).
+SECRET_KEY_FILE = Path(
+    os.getenv("OPAL_SECRET_KEY_FILE")
+    or Path(__file__).parent.parent / "backend" / "data" / ".secret_key"
+)
+
+
+def get_encryption_key() -> bytes:
+    """Resolve the Fernet key (ENCRYPTION_KEY env var, else .secret_key file).
+
+    The running backend may use a key baked into its container volume that
+    differs from the host file. Export the backend's key before running, e.g.:
+        export ENCRYPTION_KEY=$(docker exec opal-backend cat /app/data/.secret_key)
+    """
+    env_key = os.getenv("ENCRYPTION_KEY")
+    if env_key:
+        return env_key.strip().encode("utf-8")
+    with open(SECRET_KEY_FILE, "rb") as f:
+        return f.read().strip()
 
 
 def decrypt_password(encrypted: str) -> str:
     """Decrypt a CDM password using OPAL's Fernet key."""
-    from cryptography.fernet import Fernet
+    from cryptography.fernet import Fernet, InvalidToken
     if not encrypted:
         return ""
-    with open(SECRET_KEY_FILE, "rb") as f:
-        key = f.read()
-    return Fernet(key).decrypt(encrypted.encode("utf-8")).decode("utf-8")
+    try:
+        return Fernet(get_encryption_key()).decrypt(encrypted.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        print(
+            "ERROR: could not decrypt the CDM password — encryption key mismatch.\n"
+            "The running backend uses a different key than the one this script loaded.\n"
+            "Export the backend's key and retry, e.g.:\n"
+            "  export ENCRYPTION_KEY=$(docker exec opal-backend cat /app/data/.secret_key)"
+        )
+        sys.exit(1)
 
 
 def get_opal_connection():
@@ -86,17 +119,26 @@ def get_cdm_info(opal_conn, cdm_name: str) -> dict:
 
 
 def get_ccam_from_csv(csv_path: str) -> list[dict]:
-    """Read CCAM entries from a CSV file (code,description,...)."""
+    """Read CCAM entries from a CSV file.
+
+    The code column must be named 'code'. The description column may be named
+    'description', 'label' or 'libelle' (first match wins) — e.g. ccam_fr.csv
+    ships as 'code,label'.
+    """
+    desc_keys = ("description", "label", "libelle", "libellé")
     entries = []
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            code = row.get("code", "").strip()
-            desc = row.get("description", "").strip()
+            code = (row.get("code") or "").strip()
+            desc = next((row[k].strip() for k in desc_keys if row.get(k)), "")
             if code and desc:
                 entries.append({"code": code, "description": desc})
     if not entries:
-        print(f"ERROR: No entries found in CSV '{csv_path}'.")
+        print(
+            f"ERROR: No entries found in CSV '{csv_path}'. "
+            f"Expected a 'code' column and one of {desc_keys}."
+        )
         sys.exit(1)
     return entries
 
@@ -145,13 +187,21 @@ def get_snomed_procedures(cdm_conn, schema: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # SapBERT encoding
 # ---------------------------------------------------------------------------
-def load_sapbert(model_name: str = "cambridgeltl/SapBERT-from-PubMedBERT-fulltext"):
+def load_sapbert(model_name: str = "cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR"):
     """Load SapBERT model and tokenizer."""
     import torch
     from transformers import AutoTokenizer, AutoModel
 
     print(f"Loading SapBERT model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # The multilingual model is XLM-R based. Newer transformers tries to convert
+    # the SentencePiece tokenizer to a "fast" one, which needs protobuf+tiktoken.
+    # Fall back to the slow tokenizer (sentencepiece only) when that conversion
+    # is unavailable — it yields identical input_ids.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+    except Exception as exc:
+        print(f"  Fast tokenizer unavailable ({type(exc).__name__}); using slow tokenizer.")
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     model = AutoModel.from_pretrained(model_name)
     model.eval()
 
@@ -231,8 +281,8 @@ def main():
     parser.add_argument("--csv", default=None, help="CSV file with CCAM codes (code,description columns). Uses real CCAM codes.")
     parser.add_argument("--ref", default="CCAM_EN", help="Reference codebook name if --csv not provided (default: CCAM_EN)")
     parser.add_argument("--top", type=int, default=5, help="Top-K matches per source term")
-    parser.add_argument("--output", default="sapbert_results.csv", help="Output CSV path")
-    parser.add_argument("--model", default="cambridgeltl/SapBERT-from-PubMedBERT-fulltext", help="HuggingFace model")
+    parser.add_argument("--output", default="sapbert_multilingue.csv", help="Output CSV path")
+    parser.add_argument("--model", default="cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR", help="HuggingFace model")
     parser.add_argument("--batch-size", type=int, default=128, help="Encoding batch size")
     parser.add_argument("--save-embeddings", action="store_true", help="Save embeddings as .npy files")
     args = parser.parse_args()
@@ -362,7 +412,7 @@ def main():
 
     print(f"\n\nTo load into OPAL as reference:")
     print(f'  curl --noproxy \'*\' -s -X POST "http://localhost:8000/api/mapping/reference/upload" \\')
-    print(f'    -F "name=SAPBERT_CCAM_SNOMED" -F "domain=Procedure" -F "file=@{args.output}"')
+    print(f'    -F "name=SAPBERT_MULTILINGUE" -F "domain=Procedure" -F "file=@{args.output}"')
 
 
 if __name__ == "__main__":

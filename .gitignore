@@ -42,6 +42,9 @@ scripts/setup_keycloak.sh
 *.csv
 # Référentiels locaux (CCAM, SapBERT…) — chargés via l'API, ne pas committer
 /data/
+# Embeddings SapBERT générés localement (volumineux : .npy de plusieurs centaines de Mo).
+# L'app les régénère dans le volume opal_sapbert_cache ; ne jamais committer.
+*.npy
 
 # LibreOffice / Excel lock files
 .~lock.*#
