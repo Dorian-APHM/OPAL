@@ -100,6 +100,15 @@ def populate_domain(
     from psycopg2.extras import RealDictCursor
     import uuid
 
+    # Big domains (Measurement especially) GROUP-BY-scan the whole clinical table
+    # before the first row is returned, which routinely exceeds the default
+    # statement_timeout (OMOP_STATEMENT_TIMEOUT_MS, 30 min) and kills the build right
+    # on Measurement. Disable the timeout for THIS query's transaction. Done per-domain
+    # (not once on the connection in the worker) so it cannot be lost to a transaction
+    # boundary between domains and is robust regardless of the connection's state.
+    with conn.cursor() as _t:
+        _t.execute("SET statement_timeout = 0")
+
     # Server-side (named) cursor: streams rows from PostgreSQL in batches instead
     # of materialising the entire GROUP-BY result of a whole clinical table in
     # client memory before the first fetchmany().
