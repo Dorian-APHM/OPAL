@@ -123,9 +123,26 @@ def test_ws_connect_timeout_reasonable(ws_block):
 # ── Proxy pass ──
 
 def test_ws_proxy_pass_to_backend(ws_block):
-    """WebSocket traffic must be proxied to the backend service."""
-    assert re.search(r'proxy_pass\s+http://opal-backend:8000', ws_block), (
-        "WebSocket location should proxy_pass to http://opal-backend:8000"
+    """WebSocket traffic must be proxied to the backend service.
+
+    The upstream is resolved dynamically (via the $backend variable + Docker's
+    DNS resolver) so nginx follows the backend container's IP across restarts
+    instead of caching a stale IP at startup.
+    """
+    assert re.search(r'set\s+\$backend\s+"?opal-backend:8000', ws_block), (
+        "WebSocket block should set $backend = opal-backend:8000"
+    )
+    assert re.search(r'proxy_pass\s+http://\$backend', ws_block), (
+        "WebSocket location should proxy_pass to http://$backend (dynamic resolution)"
+    )
+
+
+def test_nginx_has_docker_resolver(nginx_conf):
+    """nginx must declare Docker's embedded DNS resolver so the $backend variable
+    re-resolves the backend IP at request time (prevents 502 after a backend
+    container is recreated with a new IP)."""
+    assert re.search(r'resolver\s+127\.0\.0\.11', nginx_conf), (
+        "Missing 'resolver 127.0.0.11' — dynamic proxy_pass won't resolve opal-backend"
     )
 
 
