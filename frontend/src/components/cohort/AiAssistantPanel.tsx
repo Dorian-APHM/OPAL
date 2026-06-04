@@ -9,6 +9,7 @@ interface ApplyPayload {
   inclusion: CohortCriterion[];
   exclusion: CohortCriterion[];
   demographics: DemographicConstraints;
+  llm_prompt?: string;
 }
 
 interface Props {
@@ -94,13 +95,14 @@ export default function AiAssistantPanel({ cdmName, onApply }: Props) {
     const d = draft.demographics || {};
     const demographics: DemographicConstraints = {};
     if (d.age_min != null || d.age_max != null) {
-      demographics.age = {};
+      // Age is evaluated at the cohort index event by default (OHDSI standard).
+      demographics.age = { at: 'index' };
       if (d.age_min != null) demographics.age.min = d.age_min;
       if (d.age_max != null) demographics.age.max = d.age_max;
     }
     if (d.sex === 'M' || d.sex === 'F') demographics.gender = [GENDER_CONCEPT[d.sex]];
 
-    onApply({ inclusion, exclusion, demographics });
+    onApply({ inclusion, exclusion, demographics, llm_prompt: prompt.trim() });
   };
 
   const totalSelected = Object.values(selections).reduce((n, s) => n + s.size, 0);

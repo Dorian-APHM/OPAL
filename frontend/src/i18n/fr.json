@@ -201,6 +201,9 @@
     "no_cache": "Aucun cache construit. Construisez le cache pour accélérer les recherches de valeurs source."
   },
   "cohort": {
+    "age_at_index": "à l'index",
+    "age_current": "âge actuel",
+    "age_at_hint": "Âge évalué à l'entrée dans la cohorte (1er événement qualifiant) ou à aujourd'hui",
     "title": "Constructeur de cohortes",
     "domains": "Domaines",
     "concept_search": "Recherche de concepts (OMOP)",

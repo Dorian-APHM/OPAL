@@ -334,6 +334,8 @@ export interface CohortCriteria {
   exit_criteria?: CohortExitCriteria;
   /** ID of the criterion designated as the initial/index event (cohort entry) */
   initial_event_criterion_id?: string;
+  /** Natural-language prompt that generated this cohort via the AI assistant (kept for reference). */
+  llm_prompt?: string;
 }
 
 // ── Cohort-LLM (natural-language → draft) ──

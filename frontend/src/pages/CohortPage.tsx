@@ -163,14 +163,17 @@ export default function CohortPage({ selectedCdm }: Props) {
     inclusion: CohortCriterion[];
     exclusion: CohortCriterion[];
     demographics: DemographicConstraints;
+    llm_prompt?: string;
   }) => {
     // Append AI criteria exactly like manual ones; the user then arranges AND/OR
     // and ordering in the builder. (AI criteria carry no operatorWithNext.)
+    // Keep the originating prompt with the cohort so it can be found again later.
     setCriteria(prev => ({
       ...prev,
       inclusion: { ...prev.inclusion, criteria: [...prev.inclusion.criteria, ...payload.inclusion] },
       exclusion: { ...prev.exclusion, criteria: [...prev.exclusion.criteria, ...payload.exclusion] },
       demographics: { ...prev.demographics, ...payload.demographics },
+      llm_prompt: payload.llm_prompt || prev.llm_prompt,
     }));
     setBuilderSubTab('builder');
     toast.success(t('cohort.ai_applied', 'Critères appliqués depuis l\'assistant IA'));
@@ -639,6 +642,14 @@ export default function CohortPage({ selectedCdm }: Props) {
                     >
                       {t('cohort.results', 'Résultats')}
                     </Button>
+                  </div>
+                )}
+                {criteria.llm_prompt && (
+                  <div className="shrink-0 flex items-start gap-2 text-xs bg-emerald-accent/10 border border-emerald-accent/30 rounded px-2 py-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-accent mt-0.5 shrink-0" />
+                    <span className="text-text-muted">
+                      <span className="font-medium text-text-bright">{t('cohort.ai_prompt', 'Prompt IA')} :</span> {criteria.llm_prompt}
+                    </span>
                   </div>
                 )}
                 <QueryCanvas
@@ -1277,6 +1288,7 @@ function toBackendCriteria(criteria: CohortCriteria): CohortCriteria {
     demographics: criteria.demographics,
     exit_criteria: criteria.exit_criteria,
     initial_event_criterion_id: criteria.initial_event_criterion_id,
+    llm_prompt: criteria.llm_prompt,
   };
 }
 
@@ -1313,5 +1325,6 @@ function fromBackendCriteria(backendCriteria: any): CohortCriteria {
     demographics: backendCriteria.demographics || {},
     exit_criteria: backendCriteria.exit_criteria,
     initial_event_criterion_id: backendCriteria.initial_event_criterion_id,
+    llm_prompt: backendCriteria.llm_prompt,
   };
 }

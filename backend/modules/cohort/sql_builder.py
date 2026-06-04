@@ -134,8 +134,16 @@ def build_cohort_sql(
     demo = criteria.get("demographics")
     demo_cte = None
     if demo:
+        # If an age constraint wants age-at-index, compute the per-person cohort
+        # index date from the inclusion criteria first, then evaluate age on it.
+        index_date_cte = None
+        _age = demo.get("age") or {}
+        if _age.get("at") == "index" and inc_cte:
+            index_date_cte = _build_index_date_cte(
+                criteria, criterion_cte_map, ctes, cte_names, next_cte_name
+            )
         demo_cte = _build_demographics_cte(
-            demo, omop_schema, ctes, cte_names, next_cte_name
+            demo, omop_schema, ctes, cte_names, next_cte_name, index_date_cte=index_date_cte
         )
 
     # --- Assemble final query ---
@@ -1019,14 +1027,62 @@ def _build_criterion_cte(
     return cte_name
 
 
+def _collect_criterion_ids(group: dict) -> list[str]:
+    """All criterion IDs in a group, recursing into sub-groups."""
+    ids = [c.get("id") for c in (group.get("criteria") or []) if c.get("id")]
+    for sub in (group.get("groups") or []):
+        ids += _collect_criterion_ids(sub)
+    return ids
+
+
+def _build_index_date_cte(
+    criteria: dict,
+    criterion_cte_map: dict,
+    ctes: list[str],
+    cte_names: list[str],
+    next_cte_name,
+) -> str | None:
+    """Per-person cohort index date = date of the designated initial event, or the
+    earliest qualifying inclusion event (MIN of the inclusion criteria event_dates).
+    Returns the CTE name, or None when no usable inclusion criterion CTE exists.
+    Each criterion CTE exposes (person_id, event_date) — see _build_criterion_cte."""
+    initial_event_id = criteria.get("initial_event_criterion_id")
+    init_cte = criterion_cte_map.get(initial_event_id) if initial_event_id else None
+    cte_name = next_cte_name("index_dates")
+    if init_cte:
+        body = f"  SELECT person_id, event_date AS index_date FROM {init_cte}"
+    else:
+        inc_ids = _collect_criterion_ids(criteria.get("inclusion") or {})
+        parts = [criterion_cte_map[uid] for uid in inc_ids if uid in criterion_cte_map]
+        if not parts:
+            return None
+        union = "\n    UNION ALL\n".join(
+            f"    SELECT person_id, event_date FROM {p}" for p in parts
+        )
+        body = (
+            f"  SELECT person_id, MIN(event_date) AS index_date FROM (\n"
+            f"{union}\n"
+            f"  ) _events GROUP BY person_id"
+        )
+    ctes.append(f"{cte_name} AS (\n{body}\n)")
+    cte_names.append(cte_name)
+    return cte_name
+
+
 def _build_demographics_cte(
     demo: dict,
     omop_schema: str,
     ctes: list[str],
     cte_names: list[str],
     next_cte_name,
+    index_date_cte: str | None = None,
 ) -> str:
-    """Build a CTE for demographic constraints (age, gender, race)."""
+    """Build a CTE for demographic constraints (age, gender, race).
+
+    When an age constraint sets `at_index` and `index_date_cte` is provided, age is
+    evaluated at the cohort index date (age at the event) instead of the current
+    date — the OHDSI default. Otherwise it falls back to current age.
+    """
     person_table = f"{omop_schema.t('person')}"
     wheres: list[str] = []
 
@@ -1048,13 +1104,17 @@ def _build_demographics_cte(
         elist = ", ".join(str(int(e)) for e in ethnicity)
         wheres.append(f"p.ethnicity_concept_id IN ({elist})")
 
-    # Age
+    # Age — at the cohort index event (preferred) or at the current date.
+    join_index = False
     age = demo.get("age")
     if age:
         age_min = age.get("min")
         age_max = age.get("max")
-        # Calculate age based on year_of_birth vs current date
-        age_expr = "EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth"
+        if age.get("at") == "index" and index_date_cte:
+            age_expr = "EXTRACT(YEAR FROM idx.index_date) - p.year_of_birth"
+            join_index = True
+        else:
+            age_expr = "EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth"
         if age_min is not None:
             wheres.append(f"({age_expr}) >= {int(age_min)}")
         if age_max is not None:
@@ -1065,10 +1125,13 @@ def _build_demographics_cte(
 
     where_clause = " AND ".join(wheres)
     cte_name = next_cte_name("demo")
+    join_sql = (
+        f"\n  JOIN {index_date_cte} idx ON idx.person_id = p.person_id" if join_index else ""
+    )
     cte_sql = (
         f"{cte_name} AS (\n"
         f"  SELECT p.person_id\n"
-        f"  FROM {person_table} p\n"
+        f"  FROM {person_table} p{join_sql}\n"
         f"  WHERE {where_clause}\n"
         f")"
     )

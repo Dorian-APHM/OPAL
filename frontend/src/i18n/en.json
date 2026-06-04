@@ -201,6 +201,9 @@
     "no_cache": "No cache built yet. Build the cache to speed up source value searches."
   },
   "cohort": {
+    "age_at_index": "at index",
+    "age_current": "current age",
+    "age_at_hint": "Age evaluated at cohort entry (first qualifying event) or today",
     "title": "Cohort Builder",
     "domains": "Domains",
     "concept_search": "Concept Search (OMOP)",

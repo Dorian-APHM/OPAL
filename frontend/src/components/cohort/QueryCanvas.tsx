@@ -103,7 +103,7 @@ export default function QueryCanvas({
               max={120}
               placeholder="Min"
               value={demographics.age?.min}
-              onChange={v => onUpdateDemographics({ ...demographics, age: { ...demographics.age, min: v ?? undefined } })}
+              onChange={v => onUpdateDemographics({ ...demographics, age: { ...demographics.age, min: v ?? undefined, at: demographics.age?.at ?? 'index' } })}
               className="!w-[60px]"
             />
             <span className="text-xs text-text-muted">-</span>
@@ -112,9 +112,21 @@ export default function QueryCanvas({
               max={120}
               placeholder="Max"
               value={demographics.age?.max}
-              onChange={v => onUpdateDemographics({ ...demographics, age: { ...demographics.age, max: v ?? undefined } })}
+              onChange={v => onUpdateDemographics({ ...demographics, age: { ...demographics.age, max: v ?? undefined, at: demographics.age?.at ?? 'index' } })}
               className="!w-[60px]"
             />
+            {(demographics.age?.min != null || demographics.age?.max != null) && (
+              <button
+                type="button"
+                onClick={() => onUpdateDemographics({ ...demographics, age: { ...demographics.age, at: (demographics.age?.at ?? 'index') === 'index' ? 'current' : 'index' } })}
+                title={t('cohort.age_at_hint', "Âge évalué à l'entrée dans la cohorte (1er événement qualifiant) ou à aujourd'hui")}
+                className="text-[11px] px-1.5 py-0.5 rounded border border-glass-border text-text-muted hover:border-emerald-accent/40 whitespace-nowrap"
+              >
+                {(demographics.age?.at ?? 'index') === 'index'
+                  ? t('cohort.age_at_index', "à l'index")
+                  : t('cohort.age_current', 'âge actuel')}
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-1">
             <span className="text-xs text-text-muted">{t('cohort.gender', 'Gender')}:</span>
