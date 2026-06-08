@@ -22,7 +22,7 @@ import extract
 import index_builder
 from embed_client import EmbeddingClient
 from llm import LLMClient, embedded_client
-from retrieve import Retriever, expand_label
+from retrieve import Retriever, expand_label, expand_drug_terms
 
 # Shared state
 _state: dict = {"embed": None, "retrievers": {}}
@@ -119,11 +119,20 @@ def draft(req: DraftRequest):
             crit["retrieval_unavailable"] = True
             continue
         domain = crit.get("domain")
-        expansion = expand_label(label, client)
-        crit["expansion"] = expansion
-        # Search with both the raw label and the expansion; the retriever keeps the
-        # best score per concept (raw avoids expansion drift, expansion covers abbrevs).
-        groups = retriever.search_concept_set([label, expansion], domain=domain)
+        if domain == "Drug":
+            # A drug term (molecule, brand, or therapeutic class) -> representative
+            # molecules. SapBERT matches molecule names well; the ATC grouping then
+            # returns the whole therapeutic family ("anti-inflammatoire" -> the AINS
+            # across M01A*). Each term is a separate query item (max score per concept).
+            molecules = expand_drug_terms(label, client)
+            crit["expansion"] = ", ".join(molecules)
+            queries = [label, *molecules]
+        else:
+            expansion = expand_label(label, client)
+            crit["expansion"] = expansion
+            # raw avoids expansion drift, expansion covers abbreviations/synonyms
+            queries = [label, expansion]
+        groups = retriever.search_concept_set(queries, domain=domain)
         crit["concept_sets"] = groups
         crit["no_match"] = len(groups) == 0  # UI shows a warning card when true
 

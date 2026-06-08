@@ -6,7 +6,12 @@ Pipeline per criterion label:
   2. bi-encoder (e5) similarity over the CDM index
   3. domain filter + concept-set grouping:
        - Condition : group by CIM10 3-char prefix (E11 + all E11x present in CDM)
-       - Drug      : group by ATC (top-1 ATC = e.g. all metformin source_values)
+       - Drug      : group by ATC, returning the therapeutic family as SEVERAL
+                     groups within a score gap (like Condition) — not just the best
+                     one. Class queries ("anti-inflammatoire") work via the LLM
+                     expansion, which turns them into representative molecules
+                     (ibuprofène, kétoprofène…) that SapBERT matches well; the ATC
+                     grouping then rolls them up into the family (all M01A*).
        - Procedure / Measurement : singleton per source_value
   Returns the FULL concept-set (all matching codes), never a single top-1.
 
@@ -65,6 +70,61 @@ def expand_label(label: str, llm: LLMClient | None = None) -> str:
     return txt or label
 
 
+# Drug terms are resolved to representative molecules (DCI): SapBERT matches molecule
+# NAMES well (its strength), whereas it fails on therapeutic-class labels. A class
+# term thus becomes a handful of molecules whose products the ATC grouping rolls up
+# into the full family. The LLM reliably knows class -> molecules (far more than ATC
+# codes). Each returned molecule is fed to the retriever as a separate query item.
+DRUG_EXPAND_SYSTEM = """Tu es pharmacologue clinicien. On te donne un terme de prescription : une molécule (DCI), un nom commercial, ou une classe thérapeutique. Tu réponds UNIQUEMENT par une liste de DCI (noms de molécules) en français, séparées par des virgules, sur UNE seule ligne.
+
+RÈGLES STRICTES :
+- Classe thérapeutique -> 6 à 12 DCI les plus représentatives de la classe.
+- Molécule (DCI) -> la molécule elle-même (et ses synonymes DCI éventuels).
+- Nom commercial -> la/les DCI correspondantes.
+- UNIQUEMENT des noms de molécules (DCI) : jamais de nom de classe, jamais de phrase, pas de dosage ni de forme.
+- Pas de caractère non latin.
+
+Exemples :
+Terme: anti-inflammatoire
+Réponse: ibuprofène, kétoprofène, diclofénac, naproxène, célécoxib, indométacine, piroxicam, acide méfénamique
+Terme: antibiotique
+Réponse: amoxicilline, ceftriaxone, ciprofloxacine, azithromycine, gentamicine, vancomycine, métronidazole, pipéracilline
+Terme: antidiabétique oral
+Réponse: metformine, gliclazide, glimépiride, sitagliptine, répaglinide, empagliflozine, dapagliflozine
+Terme: anticoagulant
+Réponse: énoxaparine, héparine, warfarine, fluindione, apixaban, rivaroxaban, dabigatran
+Terme: metformine
+Réponse: metformine
+Terme: doliprane
+Réponse: paracétamol"""
+
+
+def expand_drug_terms(label: str, llm: LLMClient | None = None, max_terms: int = 12) -> list[str]:
+    """Drug term (molecule / brand / therapeutic class) -> representative DCI list.
+
+    Lets a class query resolve to molecules SapBERT can match; the ATC grouping then
+    returns the whole family. Falls back to [label] if the LLM is unavailable/empty.
+    """
+    client = llm or embedded_client()
+    try:
+        txt = client.complete(DRUG_EXPAND_SYSTEM, f"Terme: {label}\nRéponse:",
+                              max_tokens=80, timeout=60).strip().split("\n")[0].strip()
+    except Exception:
+        return [label]
+    if txt.lower().startswith("réponse:"):
+        txt = txt[8:].strip()
+    parts = [p.strip() for p in txt.replace(";", ",").split(",")]
+    seen, out = set(), []
+    for p in parts:
+        if len(p) < 3:
+            continue
+        k = p.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(p)
+    return out[:max_terms] or [label]
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Grouping helpers
 
@@ -82,11 +142,20 @@ class Retriever:
     # gaps and min_top_score are looser than the original e5 values. First pass —
     # refine against more queries if precision/recall needs it.
     DOMAIN_GAP = {
-        "Drug":        0.0,    # top-1 ATC only
         "Condition":   0.07,
         "Procedure":   0.06,
         "Measurement": 0.06,
     }
+
+    # Drug uses an ABSOLUTE score floor instead of a relative gap. A drug query is a
+    # GROUPING (the family, not one code), so we keep EVERY ATC group whose best
+    # member clears this floor. A relative gap fails here: with cleaned molecule
+    # labels (dose/form stripped) a good hit scores ~0.73-1.0, so one exact molecule
+    # match (1.0) would raise a relative bar and drop the rest of the family; mean-
+    # while subword look-alikes (metformine~methadone ~0.66) need a hard cutoff. The
+    # molecule expansion (service.py) sends each molecule as its own query item, so a
+    # group is kept iff some molecule matches its products well. Calibratable.
+    DRUG_MIN_SCORE = 0.70
 
     def __init__(self, cdm_name: str, client: EmbeddingClient, conn=None):
         self.cdm_name = cdm_name
@@ -102,6 +171,11 @@ class Retriever:
             k = self._group_key_for(i)
             if k is not None:
                 self.groups[k].append(i)
+
+        # ATC code -> class name, to title Drug groups with their class (e.g. B01AA ->
+        # "VITAMIN K ANTAGONISTS") instead of a member's product label. Display only;
+        # empty/missing falls back to the representative member label.
+        self.atc_labels = index_builder.load_atc_labels(cdm_name)
 
     def _group_key_for(self, idx: int) -> tuple[str, str] | None:
         m = self.meta[idx]
@@ -137,9 +211,15 @@ class Retriever:
             return []
 
         max_score = float(sims[top_idx[0]])
-        if max_score < min_top_score:
-            return []
-        threshold = max_score - self.DOMAIN_GAP.get(domain, 0.010)
+        if domain == "Drug":
+            # Absolute floor: keep the whole therapeutic family, drop subword noise.
+            threshold = self.DRUG_MIN_SCORE
+            if max_score < threshold:
+                return []
+        else:
+            if max_score < min_top_score:
+                return []
+            threshold = max_score - self.DOMAIN_GAP.get(domain, 0.010)
 
         seen_keys: set[tuple[str, str]] = set()
         seen_singletons: set[int] = set()
@@ -169,9 +249,15 @@ class Retriever:
                     "source_value": self.meta[i]["source_value"],
                     "label": self.meta[i]["label"],
                 } for i in idxs]
+                # Title Drug groups with their ATC class name when known; keep the
+                # representative member label otherwise. Scoped to Drug so a 3-char
+                # CIM10 prefix can't collide with a homonymous 3-char ATC code.
+                rep_label = m["label"]
+                if key[0] == "Drug":
+                    rep_label = self.atc_labels.get(key[1]) or m["label"]
                 results.append({
                     "domain": m["domain"], "kind": "group",
-                    "group_key": key[1], "rep_label": m["label"],
+                    "group_key": key[1], "rep_label": rep_label,
                     "score": score, "n_members": len(members), "members": members,
                 })
         return results
@@ -192,6 +278,9 @@ TESTS = [
     ("glycémie à jeun", "Measurement"),
     ("radiographie du thorax", "Procedure"),
     ("doliprane", "Drug"),
+    ("anti-inflammatoire", "Drug"),       # class query -> AINS family (M01A*)
+    ("antibiotique", "Drug"),             # class query -> J01 family
+    ("antidiabétique oral", "Drug"),      # class query -> A10B family
 ]
 
 
@@ -203,8 +292,13 @@ def main() -> None:
     r = Retriever(cdm, client)
     print(f"Index {cdm}: {len(r.meta)} entries, domains={r.domains}\n")
     for label, dom in TESTS:
-        exp = expand_label(label)
-        groups = r.search_concept_set(exp, domain=dom)
+        if dom == "Drug":
+            mols = expand_drug_terms(label)
+            queries, exp = [label, *mols], ", ".join(mols)
+        else:
+            exp = expand_label(label)
+            queries = [label, exp]
+        groups = r.search_concept_set(queries, domain=dom)
         total = sum(g["n_members"] for g in groups)
         print(f"\n{'='*90}\n  '{label}' [{dom}]  → {len(groups)} groupe(s), {total} code(s)")
         print(f"  expansion: {exp}\n{'='*90}")

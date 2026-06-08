@@ -251,6 +251,16 @@ def populate_all_domains(
                             "SapBERT build failed for domain %s / CDM %s", domain_name, cdm_name
                         )
 
+                # Harvest ATC code->class-name (display only) off the Drug cache, so the
+                # cohort-LLM RAG can title drug groups with their ATC class instead of a
+                # member's product label. Isolated, never fatal to the cache.
+                if domain_name == "Drug":
+                    try:
+                        from modules.concept.atc_labels import populate_atc_labels
+                        populate_atc_labels(cdm_name, conn, omop_schema)
+                    except Exception:
+                        logger.exception("ATC label harvest failed for CDM %s", cdm_name)
+
             except Exception as e:
                 logger.exception("Failed to cache domain %s for CDM %s", domain_name, cdm_name)
                 # Reset connection state after error (e.g. cancel)

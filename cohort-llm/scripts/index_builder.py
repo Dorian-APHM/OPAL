@@ -38,6 +38,40 @@ DOMAINS = ["Condition", "Procedure", "Drug", "Measurement"]
 
 _PUNCT_ONLY = re.compile(r"^[\W_]+$")
 
+# ── Drug label cleaning ────────────────────────────────────────────────
+# CDM drug labels are "MOLECULE DOSE FORME (MARQUE)" — the dose/form noise DILUTES
+# the molecule in SapBERT's embedding so much that even an exact INN scores ~0.44
+# ("METFORMINE 500 MG CPR (GLUCOPHAGE)" vs "metformine" = 0.44, vs cleaned = 0.62+).
+# We strip dose/units/galenic-form but KEEP molecule AND brand together (both are
+# searched: "metformine" and "glucophage"). Only the EMBEDDED text is cleaned; the
+# original label is kept for display.
+_DIGIT_TOKEN = re.compile(r"\S*\d\S*")                       # 500MG, 1G, 100MG/4ML, B12…
+_UNIT_WORD = re.compile(r"\b(?:MG|G|MCG|µG|UG|UI|MUI|KUI|ML|CL|L|MMOL|MEQ|µ|%)\b", re.I)
+_FORM_WORD = re.compile(
+    r"\b(?:CP|CPR|COMPRIMES?|GELULES?|G[EÉ]LULES?|GEL|CAPSULES?|SACHETS?|SUPPOS?|"
+    r"SUPPOSITOIRES?|INJ(?:ECTABLE)?|IV|IM|SC|PERF|SOL(?:UTION)?|SUSP(?:ENSION)?|"
+    r"BUV(?:ABLE)?|SIROP|PDR|POUDRE|POMMADE|CR[EÈ]ME|COLLYRE|PATCH|DISP(?:ERSIBLE)?|"
+    r"L\.?P|LM|EFF(?:ERVESCENT)?|ORO(?:DISP)?|FLACON|FL|AMP(?:OULE)?|STYLO|DOSE|"
+    r"TRANSD(?:ERMIQUE)?|INHAL?|NEBUL|GTT|GOUTTES?|POCHE|SERINGUE|SRG|TUBE|P[AÂ]TE|"
+    r"EMULSION|EMPL[AÂ]TRE)\b",
+    re.I,
+)
+
+
+def clean_drug_label(label: str) -> str:
+    """Strip dose/units/galenic-form from a drug label, keep molecule + brand.
+
+    Falls back to the lowercased original if cleaning would empty the string.
+    """
+    s = re.sub(r"[()]", " ", label)      # drop parens, keep their content
+    s = _DIGIT_TOKEN.sub(" ", s)         # drop dosage tokens (anything with a digit)
+    s = _UNIT_WORD.sub(" ", s)           # drop leftover standalone units (MG, G…)
+    s = _FORM_WORD.sub(" ", s)           # drop galenic forms / routes
+    s = re.sub(r"[/.,;:+]", " ", s)
+    s = re.sub(r"\b\w\b", " ", s)        # drop single-char leftovers (A, C, V…)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s or label.strip().lower()
+
 
 def _resolve_db_url() -> str:
     url = DB_URL
@@ -45,6 +79,29 @@ def _resolve_db_url() -> str:
         pw = os.environ.get("POSTGRES_PASSWORD", "")
         url = url.format(pw=pw)
     return url
+
+
+def load_atc_labels(cdm_name: str, conn=None) -> dict[str, str]:
+    """Return {ATC code -> class name} for a CDM (app DB `atc_labels`), for display.
+
+    Used by the retriever to title Drug concept-set groups with their ATC class name
+    instead of a member's product label. Resilient: returns {} if the table is absent/
+    empty (the retriever then falls back to the representative member label).
+    """
+    own = conn is None
+    if own:
+        conn = psycopg2.connect(_resolve_db_url())
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT atc_code, label FROM atc_labels WHERE cdm_name = %s", (cdm_name,)
+            )
+            return {(c or "").strip().upper(): (n or "").strip() for c, n in cur.fetchall()}
+    except Exception:
+        return {}
+    finally:
+        if own:
+            conn.close()
 
 
 def fetch_cache_rows(cdm_name: str, conn) -> list[dict]:
@@ -66,11 +123,15 @@ def fetch_cache_rows(cdm_name: str, conn) -> list[dict]:
             label = (r["source_name"] or "").strip()
             if _PUNCT_ONLY.match(label):       # drop punctuation-only labels
                 continue
+            # Drugs: embed a cleaned label (dose/form stripped) so molecule/brand
+            # queries aren't diluted. Other domains embed the label as-is.
+            embed_text = clean_drug_label(label) if r["domain"] == "Drug" else label
             rows.append({
                 "domain": r["domain"],
                 "source_value": (r["source_value"] or "").strip(),
                 "source_atc": (r["source_atc"] or "").strip(),
                 "label": label,
+                "embed_text": embed_text,
                 "n_records": int(r["n_records"] or 0),
             })
     return rows
@@ -89,10 +150,11 @@ def build_index_for_cdm(cdm_name: str, client: EmbeddingClient, conn) -> tuple[n
           + ", ".join(f"{d}={n}" for d, n in sorted(by_domain.items())))
 
     # SapBERT encodes raw entity names (no e5-style "passage:"/"query:" prefix);
-    # the runner returns L2-normalized vectors, so cosine == dot product.
-    labels = [r["label"] for r in rows]
+    # the runner returns L2-normalized vectors, so cosine == dot product. Drug rows
+    # carry a cleaned embed_text (dose/form stripped); others embed the label.
+    texts = [r.get("embed_text") or r["label"] for r in rows]
     t0 = time.time()
-    emb = client.encode(labels).astype("float32")
+    emb = client.encode(texts).astype("float32")
     print(f"[{cdm_name}] embedded {len(rows)} in {time.time()-t0:.1f}s, {emb.nbytes/1e6:.0f} MB")
 
     out = INDEX_CACHE / cdm_name

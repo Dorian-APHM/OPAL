@@ -420,6 +420,28 @@ class SourceValueCache(Base):
     mapped_standard_concept = Column(String(1), nullable=True)
 
 
+class AtcLabel(Base):
+    """ATC code -> class name, per CDM, for DISPLAY only (cohort-LLM group titles).
+
+    A Drug concept-set group is keyed by its ATC code (e.g. B01AA). Showing a random
+    member's product label as the group title is confusing ("WARFARINE…" for the whole
+    vitamin-K-antagonist class). This flat map (harvested from the CDM's own OMOP
+    `concept` ATC vocabulary, names often English) lets the retriever title each group
+    with its class name. Display only — NOT used for embedding or matching, so the
+    language of the label has no impact on retrieval quality.
+    """
+    __tablename__ = "atc_labels"
+    __table_args__ = (
+        UniqueConstraint("cdm_name", "atc_code", name="uq_atc_label_cdm_code"),
+        Index("ix_atc_label_cdm", "cdm_name"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cdm_name = Column(String(255), nullable=False)
+    atc_code = Column(String(16), nullable=False)
+    label = Column(String(512), nullable=False)
+
+
 class SourceValueCacheStatus(Base):
     """Tracks cache population status per CDM/domain."""
     __tablename__ = "source_value_cache_status"
