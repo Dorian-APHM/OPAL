@@ -774,6 +774,9 @@ export interface MappingDecisionEntry {
   user: string;
   reason: string;
   created_at: string | null;
+  cdm_concepts?: number;        // distinct non-zero concept_ids for this code in the CDM (0 = unmapped)
+  cdm_concept_ids?: number[];   // the actual distinct CDM concept_ids (to compare with the OPAL target)
+  synced?: boolean;             // marked as "already in the CDM with the same target" (hideable)
 }
 
 // ──── Mapping apply preflight ────

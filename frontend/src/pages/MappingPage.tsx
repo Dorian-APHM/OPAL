@@ -8,7 +8,7 @@ import {
 import type { TabItem, Column } from '../components/ui';
 import {
   BarChart3, Search, Lightbulb, History, Download, Check, X, Edit,
-  Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link, CheckCircle2, Database,
+  Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link, CheckCircle2, Database, RotateCcw,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -1553,6 +1553,8 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const [filterUser, setFilterUser] = useSessionState('mapping:history:filterUser', '');
   const [sortKey, setSortKey] = useSessionState<string | null>('mapping:history:sortKey', null);
   const [sortDir, setSortDir] = useSessionState<'asc' | 'desc'>('mapping:history:sortDir', 'asc');
+  const [hideSynced, setHideSynced] = useSessionState('mapping:history:hideSynced', false);
+  const [syncing, setSyncing] = useState(false);
   const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
@@ -1568,13 +1570,35 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
 
   const load = useCallback(() => {
     setLoading(true);
-    mappingApi.history(cdmName, filterDomain || undefined, filterAction || undefined, page, undefined, filterUser || undefined, sortKey, sortDir)
+    mappingApi.history(cdmName, filterDomain || undefined, filterAction || undefined, page, undefined, filterUser || undefined, sortKey, sortDir, hideSynced)
       .then(r => { setItems(r.data.items); setTotal(r.data.total); if (r.data.users) setAvailableUsers(r.data.users); })
       .catch(() => { setItems([]); setTotal(0); })
       .finally(() => setLoading(false));
-  }, [cdmName, filterDomain, filterAction, filterUser, page, sortKey, sortDir]);
+  }, [cdmName, filterDomain, filterAction, filterUser, page, sortKey, sortDir, hideSynced]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
+
+  // Mark / unmark "already in the CDM with the same target" → hideable from history
+  const handleMarkSynced = async () => {
+    setSyncing(true);
+    try {
+      const r = await mappingApi.markSynced(cdmName, filterDomain || undefined);
+      toast.success(t('mapping.synced_marked', { n: r.data.marked, defaultValue: '{{n}} mapping(s) marked as synced' }));
+      load();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || t('common.error', 'An error occurred'));
+    } finally {
+      setSyncing(false);
+    }
+  };
+  const handleUnsyncRow = async (row: GroupedRow) => {
+    try {
+      await mappingApi.unmarkSynced(cdmName, row.domain, [row.source_value]);
+      load();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || t('common.error', 'An error occurred'));
+    }
+  };
 
   // Withdraw confirm state
   const [withdrawConfirm, setWithdrawConfirm] = useState<{ open: boolean; id: number }>({ open: false, id: 0 });
@@ -1701,6 +1725,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
     users: string[];
     created_at: string | null;
     status: 'consensus' | 'conflict' | 'single';
+    cdm_concepts: number;
+    cdm_concept_ids: number[];
+    synced: boolean;
   }
 
   const groupedRows = useMemo(() => {
@@ -1722,6 +1749,8 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
         // Append reason
         if (item.reason && !existing.reason.includes(item.reason))
           existing.reason = existing.reason ? `${existing.reason}; ${item.reason}` : item.reason;
+        // Group is synced only if every decision in it is synced
+        existing.synced = existing.synced && (item.synced ?? false);
       } else {
         groupMap.set(gk, {
           key: gk,
@@ -1739,6 +1768,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
           users: [item.user],
           created_at: item.created_at,
           status: 'single',
+          cdm_concepts: item.cdm_concepts ?? 0,
+          cdm_concept_ids: item.cdm_concept_ids ?? [],
+          synced: item.synced ?? false,
         });
       }
     }
@@ -1800,15 +1832,30 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   }, [items, sortKey, sortDir]);
 
   const columns: Column<GroupedRow>[] = [
-    { title: '', key: 'status', width: 45,
+    { title: '', key: 'status', width: 64,
       render: (_: any, r: GroupedRow) => {
-        if (r.status === 'single') return null;
-        const hasConsensus = r.users.length > 1;
+        const hasConsensus = r.status !== 'single' && r.users.length > 1;
         const hasConflict = r.status === 'conflict';
+        const cdmIds = r.cdm_concept_ids ?? [];
+        const cdmN = cdmIds.length;
+        const sameAsCdm = cdmN === 1 && r.target_concept_id != null && cdmIds[0] === r.target_concept_id;
+        // CDM-state badge only when not already marked synced
+        let cdmBadge = null;
+        if (!r.synced) {
+          if (cdmN >= 2)
+            cdmBadge = <Tooltip placement="right" title={`${t('mapping.warn_multiple_concepts_cdm', 'Multiple concepts (CDM)')} — ${cdmN}`}><AlertTriangle className="h-4 w-4 text-red-400" /></Tooltip>;
+          else if (sameAsCdm)
+            cdmBadge = <Tooltip placement="right" title={t('mapping.syncable', 'Already in the CDM (same target) — can be marked synced')}><Database className="h-4 w-4 text-text-dim" /></Tooltip>;
+          else if (cdmN === 1)
+            cdmBadge = <Tooltip placement="right" title={`${t('mapping.warn_different_target_cdm', 'Already mapped in the CDM to a DIFFERENT target')} (CDM: #${cdmIds[0]})`}><AlertTriangle className="h-4 w-4 text-orange-400" /></Tooltip>;
+        }
+        if (!hasConsensus && !hasConflict && !r.synced && !cdmBadge) return null;
         return (
           <div className="flex items-center gap-0.5">
-            {hasConsensus && <Tooltip title={`Consensus — ${r.users.length} users`}><CheckCircle2 className="h-4 w-4 text-emerald-400" /></Tooltip>}
-            {hasConflict && <Tooltip title="Conflit — cible différente pour ce terme"><AlertTriangle className="h-4 w-4 text-amber-400" /></Tooltip>}
+            {hasConsensus && <Tooltip placement="right" title={`Consensus — ${r.users.length} users`}><CheckCircle2 className="h-4 w-4 text-emerald-400" /></Tooltip>}
+            {hasConflict && <Tooltip placement="right" title={t('mapping.warn_multiple_targets_opal', 'Multiple targets (OPAL)')}><AlertTriangle className="h-4 w-4 text-amber-400" /></Tooltip>}
+            {r.synced && <Tooltip placement="right" title={t('mapping.synced_badge', 'Synced — already in the CDM with the same target')}><Database className="h-4 w-4 text-teal-400" /></Tooltip>}
+            {cdmBadge}
           </div>
         );
       } },
@@ -1843,7 +1890,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
       ) },
     { title: t('mapping.date', 'Date'), dataIndex: 'created_at', key: 'date', width: 110, sorter: true,
       render: (v: string) => v?.substring(0, 16).replace('T', ' ') },
-    { title: '', key: 'actions', width: 110,
+    { title: '', key: 'actions', width: 140,
       render: (_: any, r: GroupedRow) => {
         if (r.action === 'rolled_back') return null;
         const isAdmin = roles.includes('admin');
@@ -1853,6 +1900,13 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
         const canRollback = alreadyMine || isAdmin;
         return (
           <div className="flex items-center gap-1">
+            {r.synced && canWriteCdm && (
+              <Tooltip title={t('mapping.unsync', 'Unmark synced')}>
+                <Button size="small" variant="link" onClick={() => handleUnsyncRow(r)}>
+                  <RotateCcw className="h-4 w-4 text-teal-400" />
+                </Button>
+              </Tooltip>
+            )}
             {canApprove && (
               <Tooltip title="Approve this mapping for me">
                 <Button size="small" variant="link" onClick={() => handleApproveFromHistory(r)}>
@@ -1929,6 +1983,19 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             {t('mapping.export_history', 'Export CSV')}
           </Button>
           <span className="text-text-muted text-sm">{total} {t('mapping.decisions', 'decisions')}</span>
+
+          <span className="border-l border-glass-border pl-3 flex items-center gap-2">
+            <Checkbox checked={hideSynced} onChange={v => { setHideSynced(v); setPage(1); }}>
+              <span className="text-xs">{t('mapping.hide_synced', 'Hide synced')}</span>
+            </Checkbox>
+            {canWriteCdm && (
+              <Tooltip title={t('mapping.mark_synced_hint', 'Mark decisions already in the CDM with the same target as synced')}>
+                <Button size="small" icon={<Database className="h-4 w-4" />} loading={syncing} onClick={handleMarkSynced}>
+                  {t('mapping.mark_synced', 'Mark synced')}
+                </Button>
+              </Tooltip>
+            )}
+          </span>
 
           <span className="border-l border-glass-border pl-3 flex items-center gap-2">
             <span className="text-xs text-text-bright">{t('mapping.apply_to', 'Apply to')}:</span>

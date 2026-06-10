@@ -131,6 +131,53 @@ def _annotate_pending_decisions(db: Session, cdm_name: str, domain: str, items: 
             r["pending_at"] = d.created_at.isoformat() if d.created_at else None
 
 
+def _cdm_concept_ids_by_sv(db: Session, cdm_name: str, pairs: set[tuple[str, str]]) -> dict[tuple[str, str], list[int]]:
+    """Return {(domain, source_value): [distinct non-zero CDM concept_ids]} from the
+    pre-computed SourceValueCache (app DB — no live CDM query)."""
+    if not pairs:
+        return {}
+    from db.models import SourceValueCache
+
+    svs = list({sv for _d, sv in pairs})
+    domains = list({d for d, _sv in pairs})
+    rows = (
+        db.query(SourceValueCache.domain, SourceValueCache.source_value, SourceValueCache.mapped_concept_id)
+        .filter(
+            SourceValueCache.cdm_name == cdm_name,
+            SourceValueCache.domain.in_(domains),
+            SourceValueCache.source_value.in_(svs),
+            SourceValueCache.mapped_concept_id.isnot(None),
+            SourceValueCache.mapped_concept_id != 0,
+        )
+        .distinct()
+        .all()
+    )
+    out: dict[tuple[str, str], set] = {}
+    for d, sv, cid in rows:
+        if (d, sv) in pairs:
+            out.setdefault((d, sv), set()).add(cid)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def _annotate_cdm_concept_counts(db: Session, cdm_name: str, items: list[dict]) -> None:
+    """Annotate each item with ``cdm_concepts`` (count) and ``cdm_concept_ids`` (list):
+    the distinct non-zero concept_ids currently mapped to its (domain, source_value)
+    in the CDM. Drives the History badges (synced / different target / 1→N) without
+    scanning the CDM on every load.
+    """
+    if not items:
+        return
+    for r in items:
+        r["cdm_concepts"] = 0
+        r["cdm_concept_ids"] = []
+    pairs = {(r["domain"], r["source_value"]) for r in items}
+    ids_by = _cdm_concept_ids_by_sv(db, cdm_name, pairs)
+    for r in items:
+        ids = ids_by.get((r["domain"], r["source_value"]), [])
+        r["cdm_concepts"] = len(ids)
+        r["cdm_concept_ids"] = ids
+
+
 router = APIRouter(prefix="/api/mapping", tags=["mapping"])
 
 # Background suggestion tasks — survive page navigation
@@ -200,6 +247,12 @@ class ApplyMappingRequest(BaseModel):
     domain: str = Field(..., min_length=1, max_length=100)
     write_to_cdm: bool = False
     target_cdms: list[str] = Field(default_factory=list)  # CDMs to apply to. Defaults to [cdm_name].
+
+
+class SyncRequest(BaseModel):
+    cdm_name: str = Field(..., min_length=1, max_length=255)
+    domain: str | None = Field(default=None, max_length=100)
+    source_values: list[str] | None = Field(default=None, max_length=5000)
 
 
 # ──── Helpers ────
@@ -1174,6 +1227,7 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
     batch_id = uuid.uuid4().hex
     per_cdm_results = {}
+    synced_svs: set[str] = set()  # source values pushed into the source CDM → mark synced
 
     for tcdm in target_cdms:
         try:
@@ -1225,6 +1279,9 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
                         )
                         total_updated += cur.rowcount
                         pushed += 1
+                        # Pushed into the source CDM → now in sync with it
+                        if tcdm == req.cdm_name:
+                            synced_svs.add(d.source_value)
                     conn.commit()
                 db.commit()
                 per_cdm_results[tcdm] = {
@@ -1245,6 +1302,15 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
         except Exception as e:
             logger.exception("Cannot connect to CDM %s for apply", tcdm)
             per_cdm_results[tcdm] = {"error": str(e)}
+
+    # Auto-mark pushed decisions as synced (now in the source CDM with the same target)
+    if synced_svs:
+        db.query(MappingDecision).filter(
+            MappingDecision.cdm_name == req.cdm_name,
+            MappingDecision.domain == req.domain,
+            MappingDecision.source_value.in_(list(synced_svs)),
+            MappingDecision.action.in_(["approved", "modified"]),
+        ).update({MappingDecision.synced: 1}, synchronize_session=False)
 
     notify(
         db, username, "mapping_applied",
@@ -1625,6 +1691,7 @@ def mapping_history(
     page_size: int = Query(default=50, ge=1, le=200),
     sort_by: str | None = Query(default=None),
     sort_dir: str = Query(default="asc"),
+    hide_synced: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     """Paginated mapping decision history with filters (shared across all users)."""
@@ -1636,6 +1703,8 @@ def mapping_history(
         query = query.filter(MappingDecision.action == action)
     if user_filter:
         query = query.filter(MappingDecision.user == user_filter)
+    if hide_synced:
+        query = query.filter((MappingDecision.synced == 0) | (MappingDecision.synced.is_(None)))
 
     sort_columns = {
         "domain": MappingDecision.domain,
@@ -1667,32 +1736,100 @@ def mapping_history(
         .distinct().all()
     ]
 
+    items = [
+        {
+            "id": d.id,
+            "domain": d.domain,
+            "source_value": d.source_value,
+            "source_name": d.source_name,
+            "action": d.action,
+            "target_concept_id": d.target_concept_id,
+            "target_concept_name": d.target_concept_name,
+            "target_vocabulary_id": d.target_vocabulary_id,
+            "previous_concept_id": d.previous_concept_id,
+            "suggestion_source": d.suggestion_source,
+            "confidence_score": d.confidence_score,
+            "user": d.user,
+            "reason": d.reason or "",
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "synced": bool(d.synced),
+        }
+        for d in decisions
+    ]
+    # CDM mapping state per (domain, source_value) → synced / different-target / 1→N badges
+    _annotate_cdm_concept_counts(db, cdm_name, items)
+
     return {
         "total": total,
         "users": sorted(distinct_users),
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
-        "items": [
-            {
-                "id": d.id,
-                "domain": d.domain,
-                "source_value": d.source_value,
-                "source_name": d.source_name,
-                "action": d.action,
-                "target_concept_id": d.target_concept_id,
-                "target_concept_name": d.target_concept_name,
-                "target_vocabulary_id": d.target_vocabulary_id,
-                "previous_concept_id": d.previous_concept_id,
-                "suggestion_source": d.suggestion_source,
-                "confidence_score": d.confidence_score,
-                "user": d.user,
-                "reason": d.reason or "",
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-            }
-            for d in decisions
-        ],
+        "items": items,
     }
+
+
+def _require_data_manager(request: Request) -> str:
+    """Auth + role gate for synced marking (shared, cross-user history flag)."""
+    username = _get_username(request)
+    roles = getattr(request.state, "user", {}).get("roles", [])
+    if "admin" not in roles and "data-manager" not in roles:
+        raise HTTPException(status_code=403, detail="Réservé aux administrateurs / data-managers")
+    return username
+
+
+@router.post("/decisions/mark-synced")
+def mark_synced(req: SyncRequest, request: Request, db: Session = Depends(get_db)):
+    """Mark as 'synced' the approved/modified decisions whose target is already the
+    one (and only) concept mapped in the CDM (same concept). Reversible (unmark).
+    Candidates are detected from the SourceValueCache — no live CDM query."""
+    check_cdm_access(request, req.cdm_name)
+    _require_data_manager(request)
+
+    q = db.query(MappingDecision).filter(
+        MappingDecision.cdm_name == req.cdm_name,
+        MappingDecision.action.in_(["approved", "modified"]),
+        MappingDecision.target_concept_id.isnot(None),
+    )
+    if req.domain:
+        q = q.filter(MappingDecision.domain == req.domain)
+    if req.source_values:
+        q = q.filter(MappingDecision.source_value.in_(req.source_values))
+    decisions = q.all()
+    if not decisions:
+        return {"marked": 0}
+
+    pairs = {(d.domain, d.source_value) for d in decisions}
+    ids_by = _cdm_concept_ids_by_sv(db, req.cdm_name, pairs)
+
+    marked = 0
+    for d in decisions:
+        cids = ids_by.get((d.domain, d.source_value), [])
+        # synced only when the CDM has exactly this one concept (no 1→N, no divergence)
+        if len(cids) == 1 and cids[0] == d.target_concept_id and not d.synced:
+            d.synced = 1
+            marked += 1
+    db.commit()
+    return {"marked": marked}
+
+
+@router.post("/decisions/unmark-synced")
+def unmark_synced(req: SyncRequest, request: Request, db: Session = Depends(get_db)):
+    """Reverse a previous sync marking (cdm + optional domain / source_values)."""
+    check_cdm_access(request, req.cdm_name)
+    _require_data_manager(request)
+
+    q = db.query(MappingDecision).filter(
+        MappingDecision.cdm_name == req.cdm_name,
+        MappingDecision.synced == 1,
+    )
+    if req.domain:
+        q = q.filter(MappingDecision.domain == req.domain)
+    if req.source_values:
+        q = q.filter(MappingDecision.source_value.in_(req.source_values))
+    unmarked = q.update({MappingDecision.synced: 0}, synchronize_session=False)
+    db.commit()
+    return {"unmarked": int(unmarked or 0)}
 
 
 @router.get("/history/{cdm_name}/export")

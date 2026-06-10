@@ -426,10 +426,14 @@ export const mappingApi = {
     const qs = p.toString();
     return `/api/mapping/history/${cdmName}/export${qs ? `?${qs}` : ''}`;
   },
-  history: (cdmName: string, domain?: string, action?: string, page?: number, pageSize?: number, user?: string, sortBy?: string | null, sortDir?: 'asc' | 'desc') =>
+  history: (cdmName: string, domain?: string, action?: string, page?: number, pageSize?: number, user?: string, sortBy?: string | null, sortDir?: 'asc' | 'desc', hideSynced?: boolean) =>
     api.get<{ total: number; page: number; total_pages: number; users: string[]; items: MappingDecisionEntry[] }>(
-      `/mapping/history/${cdmName}`, { params: { domain: domain || '', action: action || '', user: user || '', page: page || 1, page_size: pageSize || 50, sort_by: sortBy || '', sort_dir: sortDir || 'asc' } }
+      `/mapping/history/${cdmName}`, { params: { domain: domain || '', action: action || '', user: user || '', page: page || 1, page_size: pageSize || 50, sort_by: sortBy || '', sort_dir: sortDir || 'asc', hide_synced: hideSynced || false } }
     ),
+  markSynced: (cdmName: string, domain?: string, sourceValues?: string[]) =>
+    api.post<{ marked: number }>('/mapping/decisions/mark-synced', { cdm_name: cdmName, domain: domain || null, source_values: sourceValues || null }),
+  unmarkSynced: (cdmName: string, domain?: string, sourceValues?: string[]) =>
+    api.post<{ unmarked: number }>('/mapping/decisions/unmark-synced', { cdm_name: cdmName, domain: domain || null, source_values: sourceValues || null }),
   rollback: (decisionId: number) =>
     api.post(`/mapping/history/${decisionId}/rollback`),
   reject: (decisionId: number) =>

@@ -133,6 +133,10 @@ class MappingDecision(Base):
     user = Column(String(255), default="system")
     reason = Column(Text, default="")
     created_at = Column(DateTime, default=_utcnow)
+    # "Already in the CDM with the same target" → hideable from history.
+    # Set automatically when the decision is pushed to the CDM, or manually
+    # via the sync action. Reversible (unsync).
+    synced = Column(Integer, default=0)
 
 
 class ReferenceCodebook(Base):

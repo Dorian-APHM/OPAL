@@ -410,6 +410,83 @@ def test_compute_mapping_warnings_flags():
     assert e11["opal_targets"] == [300, 301]
 
 
+def test_history_cdm_concepts_annotation(client):
+    """/history annotates each row with cdm_concepts (distinct non-zero CDM concepts)
+    from SourceValueCache → drives the 'already mapped' / 'multiple concepts' badges."""
+    from tests.conftest import TestSession
+    from db.models import MappingDecision, SourceValueCache
+
+    cdm = "test_cdm_annot"
+    db = TestSession()
+    try:
+        db.add_all([
+            MappingDecision(cdm_name=cdm, domain="Condition", source_value="I10", action="approved", target_concept_id=111, user="u1"),
+            MappingDecision(cdm_name=cdm, domain="Condition", source_value="E11", action="approved", target_concept_id=222, user="u1"),
+            MappingDecision(cdm_name=cdm, domain="Condition", source_value="OK1", action="approved", target_concept_id=333, user="u1"),
+            # I10 already mapped to TWO concepts in the CDM → cdm_concepts = 2 (red)
+            SourceValueCache(cdm_name=cdm, domain="Condition", source_value="I10", n_records=5, n_persons=5, mapped_concept_id=900),
+            SourceValueCache(cdm_name=cdm, domain="Condition", source_value="I10", n_records=3, n_persons=3, mapped_concept_id=901),
+            # E11 mapped to ONE concept → cdm_concepts = 1 (orange)
+            SourceValueCache(cdm_name=cdm, domain="Condition", source_value="E11", n_records=4, n_persons=4, mapped_concept_id=902),
+            # OK1 unmapped (concept_id 0) → cdm_concepts = 0 (no badge)
+            SourceValueCache(cdm_name=cdm, domain="Condition", source_value="OK1", n_records=2, n_persons=2, mapped_concept_id=0),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get(f"/api/mapping/history/{cdm}")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    by_sv = {it["source_value"]: it["cdm_concepts"] for it in items}
+    by_ids = {it["source_value"]: it["cdm_concept_ids"] for it in items}
+    assert by_sv["I10"] == 2 and by_ids["I10"] == [900, 901]
+    assert by_sv["E11"] == 1 and by_ids["E11"] == [902]
+    assert by_sv["OK1"] == 0 and by_ids["OK1"] == []
+
+
+def test_mark_and_unmark_synced(client, cdm_name):
+    """mark-synced flags only decisions whose CDM target == OPAL target (single concept).
+    hide_synced then removes them from history; unmark-synced reverts."""
+    from tests.conftest import TestSession
+    from db.models import MappingDecision, SourceValueCache
+
+    db = TestSession()
+    try:
+        db.add_all([
+            MappingDecision(cdm_name=cdm_name, domain="Condition", source_value="I10", action="approved", target_concept_id=900, user="u1"),  # CDM=900 → synced
+            MappingDecision(cdm_name=cdm_name, domain="Condition", source_value="E11", action="approved", target_concept_id=999, user="u1"),  # CDM=902 → divergent
+            MappingDecision(cdm_name=cdm_name, domain="Condition", source_value="X", action="approved", target_concept_id=900, user="u1"),    # CDM={900,901} → 1→N
+            SourceValueCache(cdm_name=cdm_name, domain="Condition", source_value="I10", n_records=1, n_persons=1, mapped_concept_id=900),
+            SourceValueCache(cdm_name=cdm_name, domain="Condition", source_value="E11", n_records=1, n_persons=1, mapped_concept_id=902),
+            SourceValueCache(cdm_name=cdm_name, domain="Condition", source_value="X", n_records=1, n_persons=1, mapped_concept_id=900),
+            SourceValueCache(cdm_name=cdm_name, domain="Condition", source_value="X", n_records=1, n_persons=1, mapped_concept_id=901),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    # Only I10 qualifies (CDM holds exactly its target).
+    resp = client.post("/api/mapping/decisions/mark-synced", json={"cdm_name": cdm_name, "domain": "Condition"})
+    assert resp.status_code == 200
+    assert resp.json()["marked"] == 1
+
+    h = client.get(f"/api/mapping/history/{cdm_name}", params={"hide_synced": "true"})
+    svs = {it["source_value"] for it in h.json()["items"]}
+    assert "I10" not in svs and "E11" in svs and "X" in svs
+
+    # I10 row carries synced=True when shown
+    h_all = client.get(f"/api/mapping/history/{cdm_name}")
+    i10 = next(it for it in h_all.json()["items"] if it["source_value"] == "I10")
+    assert i10["synced"] is True
+
+    # unmark reverts
+    u = client.post("/api/mapping/decisions/unmark-synced", json={"cdm_name": cdm_name, "domain": "Condition"})
+    assert u.json()["unmarked"] == 1
+    h2 = client.get(f"/api/mapping/history/{cdm_name}", params={"hide_synced": "true"})
+    assert "I10" in {it["source_value"] for it in h2.json()["items"]}
+
+
 # ──── Export tests ────
 
 def test_export_stcm_csv(client, cdm_name):

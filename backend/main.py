@@ -264,6 +264,13 @@ if _insp.has_table("cohorts"):
         if "shared_with_all" not in _cohort_cols:
             _conn.execute(text("ALTER TABLE cohorts ADD COLUMN shared_with_all INTEGER DEFAULT 0"))
 
+# Mapping decisions: "synced" flag (already in CDM with same target → hideable).
+if _insp.has_table("mapping_decisions"):
+    _md_cols = {c["name"] for c in _insp.get_columns("mapping_decisions")}
+    if "synced" not in _md_cols:
+        with engine.begin() as _conn:
+            _conn.execute(text("ALTER TABLE mapping_decisions ADD COLUMN synced INTEGER DEFAULT 0"))
+
 # Per-category OMOP schema overrides (nullable JSON; categories without an
 # entry fall back to omop_schema, so existing CDMs are unaffected).
 for _tbl in ("cdm_configs", "analysis_settings"):
