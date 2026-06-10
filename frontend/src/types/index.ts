@@ -344,6 +344,7 @@ export interface CohortCriteria {
 export interface ConceptSetMember {
   source_value: string;
   label: string;
+  matched?: boolean;   // true = matched the molecule by name; false = ATC sibling (expansion)
 }
 
 /** A group of matching codes (CIM10 family, ATC class, or a singleton) */
@@ -354,6 +355,7 @@ export interface ConceptSetGroup {
   rep_label: string;
   score: number;
   n_members: number;
+  n_matched?: number;  // members that matched the molecule by name (Drug "exact" mode)
   members: ConceptSetMember[];
 }
 
@@ -772,6 +774,38 @@ export interface MappingDecisionEntry {
   user: string;
   reason: string;
   created_at: string | null;
+}
+
+// ──── Mapping apply preflight ────
+
+export type MappingWarningFlag =
+  | 'multiple_targets_opal'   // ≥2 distinct targets in OPAL decisions (1→N)
+  | 'already_mapped_cdm'      // already mapped in the CDM (concept_id ≠ 0)
+  | 'multiple_concepts_cdm';  // ≥2 distinct concepts in the CDM (materialised 1→N)
+
+export interface MappingWarningItem {
+  source_value: string;
+  source_name: string;
+  flags: MappingWarningFlag[];
+  opal_targets: number[];
+  cdm_concepts: number;
+}
+
+export interface MappingApplyPreview {
+  total_decisions: number;
+  impacted_rows: number;
+  impacted_persons: number;
+  warnings: {
+    items: MappingWarningItem[];
+    counts: {
+      multiple_targets_opal: number;
+      already_mapped_cdm: number;
+      multiple_concepts_cdm: number;
+      total_flagged: number;
+    };
+  };
+  n_total_codes: number;
+  n_pushable_codes: number;
 }
 
 // ──── Concept Sets ────

@@ -1043,6 +1043,85 @@ def bulk_decision(req: BulkDecisionRequest, request: Request, db: Session = Depe
 
 # ──── 5.5 Apply Mapping ────
 
+# Preflight warning flags (apply/export). A source value carrying ANY flag is
+# excluded from the in-place push (only concept_id = 0 may be pushed) but is
+# still kept in the STCM export, where the ETL handles 1→N / cross-domain.
+WARN_MULTIPLE_TARGETS_OPAL = "multiple_targets_opal"    # ≥2 distinct consensus targets for one source value
+WARN_ALREADY_MAPPED_CDM = "already_mapped_cdm"          # source value already mapped in the CDM (concept_id ≠ 0)
+WARN_MULTIPLE_CONCEPTS_CDM = "multiple_concepts_cdm"    # source value mapped to ≥2 distinct concepts in the CDM
+
+
+def _compute_mapping_warnings(conn, full_table: str, sv_col: str, concept_col: str, decisions: list) -> dict:
+    """Preflight check before push/export.
+
+    Flags each source value that is unsafe to push in place. Returns
+    ``{"items": [...flagged only...], "counts": {...}, "flagged": set(source_values)}``.
+
+    A source value is flagged when:
+      - A (``multiple_targets_opal``): it has ≥2 distinct consensus targets (1→N in OPAL decisions);
+      - B (``already_mapped_cdm``): it is already mapped in the CDM (≥1 non-zero concept_id);
+      - C (``multiple_concepts_cdm``): it maps to ≥2 distinct concepts in the CDM (materialised 1→N).
+
+    Only codes with NO flag (i.e. currently unmapped, single consensus target) are pushable.
+    """
+    targets_by_sv: dict[str, set] = {}
+    name_by_sv: dict[str, str] = {}
+    for d in decisions:
+        targets_by_sv.setdefault(d.source_value, set()).add(d.target_concept_id)
+        if d.source_name and d.source_value not in name_by_sv:
+            name_by_sv[d.source_value] = d.source_name
+
+    source_values = list(targets_by_sv.keys())
+
+    # B / C: distinct non-zero concept_ids currently in the CDM, per source value (one query)
+    cdm_concepts: dict[str, int] = {}
+    if source_values:
+        from psycopg2.extras import DictCursor
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute(
+                f"SELECT {sv_col} AS sv, "
+                f"COUNT(DISTINCT CASE WHEN {concept_col} IS NOT NULL AND {concept_col} <> 0 "
+                f"THEN {concept_col} END) AS n_concepts "
+                f"FROM {full_table} WHERE {sv_col} = ANY(%(svs)s) "
+                f"GROUP BY {sv_col}",
+                {"svs": source_values},
+            )
+            for row in cur.fetchall():
+                cdm_concepts[row["sv"]] = int(row["n_concepts"] or 0)
+
+    items: list[dict] = []
+    flagged: set[str] = set()
+    counts = {
+        WARN_MULTIPLE_TARGETS_OPAL: 0,
+        WARN_ALREADY_MAPPED_CDM: 0,
+        WARN_MULTIPLE_CONCEPTS_CDM: 0,
+    }
+    for sv in source_values:
+        flags: list[str] = []
+        n_cdm = cdm_concepts.get(sv, 0)
+        if len(targets_by_sv[sv]) >= 2:
+            flags.append(WARN_MULTIPLE_TARGETS_OPAL)
+            counts[WARN_MULTIPLE_TARGETS_OPAL] += 1
+        if n_cdm >= 1:
+            flags.append(WARN_ALREADY_MAPPED_CDM)
+            counts[WARN_ALREADY_MAPPED_CDM] += 1
+        if n_cdm >= 2:
+            flags.append(WARN_MULTIPLE_CONCEPTS_CDM)
+            counts[WARN_MULTIPLE_CONCEPTS_CDM] += 1
+        if flags:
+            flagged.add(sv)
+            items.append({
+                "source_value": sv,
+                "source_name": name_by_sv.get(sv, ""),
+                "flags": flags,
+                "opal_targets": sorted(t for t in targets_by_sv[sv] if t is not None),
+                "cdm_concepts": n_cdm,
+            })
+    items.sort(key=lambda x: x["source_value"])
+    counts["total_flagged"] = len(flagged)
+    return {"items": items, "counts": counts, "flagged": flagged}
+
+
 @router.post("/apply")
 def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
     """
@@ -1103,8 +1182,17 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
             full_table = f"{schema.t(table)}"
             total_updated = 0
             try:
+                # Preflight: only unmapped, single-target codes are pushed.
+                # Flagged codes (already mapped / 1→N) are skipped — they go via export.
+                warnings = _compute_mapping_warnings(conn, full_table, sv_col, concept_col, decisions)
+                flagged = warnings["flagged"]
+                pushed = 0
+                skipped = 0
                 with conn.cursor() as cur:
                     for d in decisions:
+                        if d.source_value in flagged:
+                            skipped += 1
+                            continue
                         # Snapshot previous values per (source_value, previous concept_id)
                         cur.execute(
                             f"SELECT {concept_col} AS prev_id, COUNT(*) AS n "
@@ -1128,16 +1216,23 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
                                 applied_by=username,
                             )
                             db.add(log)
-                        # UPDATE all matching rows
+                        # UPDATE only unmapped rows (concept_id = 0/NULL) — defence in depth:
+                        # a pushable code is fully unmapped, so this never overwrites a mapping.
                         cur.execute(
                             f"UPDATE {full_table} SET {concept_col} = %(target)s "
-                            f"WHERE {sv_col} = %(sv)s",
+                            f"WHERE {sv_col} = %(sv)s AND ({concept_col} = 0 OR {concept_col} IS NULL)",
                             {"target": d.target_concept_id, "sv": d.source_value},
                         )
                         total_updated += cur.rowcount
+                        pushed += 1
                     conn.commit()
                 db.commit()
-                per_cdm_results[tcdm] = {"updated_rows": total_updated, "decisions": len(decisions)}
+                per_cdm_results[tcdm] = {
+                    "updated_rows": total_updated,
+                    "decisions": pushed,
+                    "skipped": skipped,
+                    "skipped_codes": warnings["counts"]["total_flagged"],
+                }
             except Exception as e:
                 conn.rollback()
                 db.rollback()
@@ -1334,8 +1429,18 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
     decisions = _get_consensus_decisions(db, req.cdm_name, req.domain)
 
+    _EMPTY_WARNINGS = {
+        "items": [],
+        "counts": {
+            WARN_MULTIPLE_TARGETS_OPAL: 0,
+            WARN_ALREADY_MAPPED_CDM: 0,
+            WARN_MULTIPLE_CONCEPTS_CDM: 0,
+            "total_flagged": 0,
+        },
+    }
     if not decisions or req.domain not in DOMAIN_CONFIG:
-        return {"total_decisions": 0, "impacted_rows": 0, "impacted_persons": 0}
+        return {"total_decisions": 0, "impacted_rows": 0, "impacted_persons": 0,
+                "warnings": _EMPTY_WARNINGS, "n_total_codes": 0, "n_pushable_codes": 0}
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
@@ -1343,6 +1448,7 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
     table = safe_identifier(cfg["table"])
     full_table = f"{schema.t(table)}"
     sv_col = safe_identifier(cfg["source_value"])
+    concept_col = safe_identifier(cfg["concept_id"])
 
     source_values = [d.source_value for d in decisions]
 
@@ -1355,16 +1461,22 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
                 WHERE {sv_col} = ANY(%(svs)s)
             """, {"svs": source_values})
             row = cur.fetchone()
+        # Compile warnings (same set that drives the push exclusion) while connected
+        warnings = _compute_mapping_warnings(conn, full_table, sv_col, concept_col, decisions)
     except Exception as e:
         logger.exception("Mapping preview query failed")
         raise HTTPException(status_code=500, detail="An internal error occurred during preview")
     finally:
         conn.close()
 
+    n_total_codes = len(set(source_values))
     return {
         "total_decisions": len(decisions),
         "impacted_rows": row["n_rows"] if row else 0,
         "impacted_persons": row["n_persons"] if row else 0,
+        "warnings": {"items": warnings["items"], "counts": warnings["counts"]},
+        "n_total_codes": n_total_codes,
+        "n_pushable_codes": n_total_codes - warnings["counts"]["total_flagged"],
     }
 
 

@@ -364,7 +364,50 @@ def test_apply_preview_no_decisions(client, cdm_name):
         "domain": "Condition",
     })
     assert resp.status_code == 200
-    assert resp.json()["total_decisions"] == 0
+    body = resp.json()
+    assert body["total_decisions"] == 0
+    # Preflight warnings shape is always present (empty when nothing to apply)
+    assert body["warnings"]["counts"]["total_flagged"] == 0
+    assert body["n_pushable_codes"] == 0
+
+
+def test_compute_mapping_warnings_flags():
+    """Preflight flags: A (1→N OPAL), B (already mapped in CDM), C (1→N in CDM)."""
+    from types import SimpleNamespace
+    from modules.mapping.router import (
+        _compute_mapping_warnings,
+        WARN_MULTIPLE_TARGETS_OPAL, WARN_ALREADY_MAPPED_CDM, WARN_MULTIPLE_CONCEPTS_CDM,
+    )
+    from tests.omop_mock import make_omop_conn
+
+    decisions = [
+        SimpleNamespace(source_value="OK1", target_concept_id=400, source_name="ok"),   # unmapped, single → pushable
+        SimpleNamespace(source_value="I10", target_concept_id=100, source_name="hyp"),   # already mapped (B)
+        SimpleNamespace(source_value="X", target_concept_id=200, source_name="x"),       # 1→N in CDM (B+C)
+        SimpleNamespace(source_value="E11", target_concept_id=300, source_name="diab"),  # two OPAL targets (A)
+        SimpleNamespace(source_value="E11", target_concept_id=301, source_name="diab"),
+    ]
+    conn = make_omop_conn([
+        [  # the single COUNT(DISTINCT concept_id) query
+            {"sv": "OK1", "n_concepts": 0},
+            {"sv": "I10", "n_concepts": 1},
+            {"sv": "X", "n_concepts": 2},
+            {"sv": "E11", "n_concepts": 0},
+        ],
+    ])
+    res = _compute_mapping_warnings(
+        conn, "cdm.condition_occurrence", "condition_source_value", "condition_concept_id", decisions,
+    )
+
+    assert res["flagged"] == {"I10", "X", "E11"}
+    assert "OK1" not in res["flagged"]  # only unmapped single-target code is pushable
+    assert res["counts"][WARN_MULTIPLE_TARGETS_OPAL] == 1
+    assert res["counts"][WARN_ALREADY_MAPPED_CDM] == 2
+    assert res["counts"][WARN_MULTIPLE_CONCEPTS_CDM] == 1
+    assert res["counts"]["total_flagged"] == 3
+    e11 = next(i for i in res["items"] if i["source_value"] == "E11")
+    assert WARN_MULTIPLE_TARGETS_OPAL in e11["flags"]
+    assert e11["opal_targets"] == [300, 301]
 
 
 # ──── Export tests ────

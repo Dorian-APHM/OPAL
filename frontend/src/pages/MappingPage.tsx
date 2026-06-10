@@ -22,7 +22,7 @@ import { useNotifDots } from '../hooks/useNotifDots';
 import type {
   MappingDomainStat, MappingEvolutionPoint, UnmappedItem,
   SuggestionResult, MappingSuggestion, MappingDecisionEntry,
-  StrategyStats,
+  StrategyStats, MappingApplyPreview, MappingWarningItem, MappingWarningFlag,
 } from '../types';
 
 const DOMAIN_LIST = ['Condition', 'Drug', 'Measurement', 'Observation', 'Procedure', 'Visit', 'Device', 'Death'];
@@ -1480,6 +1480,66 @@ function ReasonCell({ value }: { value: string }) {
 
 // ============ TAB 5: MAPPING HISTORY ============
 
+const WARN_META: Record<MappingWarningFlag, { color: 'red' | 'orange'; key: string; fallback: string }> = {
+  multiple_targets_opal: { color: 'red', key: 'mapping.warn_multiple_targets_opal', fallback: 'Multiple targets (OPAL)' },
+  already_mapped_cdm: { color: 'orange', key: 'mapping.warn_already_mapped_cdm', fallback: 'Already mapped (CDM)' },
+  multiple_concepts_cdm: { color: 'red', key: 'mapping.warn_multiple_concepts_cdm', fallback: 'Multiple concepts (CDM)' },
+};
+
+// Compiled preflight warnings shown before push/export (History tab)
+function MappingWarningsPanel({ preview }: { preview: MappingApplyPreview }) {
+  const { t } = useTranslation();
+  const { counts, items } = preview.warnings;
+  const flagLabel = (f: MappingWarningFlag) => t(WARN_META[f].key, WARN_META[f].fallback);
+
+  if (counts.total_flagged === 0) {
+    return (
+      <div className="mt-3 bg-emerald-500/8 border border-emerald-500/20 rounded px-3 py-2 text-sm text-emerald-300">
+        {t('mapping.warn_none', 'No warnings — all codes are unmapped and unambiguous, safe to push.')}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 bg-amber-500/8 border border-amber-500/30 rounded px-3 py-2">
+      <div className="flex items-center gap-2 mb-2">
+        <AlertTriangle className="h-4 w-4 text-amber-400" />
+        <span className="font-semibold text-amber-400 text-sm">
+          {t('mapping.warn_panel_title', 'Preflight warnings')} — {counts.total_flagged} {t('mapping.codes', 'codes')}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-2">
+        <Tag color="red">{flagLabel('multiple_targets_opal')}: {counts.multiple_targets_opal}</Tag>
+        <Tag color="orange">{flagLabel('already_mapped_cdm')}: {counts.already_mapped_cdm}</Tag>
+        <Tag color="red">{flagLabel('multiple_concepts_cdm')}: {counts.multiple_concepts_cdm}</Tag>
+      </div>
+      <div className="text-xs text-text-muted mb-2">
+        {t('mapping.warn_push_summary', {
+          p: preview.n_pushable_codes,
+          e: counts.total_flagged,
+          defaultValue: '{{p}} pushable · {{e}} excluded from push (kept in export)',
+        })}
+      </div>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-text-muted hover:text-text-bright">
+          {t('mapping.warn_show_codes', 'Show flagged codes')}
+        </summary>
+        <div className="mt-2 max-h-48 overflow-auto flex flex-col gap-1">
+          {items.map((it: MappingWarningItem) => (
+            <div key={it.source_value} className="flex items-center gap-2 flex-wrap border-b border-glass-border/40 pb-1">
+              <span className="font-mono text-text-bright">{it.source_value}</span>
+              {it.source_name && <span className="text-text-dim">{it.source_name}</span>}
+              {it.flags.map(f => <Tag key={f} color={WARN_META[f].color}>{flagLabel(f)}</Tag>)}
+              {it.cdm_concepts > 0 && <span className="text-text-dim">CDM: {it.cdm_concepts}</span>}
+              {it.opal_targets.length > 1 && <span className="text-text-dim">OPAL: {it.opal_targets.join(', ')}</span>}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKey?: number }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -1496,7 +1556,8 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
-  const [applyPreview, setApplyPreview] = useState<{ total_decisions: number; impacted_rows: number; impacted_persons: number } | null>(null);
+  const [applyPreview, setApplyPreview] = useState<MappingApplyPreview | null>(null);
+  const [exportConfirmOpen, setExportConfirmOpen] = useState(false);
   const [accessibleCdms, setAccessibleCdms] = useState<string[]>([]);
   const [targetCdms, setTargetCdms] = useState<string[]>([cdmName]);
 
@@ -1582,7 +1643,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
       const data: any = r.data;
       if (writeToCdm && data.per_cdm) {
         const summary = Object.entries(data.per_cdm)
-          .map(([c, v]: [string, any]) => v.error ? `${c}: ERROR` : `${c}: ${v.updated_rows} rows`)
+          .map(([c, v]: [string, any]) => v.error ? `${c}: ERROR` : `${c}: ${v.updated_rows} rows${v.skipped ? `, ${v.skipped} skipped` : ''}`)
           .join(' · ');
         toast.success(`Batch ${data.batch_id?.slice(0, 8)} — ${summary}`);
       } else {
@@ -1595,6 +1656,19 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
       toast.error(e.response?.data?.detail || 'Apply failed');
     } finally {
       setApplyLoading(false);
+    }
+  };
+
+  const doExportStcm = () => {
+    authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain));
+    setExportConfirmOpen(false);
+  };
+  // Warnings must be acknowledged before the export is launched
+  const handleExportClick = () => {
+    if (applyPreview && applyPreview.warnings.counts.total_flagged > 0) {
+      setExportConfirmOpen(true);
+    } else {
+      doExportStcm();
     }
   };
 
@@ -1885,19 +1959,35 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             <Statistic title={t('mapping.impacted_rows', 'Impacted Rows')} value={applyPreview.impacted_rows.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
             <Statistic title={t('mapping.impacted_persons', 'Impacted Persons')} value={applyPreview.impacted_persons.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
           </div>
+
+          <MappingWarningsPanel preview={applyPreview} />
+
           <div className="flex items-center gap-3 mt-3">
             {canWriteCdm && (
-              <Button variant="danger" size="small" onClick={() => setWriteConfirmOpen(true)}>
+              <Button variant="danger" size="small" disabled={applyPreview.n_pushable_codes === 0} onClick={() => setWriteConfirmOpen(true)}>
                 <AlertTriangle className="h-4 w-4" /> {t('mapping.write_to_cdm', 'Write to CDM')}
+                {applyPreview.warnings.counts.total_flagged > 0 && ` (${applyPreview.n_pushable_codes})`}
               </Button>
             )}
-            <Button size="small" icon={<Download className="h-4 w-4" />} onClick={() => authDownload(mappingApi.exportStcmUrl(cdmName, applyDomain))}>
+            <Button size="small" icon={<Download className="h-4 w-4" />} onClick={handleExportClick}>
               {t('mapping.export_stcm_instead', 'Export as CSV (recommended)')}
             </Button>
             <Button size="small" onClick={() => { setApplyPreview(null); setWriteConfirmOpen(false); setWriteConfirmText(''); }}>
               {t('common.close', 'Close')}
             </Button>
           </div>
+
+          <Confirm
+            open={exportConfirmOpen}
+            onClose={() => setExportConfirmOpen(false)}
+            onConfirm={doExportStcm}
+            title={t('mapping.export_confirm_title', 'Export with warnings')}
+            confirmText={t('mapping.export_confirm_submit', 'Download CSV')}
+            description={t('mapping.export_confirm_message', {
+              n: applyPreview.warnings.counts.total_flagged,
+              defaultValue: '{{n}} code(s) carry warnings. They ARE included in this export — the ETL will fan out 1→N / cross-domain mappings on reload. Continue?',
+            })}
+          />
 
           <Modal
             open={writeConfirmOpen}
@@ -1926,14 +2016,16 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
           >
             <div className="mb-4">
               <span className="text-text-bright">
-                Vous allez appliquer <strong>{applyPreview.total_decisions} mappings</strong> du domaine <strong>{applyDomain}</strong> en faisant un <code>UPDATE</code> direct sur la colonne <code>{applyDomain.toLowerCase()}_concept_id</code> de la table clinique.
+                Seuls les codes <strong>non mappés</strong> et sans conflit sont poussés : <strong>{applyPreview.n_pushable_codes}/{applyPreview.n_total_codes} codes</strong> du domaine <strong>{applyDomain}</strong>, via un <code>UPDATE</code> sur <code>{applyDomain.toLowerCase()}_concept_id</code> restreint à <code>concept_id = 0</code>.
               </span>
             </div>
-            <div className="mb-4">
-              <span className="text-text-bright">
-                Impact estimé : <strong>{applyPreview.impacted_rows.toLocaleString()} lignes</strong> et <strong>{applyPreview.impacted_persons.toLocaleString()} patients</strong> par CDM.
-              </span>
-            </div>
+            {applyPreview.warnings.counts.total_flagged > 0 && (
+              <div className="mb-4 bg-amber-500/10 border border-amber-500/25 rounded px-3 py-2">
+                <span className="text-amber-400 text-sm">
+                  <strong>{applyPreview.warnings.counts.total_flagged} code(s)</strong> avec alertes sont <strong>exclus du push</strong> (déjà mappés ou 1→N). Utilisez l'export CSV pour ceux-là.
+                </span>
+              </div>
+            )}
             <div className="mb-4">
               <label className="block text-xs font-medium text-text-muted mb-1">
                 {t('mapping.target_cdms', 'Target CDM(s) to apply mapping to')}

@@ -20,6 +20,7 @@ import type {
   UnmappedItem,
   SuggestionResult,
   MappingDecisionEntry,
+  MappingApplyPreview,
   CohortComparisonResult,
   StrategyStats,
   PatientJourneyEvent,
@@ -412,7 +413,7 @@ export const mappingApi = {
                  new_concept_id: number; new_concept_name: string; row_count: number }[];
     }>(`/mapping/apply/batch/${batchId}`),
   applyPreview: (cdmName: string, domain: string) =>
-    api.post<{ total_decisions: number; impacted_rows: number; impacted_persons: number }>(
+    api.post<MappingApplyPreview>(
       '/mapping/apply/preview', { cdm_name: cdmName, domain }
     ),
   exportStcmUrl: (cdmName: string, domain: string) =>
