@@ -51,9 +51,12 @@ class LLMClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
-        if json_mode:
-            # Honored by Ollama /v1, vLLM, LocalAI… Non-strict endpoints are tolerated
-            # by _loads_tolerant() below (the system prompt also mandates pure JSON).
+        if json_mode and "anthropic.com" not in self.base_url:
+            # response_format=json_object is honored by Ollama /v1, vLLM, LocalAI, OpenAI.
+            # Anthropic's OpenAI-compat layer rejects it (it only accepts type
+            # 'json_schema') — so omit it there: Claude reliably follows the "JSON only"
+            # system prompt and _loads_tolerant() strips any fences. Non-strict endpoints
+            # are tolerated the same way.
             payload["response_format"] = {"type": "json_object"}
         try:
             r = requests.post(f"{self.base_url}/chat/completions", json=payload,
