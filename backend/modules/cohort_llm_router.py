@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from config import AUTH_ENABLED, COHORT_LLM_ENABLED, COHORT_LLM_MODE, COHORT_LLM_URL
 from db.app_db import get_db
-from db.models import CohortLlmConfig
+from db.models import CohortLlmConfig, CohortLlmKey
 from utils.cdm_helper import check_cdm_access
 from utils.crypto import decrypt_password, encrypt_password, DecryptionError
 
@@ -46,20 +46,39 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(403, "Admin only")
 
 
+def _key_for(db: Session, base_url: str) -> str:
+    """Decrypted API key remembered for an endpoint (per-base_url keyring), or ''."""
+    row = db.query(CohortLlmKey).filter(CohortLlmKey.base_url == base_url).first()
+    if not (row and row.api_key_encrypted):
+        return ""
+    try:
+        return decrypt_password(row.api_key_encrypted)
+    except DecryptionError:
+        raise HTTPException(500, "Stored LLM API key could not be decrypted.")
+
+
+def _set_key(db: Session, base_url: str, raw: str) -> None:
+    """Upsert the per-url key: '' clears it, a value (re)sets it."""
+    enc = encrypt_password(raw) if raw else None
+    row = db.query(CohortLlmKey).filter(CohortLlmKey.base_url == base_url).first()
+    if row is None:
+        db.add(CohortLlmKey(base_url=base_url, api_key_encrypted=enc))
+    else:
+        row.api_key_encrypted = enc
+
+
 def _load_onprem_llm(db: Session) -> dict:
-    """Return the on-premise LLM payload {base_url, model, api_key} or raise 503."""
+    """Return the on-premise LLM payload {base_url, model, api_key} or raise 503.
+
+    The key comes from the per-url keyring, so it matches whatever base_url is active
+    (switching endpoints recalls each one's own key instead of a single global one).
+    """
     cfg = db.query(CohortLlmConfig).filter(CohortLlmConfig.id == 1).first()
     if not cfg or not cfg.base_url or not cfg.model:
         raise HTTPException(
             503, "On-premise LLM is not configured. Set its endpoint in Settings (admin)."
         )
-    api_key = ""
-    if cfg.api_key_encrypted:
-        try:
-            api_key = decrypt_password(cfg.api_key_encrypted)
-        except DecryptionError:
-            raise HTTPException(500, "Stored LLM API key could not be decrypted.")
-    return {"base_url": cfg.base_url, "model": cfg.model, "api_key": api_key}
+    return {"base_url": cfg.base_url, "model": cfg.model, "api_key": _key_for(db, cfg.base_url)}
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +106,7 @@ def get_settings(request: Request, db: Session = Depends(get_db)) -> dict:
         "mode": COHORT_LLM_MODE,
         "base_url": cfg.base_url if cfg else None,
         "model": cfg.model if cfg else None,
-        "has_api_key": bool(cfg and cfg.api_key_encrypted),
+        "has_api_key": bool(cfg and cfg.base_url and _key_for(db, cfg.base_url)),
     }
 
 
@@ -105,12 +124,14 @@ def put_settings(body: LlmSettings, request: Request, db: Session = Depends(get_
         db.add(cfg)
     cfg.base_url = (body.base_url or "").strip() or None
     cfg.model = (body.model or "").strip() or None
-    # api_key: None -> keep existing; "" -> clear; value -> encrypt.
-    if body.api_key is not None:
-        cfg.api_key_encrypted = encrypt_password(body.api_key) if body.api_key else None
+    # Per-url keyring: remember this endpoint's key. None (field left blank) -> keep
+    # whatever is stored for this url; "" -> clear it; a value -> (re)set it. Switching
+    # to a previously-used url with a blank field recalls its key.
+    if body.api_key is not None and cfg.base_url:
+        _set_key(db, cfg.base_url, body.api_key)
     cfg.updated_by = user.get("preferred_username", "anonymous")
     db.commit()
-    return {"ok": True, "has_api_key": bool(cfg.api_key_encrypted)}
+    return {"ok": True, "has_api_key": bool(cfg.base_url and _key_for(db, cfg.base_url))}
 
 
 # ---------------------------------------------------------------------------

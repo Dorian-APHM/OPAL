@@ -286,6 +286,28 @@ if _insp.has_table("sapbert_mappings"):
             "ON sapbert_mappings (cdm_name, domain, source_code)"
         ))
 
+# Cohort-LLM per-endpoint API keys: move the legacy single key (column on
+# cohort_llm_config) into the per-base_url keyring (cohort_llm_key, made by
+# create_all above) once, then NULL the legacy column so the keyring is the sole
+# source — switching the endpoint recalls each one's own key. Idempotent.
+if _insp.has_table("cohort_llm_config") and _insp.has_table("cohort_llm_key"):
+    with engine.begin() as _conn:
+        _row = _conn.execute(text(
+            "SELECT base_url, api_key_encrypted FROM cohort_llm_config WHERE id = 1"
+        )).fetchone()
+        if _row and _row[0] and _row[1]:
+            _has = _conn.execute(
+                text("SELECT 1 FROM cohort_llm_key WHERE base_url = :u"), {"u": _row[0]}
+            ).fetchone()
+            if not _has:
+                _conn.execute(text(
+                    "INSERT INTO cohort_llm_key (base_url, api_key_encrypted) "
+                    "VALUES (:u, :k)"
+                ), {"u": _row[0], "k": _row[1]})
+            _conn.execute(text(
+                "UPDATE cohort_llm_config SET api_key_encrypted = NULL WHERE id = 1"
+            ))
+
 # Import and register routers
 from modules.cdm_router import router as cdm_router
 from modules.quality.router import router as quality_router

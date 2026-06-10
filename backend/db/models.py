@@ -531,3 +531,17 @@ class CohortLlmConfig(Base):
     api_key_encrypted = Column(Text, nullable=True)
     updated_by = Column(String(255), nullable=True)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class CohortLlmKey(Base):
+    """Per-endpoint API key keyring for the on-premise cohort-LLM.
+
+    Keyed by base_url so switching the active endpoint recalls THAT endpoint's own key
+    instead of overwriting a single global one. CohortLlmConfig keeps only the active
+    {base_url, model}; the key lives here. Fernet-encrypted; never returned in clear.
+    """
+    __tablename__ = "cohort_llm_key"
+
+    base_url = Column(String(1000), primary_key=True)
+    api_key_encrypted = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
