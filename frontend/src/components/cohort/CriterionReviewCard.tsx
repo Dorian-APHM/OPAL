@@ -41,10 +41,18 @@ function formatValue(v: DraftCriterion['value']): string | null {
 
 export default function CriterionReviewCard({ criterion, selected, onChange, onRemove }: Props) {
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  // "Molécule exacte" (Drug): keep only members that matched the molecule by name,
+  // dropping the ATC siblings pulled in by group expansion (e.g. kétoprofène under
+  // ibuprofène). Only offered when a group actually carries such siblings.
+  const [exactOnly, setExactOnly] = useState(false);
+  const isDrug = criterion.domain === 'Drug';
+  const hasSiblings = criterion.concept_sets.some(g => g.members.some(m => m.matched === false));
+  const memsOf = (g: ConceptSetGroup) =>
+    exactOnly ? g.members.filter(m => m.matched !== false) : g.members;
 
   const temporal = formatTemporal(criterion.temporal);
   const value = formatValue(criterion.value);
-  const totalCodes = criterion.concept_sets.reduce((n, g) => n + g.n_members, 0);
+  const totalCodes = criterion.concept_sets.reduce((n, g) => n + memsOf(g).length, 0);
 
   const toggleCode = (sv: string) => {
     const next = new Set(selected);
@@ -53,14 +61,26 @@ export default function CriterionReviewCard({ criterion, selected, onChange, onR
   };
 
   const groupState = (g: ConceptSetGroup): { all: boolean; some: boolean } => {
-    const inSel = g.members.filter(m => selected.has(m.source_value)).length;
-    return { all: inSel === g.members.length && inSel > 0, some: inSel > 0 && inSel < g.members.length };
+    const mems = memsOf(g);
+    const inSel = mems.filter(m => selected.has(m.source_value)).length;
+    return { all: inSel === mems.length && inSel > 0, some: inSel > 0 && inSel < mems.length };
   };
 
   const toggleGroup = (g: ConceptSetGroup, checked: boolean) => {
     const next = new Set(selected);
-    g.members.forEach(m => checked ? next.add(m.source_value) : next.delete(m.source_value));
+    memsOf(g).forEach(m => checked ? next.add(m.source_value) : next.delete(m.source_value));
     onChange(next);
+  };
+
+  // Turning "exact" on deselects the ATC siblings so the selection follows the view.
+  const toggleExact = (checked: boolean) => {
+    setExactOnly(checked);
+    if (checked) {
+      const next = new Set(selected);
+      criterion.concept_sets.forEach(g =>
+        g.members.forEach(m => { if (m.matched === false) next.delete(m.source_value); }));
+      onChange(next);
+    }
   };
 
   const toggleOpen = (key: string) => {
@@ -105,11 +125,19 @@ export default function CriterionReviewCard({ criterion, selected, onChange, onR
         </div>
       ) : (
         <div className="mt-2 space-y-1.5">
-          <div className="text-[11px] text-text-dim">
-            {criterion.concept_sets.length} groupe(s) · {totalCodes} code(s) · {selected.size} sélectionné(s)
+          <div className="flex items-center justify-between gap-2 text-[11px] text-text-dim">
+            <span>{criterion.concept_sets.length} groupe(s) · {totalCodes} code(s) · {selected.size} sélectionné(s)</span>
+            {isDrug && hasSiblings && (
+              <label className="flex items-center gap-1.5 cursor-pointer shrink-0" title="Ne garder que la molécule demandée (retire les molécules voisines de la même classe ATC)">
+                <Checkbox checked={exactOnly} onChange={toggleExact} />
+                <span>Molécule exacte</span>
+              </label>
+            )}
           </div>
           {criterion.concept_sets.map((g) => {
             const key = `${g.domain}:${g.group_key}`;
+            const mems = memsOf(g);
+            if (mems.length === 0) return null;
             const st = groupState(g);
             const open = openGroups.has(key);
             return (
@@ -121,11 +149,11 @@ export default function CriterionReviewCard({ criterion, selected, onChange, onR
                   </button>
                   <span className="text-[12px] font-mono text-emerald-accent">{g.group_key}</span>
                   <span className="text-[12px] text-text truncate flex-1">{g.rep_label}</span>
-                  <span className="text-[11px] text-text-dim shrink-0">{g.n_members} code(s)</span>
+                  <span className="text-[11px] text-text-dim shrink-0">{mems.length} code(s)</span>
                 </div>
                 {open && (
                   <div className="px-2 pb-2 pl-8 space-y-1 max-h-56 overflow-y-auto">
-                    {g.members.map((m) => (
+                    {mems.map((m) => (
                       <label key={m.source_value} className="flex items-center gap-2 text-[12px] cursor-pointer"
                              onClick={(e) => { e.preventDefault(); toggleCode(m.source_value); }}>
                         <Checkbox checked={selected.has(m.source_value)} onChange={() => toggleCode(m.source_value)} />

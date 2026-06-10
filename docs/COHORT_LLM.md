@@ -6,6 +6,9 @@ démographie + critères, chaque terme résolu en **codes OMOP réels de ton CDM
 
 La fonctionnalité est **opt-in** (désactivée par défaut), à la manière d'OHDSI.
 
+> 💊 Pour le détail de la résolution **par médicament** (terme/classe → molécules →
+> famille ATC), voir la fiche dédiée : [COHORT_LLM_MEDICAMENTS.md](COHORT_LLM_MEDICAMENTS.md).
+
 ---
 
 ## 1. Architecture

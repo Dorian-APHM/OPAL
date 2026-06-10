@@ -221,6 +221,11 @@ class Retriever:
                 return []
             threshold = max_score - self.DOMAIN_GAP.get(domain, 0.010)
 
+        # Products that matched the query themselves (score >= threshold), as opposed
+        # to ATC siblings pulled in by group expansion. The UI's "exact molecule" mode
+        # (solution A: name match, no ATC expansion) keeps only these.
+        passed: set[int] = {i for i in top_idx if float(sims[i]) >= threshold}
+
         seen_keys: set[tuple[str, str]] = set()
         seen_singletons: set[int] = set()
         results: list[dict] = []
@@ -237,17 +242,21 @@ class Retriever:
                 results.append({
                     "domain": m["domain"], "kind": "singleton",
                     "group_key": m["source_value"], "rep_label": m["label"],
-                    "score": score, "n_members": 1,
-                    "members": [{"source_value": m["source_value"], "label": m["label"]}],
+                    "score": score, "n_members": 1, "n_matched": 1,
+                    "members": [{"source_value": m["source_value"], "label": m["label"],
+                                 "matched": True}],
                 })
             else:
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 idxs = self.groups[key]
+                # matched = the product matched the query by name (vs ATC sibling pulled
+                # in by expansion). "Exact molecule" mode keeps only matched members.
                 members = [{
                     "source_value": self.meta[i]["source_value"],
                     "label": self.meta[i]["label"],
+                    "matched": i in passed,
                 } for i in idxs]
                 # Title Drug groups with their ATC class name when known; keep the
                 # representative member label otherwise. Scoped to Drug so a 3-char
@@ -258,7 +267,9 @@ class Retriever:
                 results.append({
                     "domain": m["domain"], "kind": "group",
                     "group_key": key[1], "rep_label": rep_label,
-                    "score": score, "n_members": len(members), "members": members,
+                    "score": score, "n_members": len(members),
+                    "n_matched": sum(1 for mem in members if mem["matched"]),
+                    "members": members,
                 })
         return results
 
