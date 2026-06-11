@@ -78,7 +78,8 @@ services:
           memory: 512M
           cpus: '0.5'
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/ || exit 1"]
+      # 127.0.0.1, pas localhost : busybox wget résout localhost en ::1 alors que nginx n'écoute qu'en IPv4
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1/ || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
