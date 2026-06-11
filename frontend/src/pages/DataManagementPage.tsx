@@ -12,6 +12,8 @@ import {
   Alert,
   Tooltip,
   Progress,
+  Modal,
+  Input,
   useToast,
 } from '../components/ui';
 import {
@@ -22,11 +24,12 @@ import {
   Info,
   Users,
   Columns3,
-  FileSpreadsheet,
   FileArchive,
   Link2,
   X,
-  Key,
+  Search,
+  RotateCcw,
+  ClipboardList,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { dataManagementApi } from '../api/client';
@@ -143,6 +146,23 @@ const _DEFAULT_COLUMNS: Record<string, Set<string>> = {
   ]),
 };
 
+const MINIMAL_PRESET = ['person', 'visit_occurrence'];
+
+// ---------- Column grouping ----------
+
+type ColumnGroupKey = 'ids' | 'dates' | 'concepts' | 'source' | 'other';
+
+const COLUMN_GROUP_ORDER: ColumnGroupKey[] = ['ids', 'dates', 'concepts', 'source', 'other'];
+
+function columnGroup(name: string): ColumnGroupKey {
+  const n = name.toLowerCase();
+  if (n.includes('source')) return 'source';
+  if (n.includes('concept')) return 'concepts';
+  if (n.includes('date') || n.includes('time')) return 'dates';
+  if (n.endsWith('_id')) return 'ids';
+  return 'other';
+}
+
 // ---------- Component ----------
 
 export default function DataManagementPage({ selectedCdm }: Props) {
@@ -173,9 +193,12 @@ export default function DataManagementPage({ selectedCdm }: Props) {
   // ── Schema state ──
   const [schemaData, setSchemaData] = useSessionState<SchemaData | null>('data:schema', null);
   const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaOpen, setSchemaOpen] = useState(false);
 
-  // Expanded tables (for accordion behavior)
+  // ── Filters / expansion ──
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
+  const [tableFilter, setTableFilter] = useState('');
+  const [columnFilter, setColumnFilter] = useState('');
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -337,13 +360,36 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     setCompletedTaskId(null);
   }, [selectedCohortId]);
 
-  // Load columns when a table is selected
+  // ── Column fetching ──
+
+  const fetchColumnsFor = useCallback((tableName: string) => {
+    if (!selectedCdm) return;
+    dataManagementApi
+      .listColumns(selectedCdm, tableName)
+      .then((res) => {
+        const cols: ColumnInfo[] = res.data.columns ?? [];
+        const preset = _DEFAULT_COLUMNS[tableName];
+        const selected = preset
+          ? new Set(cols.filter((c) => preset.has(c.column_name)).map((c) => c.column_name))
+          : new Set(cols.map((c) => c.column_name));
+        setTableState((p) => ({
+          ...p,
+          [tableName]: { ...p[tableName], columns: cols, selectedColumns: selected, loading: false },
+        }));
+      })
+      .catch(() => {
+        setTableState((p) => ({
+          ...p,
+          [tableName]: { ...p[tableName], loading: false },
+        }));
+      });
+  }, [selectedCdm]);
+
+  // Select/deselect a table (checkbox). Selecting loads columns and expands;
+  // deselecting collapses but keeps the column configuration in memory.
   const handleTableToggle = useCallback(
     (tableName: string, checked: boolean) => {
       if (!selectedCdm) return;
-      // Decide whether to fetch columns *before* updating state, so the API call
-      // is not a side effect inside the setState updater (which runs twice under
-      // React StrictMode and would fire the request twice).
       const needsFetch = checked && (tableState[tableName]?.columns.length ?? 0) === 0;
 
       setTableState((prev) => ({
@@ -351,33 +397,55 @@ export default function DataManagementPage({ selectedCdm }: Props) {
         [tableName]: { ...prev[tableName], selected: checked, loading: needsFetch ? true : prev[tableName]?.loading },
       }));
 
-      if (needsFetch) {
-        dataManagementApi
-          .listColumns(selectedCdm, tableName)
-          .then((res) => {
-            const cols: ColumnInfo[] = res.data.columns ?? [];
-            const preset = _DEFAULT_COLUMNS[tableName];
-            const selected = preset
-              ? new Set(cols.filter((c) => preset.has(c.column_name)).map((c) => c.column_name))
-              : new Set(cols.map((c) => c.column_name));
-            setTableState((p) => ({
-              ...p,
-              [tableName]: { ...p[tableName], columns: cols, selectedColumns: selected, loading: false },
-            }));
-          })
-          .catch(() => {
-            setTableState((p) => ({
-              ...p,
-              [tableName]: { ...p[tableName], loading: false },
-            }));
-          });
+      if (needsFetch) fetchColumnsFor(tableName);
+      if (checked) {
+        setExpandedTable(tableName);
+        setColumnFilter('');
+      } else if (expandedTable === tableName) {
+        setExpandedTable(null);
       }
-      if (checked) setExpandedTable(tableName);
       // Clear schema when selection changes
       setSchemaData(null);
     },
-    [selectedCdm, tableState],
+    [selectedCdm, tableState, expandedTable, fetchColumnsFor],
   );
+
+  // Row click: select if not selected, otherwise toggle expansion.
+  // Deselection only happens through the checkbox — no accidental config loss.
+  const handleRowClick = (tableName: string) => {
+    const ts = tableState[tableName];
+    if (!ts?.selected) {
+      handleTableToggle(tableName, true);
+    } else {
+      setColumnFilter('');
+      setExpandedTable(expandedTable === tableName ? null : tableName);
+    }
+  };
+
+  // ── Presets ──
+
+  const applyPreset = (names: string[]) => {
+    const wanted = new Set(names.filter((n) => tables.some((tbl) => tbl.table_name === n)));
+    setTableState((prev) => {
+      const next: TableColumnState = { ...prev };
+      for (const tbl of tables) {
+        const st = next[tbl.table_name];
+        if (!st) continue;
+        const sel = wanted.has(tbl.table_name);
+        next[tbl.table_name] = {
+          ...st,
+          selected: sel,
+          loading: sel && st.columns.length === 0 ? true : st.loading,
+        };
+      }
+      return next;
+    });
+    for (const name of wanted) {
+      if ((tableState[name]?.columns.length ?? 0) === 0) fetchColumnsFor(name);
+    }
+    setExpandedTable(null);
+    setSchemaData(null);
+  };
 
   const handleColumnToggle = (tableName: string, colName: string, checked: boolean) => {
     setTableState((prev) => {
@@ -399,6 +467,18 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     setSchemaData(null);
   };
 
+  const handleResetDefaultColumns = (tableName: string) => {
+    setTableState((prev) => {
+      const ts = { ...prev[tableName] };
+      const preset = _DEFAULT_COLUMNS[tableName];
+      const next = preset
+        ? new Set(ts.columns.filter((c) => preset.has(c.column_name)).map((c) => c.column_name))
+        : new Set(ts.columns.map((c) => c.column_name));
+      return { ...prev, [tableName]: { ...ts, selectedColumns: next } };
+    });
+    setSchemaData(null);
+  };
+
   const getTableSelections = () => {
     const selections: { table: string; columns: string[] }[] = [];
     for (const [tableName, state] of Object.entries(tableState)) {
@@ -413,9 +493,20 @@ export default function DataManagementPage({ selectedCdm }: Props) {
   };
 
   const canExtract = cohortIdNum !== null && getTableSelections().length > 0 && !loading;
-  const selectedTableCount = Object.values(tableState).filter((s) => s.selected).length;
+  const selectedTables = tables.filter((tbl) => tableState[tbl.table_name]?.selected);
+  const selectedTableCount = selectedTables.length;
+  const totalSelectedColumns = selectedTables.reduce(
+    (acc, tbl) => acc + (tableState[tbl.table_name]?.selectedColumns.size ?? 0),
+    0,
+  );
 
-  // ── Load BDR schema when tables/columns change ──
+  const visibleTables = useMemo(() => {
+    const f = tableFilter.trim().toLowerCase();
+    if (!f) return tables;
+    return tables.filter((tbl) => tbl.table_name.toLowerCase().includes(f));
+  }, [tables, tableFilter]);
+
+  // ── Load BDR schema (on demand, when the modal opens) ──
   const loadSchema = useCallback(async () => {
     if (!selectedCdm) return;
     const sels = getTableSelections();
@@ -436,29 +527,10 @@ export default function DataManagementPage({ selectedCdm }: Props) {
     }
   }, [selectedCdm, tableState]);
 
-  // Auto-load schema when selections stabilize (debounced)
-  const schemaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevSelectionsRef = useRef<string>('');
-  useEffect(() => {
-    const sels = getTableSelections();
-    const key = JSON.stringify(sels);
-    if (key === prevSelectionsRef.current) return;
-    prevSelectionsRef.current = key;
-
-    if (sels.length === 0) {
-      setSchemaData(null);
-      return;
-    }
-
-    if (schemaTimerRef.current) clearTimeout(schemaTimerRef.current);
-    schemaTimerRef.current = setTimeout(() => {
-      loadSchema();
-    }, 600);
-
-    return () => {
-      if (schemaTimerRef.current) clearTimeout(schemaTimerRef.current);
-    };
-  }, [tableState, selectedCdm]);
+  const openSchema = () => {
+    setSchemaOpen(true);
+    if (!schemaData) loadSchema();
+  };
 
   // ── Launch full extraction (background, builds ZIP) ──
   const handleExtract = async () => {
@@ -518,8 +590,16 @@ export default function DataManagementPage({ selectedCdm }: Props) {
 
   const progressPct = progressTotal > 0 ? Math.round((progressCompleted / progressTotal) * 100) : 0;
 
+  const groupLabels: Record<ColumnGroupKey, string> = {
+    ids: t('datamanagement.col_group_ids', 'Identifiers'),
+    dates: t('datamanagement.col_group_dates', 'Dates'),
+    concepts: t('datamanagement.col_group_concepts', 'Concepts'),
+    source: t('datamanagement.col_group_source', 'Source values'),
+    other: t('datamanagement.col_group_other', 'Other'),
+  };
+
   return (
-    <div className="p-6 max-w-[1400px] space-y-5">
+    <div className="p-6 max-w-[1500px] space-y-5">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400">
@@ -535,360 +615,463 @@ export default function DataManagementPage({ selectedCdm }: Props) {
         </div>
       </div>
 
-      {/* Step indicator */}
-      <div className="flex items-center gap-2 text-xs text-text-dim">
-        <StepBadge step={1} active={!selectedCohortId} done={!!selectedCohortId} />
-        <span className={selectedCohortId ? 'text-text-muted' : ''}>
-          {t('datamanagement.select_cohort', 'Select Cohort')}
-        </span>
-        <ChevronRight className="h-3.5 w-3.5 text-text-dim" />
-        <StepBadge step={2} active={!!selectedCohortId && selectedTableCount === 0} done={selectedTableCount > 0} />
-        <span className={selectedTableCount > 0 ? 'text-text-muted' : ''}>
-          {t('datamanagement.select_tables', 'Tables & Columns')}
-        </span>
-        <ChevronRight className="h-3.5 w-3.5 text-text-dim" />
-        <StepBadge step={3} active={canExtract} done={!!extractionResult} />
-        <span className={extractionResult ? 'text-text-muted' : ''}>
-          {t('datamanagement.extract', 'Extract')}
-        </span>
-      </div>
-
-      {/* Step 1: Select Cohort */}
-      <Card
-        size="small"
-        title={
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-emerald-400" />
-            <span>{t('datamanagement.step1_title', 'Select a Cohort')}</span>
-          </div>
-        }
-        extra={
-          selectedCohort?.patient_count != null ? (
-            <Tag color="blue">{selectedCohort.patient_count.toLocaleString()} patients</Tag>
-          ) : undefined
-        }
-      >
-        <div className="p-4 space-y-4">
-          {loadingCohorts ? (
-            <Spinner size="small" tip="Loading cohorts..." />
-          ) : (
-            <Select
-              placeholder={t('datamanagement.choose_cohort', 'Choose a saved cohort...')}
-              value={selectedCohortId}
-              onChange={(val) => setSelectedCohortId(val || null)}
-              allowClear
-              options={cohorts.map((c) => ({
-                value: String(c.id),
-                label: `${c.name}${c.patient_count != null ? ` (${c.patient_count.toLocaleString()} patients)` : ''}`,
-              }))}
-            />
-          )}
-
-          {selectedCohort && (
-            <div className="space-y-3">
-              {selectedCohort.description && (
+      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-5 lg:items-start">
+        {/* ── Left column: configuration ── */}
+        <div className="w-full lg:col-span-8 space-y-5">
+          {/* Cohort */}
+          <Card
+            size="small"
+            title={
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-emerald-400" />
+                <span>{t('datamanagement.step1_title', 'Select a Cohort')}</span>
+              </div>
+            }
+          >
+            <div className="p-4 space-y-3">
+              {loadingCohorts ? (
+                <Spinner size="small" tip="Loading cohorts..." />
+              ) : (
+                <Select
+                  placeholder={t('datamanagement.choose_cohort', 'Choose a saved cohort...')}
+                  value={selectedCohortId}
+                  onChange={(val) => setSelectedCohortId(val || null)}
+                  allowClear
+                  options={cohorts.map((c) => ({
+                    value: String(c.id),
+                    label: `${c.name}${c.patient_count != null ? ` (${c.patient_count.toLocaleString()} patients)` : ''}`,
+                  }))}
+                />
+              )}
+              {selectedCohort?.description && (
                 <p className="text-sm text-text-dim">{selectedCohort.description}</p>
               )}
+            </div>
+          </Card>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {selectedCohort.patient_count != null && (
-                  <Tag color="blue">
-                    <Users className="h-3 w-3 mr-1 inline" />
-                    {selectedCohort.patient_count.toLocaleString()} patients
+          {/* Tables & columns */}
+          <Card
+            size="small"
+            title={
+              <div className="flex items-center gap-2">
+                <Columns3 className="h-4 w-4 text-emerald-400" />
+                <span>{t('datamanagement.step2_title', 'Select Tables & Columns')}</span>
+                {selectedTableCount > 0 && (
+                  <Tag color="emerald">
+                    {selectedTableCount} {t('datamanagement.tables_selected', 'selected')}
                   </Tag>
                 )}
-                <Tag color={selectedCohort.has_same_visit ? 'green' : 'default'}>
-                  <Link2 className="h-3 w-3 mr-1 inline" />
-                  {selectedCohort.has_same_visit ? 'Same Visit' : 'No Same Visit'}
-                </Tag>
-                {selectedCohort.latest_version && (
-                  <Tag color="purple">v{selectedCohort.latest_version}</Tag>
+              </div>
+            }
+          >
+            <div className="p-4 space-y-3">
+              {/* Toolbar: search + presets */}
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <div className="flex-1 min-w-0">
+                  <Input
+                    prefix={<Search className="h-3.5 w-3.5" />}
+                    placeholder={t('datamanagement.filter_tables', 'Filter tables...')}
+                    value={tableFilter}
+                    onChange={(e) => setTableFilter(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs text-text-dim mr-0.5">
+                    {t('datamanagement.presets', 'Presets')}:
+                  </span>
+                  <Button size="small" onClick={() => applyPreset(Object.keys(_DEFAULT_COLUMNS))}>
+                    {t('datamanagement.preset_standard', 'Standard')}
+                  </Button>
+                  <Button size="small" onClick={() => applyPreset(MINIMAL_PRESET)}>
+                    {t('datamanagement.preset_minimal', 'Minimal')}
+                  </Button>
+                  <Button size="small" onClick={() => applyPreset(tables.map((tbl) => tbl.table_name))}>
+                    {t('datamanagement.preset_all', 'All')}
+                  </Button>
+                  <Tooltip title={t('datamanagement.preset_none', 'Clear selection')}>
+                    <span>
+                      <Button
+                        size="small"
+                        icon={<X className="h-3.5 w-3.5" />}
+                        onClick={() => applyPreset([])}
+                        aria-label={t('datamanagement.preset_none', 'Clear selection')}
+                      />
+                    </span>
+                  </Tooltip>
+                </div>
+              </div>
+
+              {loadingTables ? (
+                <Spinner size="small" tip="Loading tables..." />
+              ) : tables.length === 0 ? (
+                <Empty description={t('datamanagement.no_tables', 'No tables found')} />
+              ) : (
+                <div className="space-y-1">
+                  {visibleTables.map((tbl) => {
+                    const ts = tableState[tbl.table_name];
+                    if (!ts) return null;
+                    const colCount = ts.selectedColumns.size;
+                    const totalCols = ts.columns.length;
+                    const isExpanded = expandedTable === tbl.table_name;
+
+                    // Group + filter visible columns for the expanded panel
+                    const colFilter = columnFilter.trim().toLowerCase();
+                    const filteredCols = colFilter
+                      ? ts.columns.filter((c) => c.column_name.toLowerCase().includes(colFilter))
+                      : ts.columns;
+                    const grouped: Record<ColumnGroupKey, ColumnInfo[]> = {
+                      ids: [], dates: [], concepts: [], source: [], other: [],
+                    };
+                    if (isExpanded) {
+                      for (const col of filteredCols) grouped[columnGroup(col.column_name)].push(col);
+                    }
+
+                    return (
+                      <div key={tbl.table_name}>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className={`
+                            w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm
+                            transition-all duration-150 cursor-pointer text-left
+                            ${ts.selected
+                              ? 'text-emerald-accent bg-emerald-accent/10 border border-emerald-accent/20'
+                              : 'text-text-muted hover:text-text-bright hover:bg-surface-light border border-transparent'
+                            }
+                          `}
+                          onClick={() => handleRowClick(tbl.table_name)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleRowClick(tbl.table_name);
+                            }
+                          }}
+                        >
+                          <span onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={ts.selected}
+                              onChange={(checked) => handleTableToggle(tbl.table_name, checked)}
+                            />
+                          </span>
+                          <Table2 className={`h-4 w-4 shrink-0 ${ts.selected ? 'text-emerald-accent' : 'text-text-dim'}`} />
+                          <span className="font-medium">{tbl.table_name}</span>
+                          {ts.selected && totalCols > 0 && (
+                            <Tag color={colCount === totalCols ? 'green' : colCount === 0 ? 'red' : 'orange'}>
+                              {colCount}/{totalCols} col
+                            </Tag>
+                          )}
+                          {tbl.has_visit && (
+                            <Tag color="purple" className="text-[10px]">visit</Tag>
+                          )}
+                          {ts.selected && (
+                            <span className="ml-auto text-text-dim">
+                              <ChevronRight
+                                className={`h-4 w-4 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+                              />
+                            </span>
+                          )}
+                        </div>
+
+                        {ts.selected && isExpanded && (
+                          <div className="ml-7 px-3 py-2.5 mb-1 rounded-lg bg-surface-dark/50 border border-glass-border/50">
+                            {ts.loading ? (
+                              <Spinner size="small" />
+                            ) : ts.columns.length === 0 ? (
+                              <p className="text-sm text-text-dim">
+                                {t('datamanagement.loading_columns', 'Loading columns...')}
+                              </p>
+                            ) : (
+                              <div className="space-y-3">
+                                {/* Column toolbar */}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="flex-1 min-w-[160px]">
+                                    <Input
+                                      prefix={<Search className="h-3 w-3" />}
+                                      placeholder={t('datamanagement.filter_columns', 'Filter columns...')}
+                                      value={columnFilter}
+                                      onChange={(e) => setColumnFilter(e.target.value)}
+                                    />
+                                  </div>
+                                  <Button size="small" onClick={() => handleSelectAllColumns(tbl.table_name, true)}>
+                                    {t('datamanagement.select_all', 'Select All')}
+                                  </Button>
+                                  <Button size="small" onClick={() => handleSelectAllColumns(tbl.table_name, false)}>
+                                    {t('datamanagement.select_none', 'None')}
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    icon={<RotateCcw className="h-3 w-3" />}
+                                    onClick={() => handleResetDefaultColumns(tbl.table_name)}
+                                  >
+                                    {t('datamanagement.reset_default', 'Default')}
+                                  </Button>
+                                </div>
+
+                                {/* Grouped columns */}
+                                {COLUMN_GROUP_ORDER.map((gk) =>
+                                  grouped[gk].length === 0 ? null : (
+                                    <div key={gk}>
+                                      <div className="text-[11px] uppercase tracking-wide text-text-dim mb-1">
+                                        {groupLabels[gk]}
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-3 gap-y-1">
+                                        {grouped[gk].map((col) => (
+                                          <Checkbox
+                                            key={col.column_name}
+                                            checked={ts.selectedColumns.has(col.column_name)}
+                                            onChange={(checked) =>
+                                              handleColumnToggle(tbl.table_name, col.column_name, checked)
+                                            }
+                                          >
+                                            <span className="text-xs">{col.column_name}</span>
+                                            <span className="text-[10px] text-text-dim ml-1.5">{col.data_type}</span>
+                                          </Checkbox>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ),
+                                )}
+                                {colFilter && filteredCols.length === 0 && (
+                                  <p className="text-xs text-text-dim">
+                                    {t('datamanagement.no_columns_match', 'No columns match the filter.')}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {tableFilter && visibleTables.length === 0 && (
+                    <p className="text-sm text-text-dim px-3 py-2">
+                      {t('datamanagement.no_tables_match', 'No tables match the filter.')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* ── Right column: sticky summary ── */}
+        <div className="w-full lg:col-span-4 lg:sticky lg:top-2">
+          <Card
+            size="small"
+            title={
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-emerald-400" />
+                <span>{t('datamanagement.summary_title', 'Summary')}</span>
+              </div>
+            }
+          >
+            <div className="p-4 space-y-4">
+              {/* Cohort */}
+              {!selectedCohort ? (
+                <p className="text-xs text-text-dim">
+                  {t('datamanagement.hint_select_cohort', 'Select a cohort to begin.')}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-text-bright truncate">
+                    {selectedCohort.name}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {selectedCohort.patient_count != null && (
+                      <Tag color="blue">
+                        <Users className="h-3 w-3 mr-1 inline" />
+                        {selectedCohort.patient_count.toLocaleString()} patients
+                      </Tag>
+                    )}
+                    {selectedCohort.latest_version && (
+                      <Tag color="purple">v{selectedCohort.latest_version}</Tag>
+                    )}
+                    <Tag color={selectedCohort.has_same_visit ? 'green' : 'default'}>
+                      <Link2 className="h-3 w-3 mr-1 inline" />
+                      {selectedCohort.has_same_visit ? 'Same Visit' : 'No Same Visit'}
+                    </Tag>
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Switch
+                      checked={sameVisitOnly}
+                      onChange={setSameVisitOnly}
+                      disabled={!selectedCohort.has_same_visit}
+                      size="small"
+                    />
+                    <span className="text-xs font-medium text-text-bright">
+                      {t('datamanagement.same_visit_only', 'Same Visit Only')}
+                    </span>
+                    <Tooltip
+                      title={
+                        !selectedCohort.has_same_visit
+                          ? t(
+                              'datamanagement.same_visit_disabled',
+                              'This cohort was not built with Same Visit enabled. Enable Same Visit in the Cohort Builder to use this option.',
+                            )
+                          : t(
+                              'datamanagement.same_visit_tooltip',
+                              'When enabled, only extract data for the specific visits matched by the cohort. When disabled, extract all visits for each patient.',
+                            )
+                      }
+                    >
+                      <span>
+                        <Info className="h-3.5 w-3.5 text-text-dim" />
+                      </span>
+                    </Tooltip>
+                  </div>
+                </div>
+              )}
+
+              <div className="h-px bg-glass-border" />
+
+              {/* Selections */}
+              {selectedTableCount === 0 ? (
+                <p className="text-xs text-text-dim">
+                  {t('datamanagement.hint_select_tables', 'Select at least one table with columns to extract.')}
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="text-xs font-semibold text-text-bright">
+                    {selectedTableCount} tables · {totalSelectedColumns} {t('datamanagement.columns', 'columns')}
+                  </div>
+                  <div className="space-y-0.5 max-h-[220px] overflow-y-auto">
+                    {selectedTables.map((tbl) => {
+                      const ts = tableState[tbl.table_name];
+                      const n = ts?.selectedColumns.size ?? 0;
+                      return (
+                        <button
+                          key={tbl.table_name}
+                          onClick={() => setExpandedTable(tbl.table_name)}
+                          className="w-full flex items-center justify-between gap-2 px-2 py-1 rounded-md text-xs cursor-pointer bg-transparent border-none text-left hover:bg-surface-light transition-colors"
+                        >
+                          <span className="truncate text-text-muted">{tbl.table_name}</span>
+                          <span className={`shrink-0 ${n === 0 ? 'text-red-400' : 'text-text-dim'}`}>
+                            {n} col
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    size="small"
+                    block
+                    icon={<Database className="h-3.5 w-3.5" />}
+                    onClick={openSchema}
+                    disabled={getTableSelections().length === 0}
+                  >
+                    {t('datamanagement.view_schema', 'View schema')}
+                  </Button>
+                </div>
+              )}
+
+              <div className="h-px bg-glass-border" />
+
+              {/* Extract / progress / result */}
+              <div className="space-y-3">
+                {loading ? (
+                  <>
+                    <Button
+                      variant="danger"
+                      block
+                      icon={<X className="h-4 w-4" />}
+                      onClick={handleCancel}
+                    >
+                      {t('common.cancel', 'Cancel')}
+                    </Button>
+                    <div className="space-y-1.5">
+                      <div className="text-xs text-text-muted text-center">
+                        {t('datamanagement.extracting', 'Extracting dataset...')}
+                      </div>
+                      {progressTotal > 0 && (
+                        <>
+                          <Progress percent={progressPct} size="small" strokeColor="#10B981" />
+                          <div className="text-[11px] text-text-dim text-center">
+                            {currentStep} ({progressCompleted}/{progressTotal})
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <Button
+                    block
+                    onClick={handleExtract}
+                    disabled={!canExtract}
+                    icon={<FileArchive className="h-4 w-4" />}
+                    className="!bg-emerald-600 hover:!bg-emerald-500"
+                  >
+                    {t('datamanagement.extract_zip', 'Extract ZIP')}
+                  </Button>
+                )}
+
+                {completedTaskId && !loading && (
+                  <Button
+                    variant="primary"
+                    block
+                    onClick={handleDownload}
+                    icon={<Download className="h-4 w-4" />}
+                    className="!bg-emerald-600 hover:!bg-emerald-500"
+                  >
+                    {t('datamanagement.download_zip', 'Download ZIP')}
+                  </Button>
+                )}
+
+                {error && <Alert type="error" message={error} closable onClose={() => setError('')} />}
+
+                {extractionResult && !loading && (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Tag color="green">
+                        {extractionResult.total_rows.toLocaleString()} {t('datamanagement.rows', 'rows')}
+                      </Tag>
+                      <Tag color="blue">{extractionResult.num_tables} tables</Tag>
+                    </div>
+                    <div className="space-y-0.5 max-h-[180px] overflow-y-auto">
+                      {Object.entries(extractionResult.table_row_counts).map(([tbl, count]) => (
+                        <div
+                          key={tbl}
+                          className="flex items-center justify-between gap-2 px-2 py-1 rounded-md bg-surface-dark border border-glass-border"
+                        >
+                          <span className="text-xs font-medium text-text-bright truncate">{tbl}</span>
+                          <span className="text-xs text-text-dim shrink-0">{count.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {/* Same Visit Only toggle */}
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-surface-dark border border-glass-border">
-                <Switch
-                  checked={sameVisitOnly}
-                  onChange={setSameVisitOnly}
-                  disabled={!selectedCohort.has_same_visit}
-                  size="small"
-                />
-                <span className="text-sm font-medium text-text-bright">
-                  {t('datamanagement.same_visit_only', 'Same Visit Only')}
-                </span>
-                <Tooltip
-                  title={
-                    !selectedCohort.has_same_visit
-                      ? t(
-                          'datamanagement.same_visit_disabled',
-                          'This cohort was not built with Same Visit enabled. Enable Same Visit in the Cohort Builder to use this option.',
-                        )
-                      : t(
-                          'datamanagement.same_visit_tooltip',
-                          'When enabled, only extract data for the specific visits matched by the cohort. When disabled, extract all visits for each patient.',
-                        )
-                  }
-                >
-                  <span>
-                    <Info className="h-4 w-4 text-text-dim" />
-                  </span>
-                </Tooltip>
-              </div>
             </div>
-          )}
+          </Card>
         </div>
-      </Card>
+      </div>
 
-      {/* Step 2: Select Tables & Columns */}
-      <Card
-        size="small"
+      {/* Relational schema modal */}
+      <Modal
+        open={schemaOpen}
+        onClose={() => setSchemaOpen(false)}
         title={
           <div className="flex items-center gap-2">
-            <Columns3 className="h-4 w-4 text-emerald-400" />
-            <span>{t('datamanagement.step2_title', 'Select Tables & Columns')}</span>
-            {selectedTableCount > 0 && (
-              <Tag color="emerald">
-                {selectedTableCount} {t('datamanagement.tables_selected', 'selected')}
+            <Database className="h-4 w-4 text-emerald-400" />
+            <span>{t('datamanagement.schema_title', 'Relational Schema')}</span>
+            {schemaData && (
+              <Tag color="blue">
+                {schemaData.tables.length} tables · {schemaData.relationships.length} relations
               </Tag>
             )}
           </div>
         }
+        width="max-w-6xl"
       >
-        <div className="p-4">
-          {loadingTables ? (
-            <Spinner size="small" tip="Loading tables..." />
-          ) : tables.length === 0 ? (
-            <Empty description={t('datamanagement.no_tables', 'No tables found')} />
-          ) : (
-            <div className="space-y-1">
-              {tables.map((tbl) => {
-                const ts = tableState[tbl.table_name];
-                if (!ts) return null;
-                const colCount = ts.selectedColumns.size;
-                const totalCols = ts.columns.length;
-                const isExpanded = expandedTable === tbl.table_name;
-
-                return (
-                  <div key={tbl.table_name}>
-                    <button
-                      className={`
-                        w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm
-                        transition-all duration-150 cursor-pointer bg-transparent border-none text-left
-                        ${ts.selected
-                          ? 'text-emerald-accent bg-emerald-accent/10 border border-emerald-accent/20'
-                          : 'text-text-muted hover:text-text-bright hover:bg-surface-light border border-transparent'
-                        }
-                      `}
-                      onClick={() => handleTableToggle(tbl.table_name, !ts.selected)}
-                    >
-                      <Table2 className={`h-4 w-4 shrink-0 ${ts.selected ? 'text-emerald-accent' : 'text-text-dim'}`} />
-                      <span className="font-medium">{tbl.table_name}</span>
-                      {ts.selected && totalCols > 0 && (
-                        <Tag color={colCount === totalCols ? 'green' : 'orange'}>
-                          {colCount}/{totalCols} col
-                        </Tag>
-                      )}
-                      {tbl.has_visit && (
-                        <Tag color="purple" className="text-[10px]">visit</Tag>
-                      )}
-                      {ts.selected && (
-                        <span
-                          className="ml-auto text-text-dim hover:text-text-bright"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setExpandedTable(isExpanded ? null : tbl.table_name);
-                          }}
-                        >
-                          <ChevronRight
-                            className={`h-4 w-4 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
-                          />
-                        </span>
-                      )}
-                    </button>
-
-                    {ts.selected && isExpanded && (
-                      <div className="ml-7 px-3 py-2.5 mb-1 rounded-lg bg-surface-dark/50 border border-glass-border/50">
-                        {ts.loading ? (
-                          <Spinner size="small" />
-                        ) : ts.columns.length === 0 ? (
-                          <p className="text-sm text-text-dim">
-                            {t('datamanagement.loading_columns', 'Loading columns...')}
-                          </p>
-                        ) : (
-                          <div className="space-y-2">
-                            <Checkbox
-                              checked={colCount === totalCols}
-                              indeterminate={colCount > 0 && colCount < totalCols}
-                              onChange={(checked) => handleSelectAllColumns(tbl.table_name, checked)}
-                            >
-                              <span className="font-medium text-xs">
-                                {t('datamanagement.select_all', 'Select All')}
-                              </span>
-                            </Checkbox>
-                            <div className="flex flex-wrap gap-x-3 gap-y-1">
-                              {ts.columns.map((col) => (
-                                <Tooltip key={col.column_name} title={col.data_type}>
-                                  <span>
-                                    <Checkbox
-                                      checked={ts.selectedColumns.has(col.column_name)}
-                                      onChange={(checked) =>
-                                        handleColumnToggle(tbl.table_name, col.column_name, checked)
-                                      }
-                                    >
-                                      <span className="text-xs">{col.column_name}</span>
-                                    </Checkbox>
-                                  </span>
-                                </Tooltip>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </Card>
-
-      {/* BDR Schema — shows automatically when tables are selected */}
-      {(schemaData || schemaLoading) && (
-        <Card
-          size="small"
-          title={
-            <div className="flex items-center gap-2">
-              <Database className="h-4 w-4 text-emerald-400" />
-              <span>{t('datamanagement.schema_title', 'Relational Schema')}</span>
-              {schemaData && (
-                <Tag color="blue">
-                  {schemaData.tables.length} tables · {schemaData.relationships.length} relations
-                </Tag>
-              )}
-            </div>
-          }
-        >
-          <div className="p-4">
-            {schemaLoading ? (
-              <Spinner size="small" tip="Loading schema..." />
-            ) : schemaData ? (
-              <BdrDiagram schema={schemaData} />
-            ) : null}
+        {schemaLoading ? (
+          <div className="text-center py-10">
+            <Spinner size="large" tip="Loading schema..." />
           </div>
-        </Card>
-      )}
-
-      {/* Step 3: Extract Dataset */}
-      <Card
-        size="small"
-        title={
-          <div className="flex items-center gap-2">
-            <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
-            <span>{t('datamanagement.step3_title', 'Extract Dataset')}</span>
-          </div>
-        }
-      >
-        <div className="p-4 space-y-4">
-          <div className="flex items-center gap-3">
-            {loading ? (
-              <Button
-                variant="danger"
-                size="small"
-                icon={<X className="h-4 w-4" />}
-                onClick={handleCancel}
-              >
-                {t('common.cancel', 'Cancel')}
-              </Button>
-            ) : (
-              <Button
-                onClick={handleExtract}
-                disabled={!canExtract}
-                icon={<FileArchive className="h-4 w-4" />}
-                className="!bg-emerald-600 hover:!bg-emerald-500"
-              >
-                {t('datamanagement.extract_zip', 'Extract ZIP')}
-              </Button>
-            )}
-            {completedTaskId && !loading && (
-              <Button
-                variant="primary"
-                onClick={handleDownload}
-                icon={<Download className="h-4 w-4" />}
-                className="!bg-emerald-600 hover:!bg-emerald-500"
-              >
-                {t('datamanagement.download_zip', 'Download ZIP')}
-              </Button>
-            )}
-          </div>
-
-          {!canExtract && !loading && !extractionResult && (
-            <p className="text-xs text-text-dim">
-              {!cohortIdNum
-                ? t('datamanagement.hint_select_cohort', 'Select a cohort to begin.')
-                : t('datamanagement.hint_select_tables', 'Select at least one table with columns to extract.')}
-            </p>
-          )}
-
-          {error && <Alert type="error" message={error} closable onClose={() => setError('')} />}
-
-          {/* Progress bar */}
-          {loading && (
-            <div className="text-center py-6">
-              <Spinner size="large" />
-              <div className="mt-4 space-y-2">
-                <span className="text-text-muted text-sm">
-                  {t('datamanagement.extracting', 'Extracting dataset...')}
-                </span>
-                {progressTotal > 0 && (
-                  <div className="max-w-xs mx-auto space-y-1">
-                    <Progress
-                      percent={progressPct}
-                      size="small"
-                      strokeColor="#10B981"
-                    />
-                    <div className="text-xs text-text-dim">
-                      {currentStep} ({progressCompleted}/{progressTotal})
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Extraction result summary */}
-          {extractionResult && !loading && (
-            <>
-              <div className="h-px bg-glass-border" />
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Tag color="green">
-                    {extractionResult.total_rows.toLocaleString()} rows total
-                  </Tag>
-                  <Tag color="blue">
-                    {extractionResult.num_tables} tables
-                  </Tag>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                  {Object.entries(extractionResult.table_row_counts).map(([tbl, count]) => (
-                    <div
-                      key={tbl}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-dark border border-glass-border"
-                    >
-                      <Table2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                      <span className="text-xs font-medium text-text-bright truncate">{tbl}</span>
-                      <span className="text-xs text-text-dim ml-auto whitespace-nowrap">
-                        {count.toLocaleString()}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </Card>
+        ) : schemaData ? (
+          <BdrDiagram schema={schemaData} />
+        ) : (
+          <Empty description={t('datamanagement.hint_select_tables', 'Select at least one table with columns to extract.')} />
+        )}
+      </Modal>
     </div>
   );
 }
@@ -901,7 +1084,6 @@ function BdrDiagram({ schema }: { schema: SchemaData }) {
   const HEADER_H = 32;
   const PAD = 10;
   const MARGIN = 40;
-  const EXPAND_ICON_W = 20;
 
   // Track which tables are expanded (show all columns)
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1113,7 +1295,7 @@ function BdrDiagram({ schema }: { schema: SchemaData }) {
   }, [schema, tablePositions, tableIdx, visibleColumns]);
 
   return (
-    <div className="overflow-auto rounded-xl border border-glass-border bg-[#0a1628]">
+    <div className="overflow-auto max-h-[70vh] rounded-xl border border-glass-border bg-[#0a1628]">
       <svg
         width={totalW}
         height={totalH}
@@ -1268,17 +1450,4 @@ function BdrDiagram({ schema }: { schema: SchemaData }) {
       </svg>
     </div>
   );
-}
-
-// ---------- Step badge sub-component ----------
-
-function StepBadge({ step, active, done }: { step: number; active: boolean; done: boolean }) {
-  const base = 'inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold';
-  if (done) {
-    return <span className={`${base} bg-emerald-500/20 text-emerald-400 border border-emerald-500/30`}>{step}</span>;
-  }
-  if (active) {
-    return <span className={`${base} bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 animate-pulse`}>{step}</span>;
-  }
-  return <span className={`${base} bg-surface-light text-text-dim border border-glass-border`}>{step}</span>;
 }
