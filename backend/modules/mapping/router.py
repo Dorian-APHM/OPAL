@@ -283,10 +283,14 @@ def _get_schema(db: Session, cdm: CdmConfig):
 def mapping_dashboard(cdm_name: str, db: Session = Depends(get_db)):
     """
     Mapping rates by domain with record counts.
-    Uses latest quality analysis snapshots per domain.
+    Uses latest quality analysis snapshots per domain, enriched with the
+    decision pipeline (consensus-aware): validated / pending / rejected /
+    to-push counts per domain, staleness vs the snapshot, and the list of
+    domains never analyzed.
     """
+    from sqlalchemy import distinct
+
     # P44 fix: single query with DISTINCT ON instead of N+1 loop
-    from sqlalchemy import text
     latest_snapshots = (
         db.query(AnalysisSnapshot)
         .filter(
@@ -297,12 +301,86 @@ def mapping_dashboard(cdm_name: str, db: Session = Depends(get_db)):
         .distinct(AnalysisSnapshot.domain)
         .all()
     )
+
+    # ── Decision pipeline per domain (consensus-aware, same rule as History) ──
+    # One aggregate per (domain, source_value, target): user count decides
+    # pending vs validated; any synced row marks the pair as already in the CDM.
+    pair_rows = (
+        db.query(
+            MappingDecision.domain,
+            MappingDecision.source_value,
+            MappingDecision.target_concept_id,
+            func.count(distinct(MappingDecision.user)).label("users"),
+            func.max(MappingDecision.synced).label("synced"),
+            func.max(MappingDecision.created_at).label("last_at"),
+        )
+        .filter(
+            MappingDecision.cdm_name == cdm_name,
+            MappingDecision.action.in_(["approved", "modified"]),
+            MappingDecision.target_concept_id.isnot(None),
+        )
+        .group_by(
+            MappingDecision.domain,
+            MappingDecision.source_value,
+            MappingDecision.target_concept_id,
+        )
+        .all()
+    )
+    pipeline_by_domain: dict[str, dict] = {}
+    for r in pair_rows:
+        p = pipeline_by_domain.setdefault(
+            r.domain,
+            {"validated": 0, "pending": 0, "to_push": 0, "rejected": 0},
+        )
+        if r.users >= 2:
+            p["validated"] += 1
+            if not r.synced:
+                p["to_push"] += 1
+        else:
+            p["pending"] += 1
+
+    rejected_rows = (
+        db.query(
+            MappingDecision.domain,
+            func.count(distinct(MappingDecision.source_value)).label("n"),
+        )
+        .filter(
+            MappingDecision.cdm_name == cdm_name,
+            MappingDecision.action == "rejected",
+        )
+        .group_by(MappingDecision.domain)
+        .all()
+    )
+    for r in rejected_rows:
+        p = pipeline_by_domain.setdefault(
+            r.domain,
+            {"validated": 0, "pending": 0, "to_push": 0, "rejected": 0},
+        )
+        p["rejected"] = r.n
+
+    # Staleness: the snapshot rates measure the CDM itself, so only an actual
+    # push to this CDM after the snapshot makes them outdated (decisions alone
+    # don't change the CDM until they are applied).
+    from db.models import MappingApplyLog
+    push_rows = (
+        db.query(
+            MappingApplyLog.domain,
+            func.max(MappingApplyLog.applied_at).label("last_push"),
+        )
+        .filter(MappingApplyLog.target_cdm_name == cdm_name)
+        .group_by(MappingApplyLog.domain)
+        .all()
+    )
+    last_push_by_domain = {r.domain: r.last_push for r in push_rows}
+
     domains_data = []
     for snapshot in latest_snapshots:
         results = snapshot.results
         mapping = results.get("mapping", {})
         terms = mapping.get("terms", {})
         rows = mapping.get("rows", {})
+        p = pipeline_by_domain.get(snapshot.domain)
+        last_push = last_push_by_domain.get(snapshot.domain)
         domains_data.append({
             "domain": snapshot.domain,
             "total_terms": terms.get("total_terms", 0),
@@ -315,6 +393,35 @@ def mapping_dashboard(cdm_name: str, db: Session = Depends(get_db)):
             "pct_rows_mapped": rows.get("pct_rows_mapped", 0),
             "version": snapshot.version,
             "snapshot_date": snapshot.created_at.isoformat() if snapshot.created_at else None,
+            "decisions": {
+                "validated": p["validated"] if p else 0,
+                "pending": p["pending"] if p else 0,
+                "rejected": p["rejected"] if p else 0,
+                "to_push": p["to_push"] if p else 0,
+            },
+            # Mappings pushed to the CDM after the snapshot → displayed rates predate them
+            "stale": bool(
+                last_push and snapshot.created_at and last_push > snapshot.created_at
+            ),
+        })
+
+    # Domains without any quality snapshot still carry their decision pipeline
+    # (decisions are not tied to quality results) — only the rate/volume
+    # columns need a snapshot.
+    analyzed = {s.domain for s in latest_snapshots}
+    never_analyzed = []
+    for d in DOMAIN_CONFIG.keys():
+        if d in analyzed:
+            continue
+        p = pipeline_by_domain.get(d)
+        never_analyzed.append({
+            "domain": d,
+            "decisions": {
+                "validated": p["validated"] if p else 0,
+                "pending": p["pending"] if p else 0,
+                "rejected": p["rejected"] if p else 0,
+                "to_push": p["to_push"] if p else 0,
+            },
         })
 
     # Decisions summary
@@ -329,10 +436,20 @@ def mapping_dashboard(cdm_name: str, db: Session = Depends(get_db)):
     )
     decisions_summary = {r.action: r.count for r in decision_counts}
 
+    # Global pipeline KPIs (terms = distinct source_value→target pairs)
+    pipeline = {
+        "unmapped_terms": sum(d["unmapped_terms"] for d in domains_data),
+        "pending_terms": sum(p["pending"] for p in pipeline_by_domain.values()),
+        "validated_terms": sum(p["validated"] for p in pipeline_by_domain.values()),
+        "to_push_terms": sum(p["to_push"] for p in pipeline_by_domain.values()),
+    }
+
     return {
         "cdm_name": cdm_name,
         "domains": domains_data,
+        "never_analyzed": never_analyzed,
         "decisions_summary": decisions_summary,
+        "pipeline": pipeline,
     }
 
 
@@ -361,6 +478,13 @@ def mapping_evolution(cdm_name: str, domain: str, db: Session = Depends(get_db))
 
 # ──── 5.1b Strategy Confidence Statistics ────
 
+# Sources actually emitted by the current suggestion engine (suggest.py +
+# SapBERT). Human origins (manual, history, bulk, rollback*) and retired
+# strategies (keyword, fuzzy, contextual) are excluded from strategy
+# performance — the table evaluates the engine, not the users.
+SUGGESTION_STRATEGY_SOURCES = ["exact", "relationship", "ingredient", "synonym", "sapbert"]
+
+
 @router.get("/strategies/{cdm_name}")
 def strategy_stats(
     cdm_name: str,
@@ -371,9 +495,10 @@ def strategy_stats(
     Compute confidence statistics per suggestion strategy.
     Returns per-strategy: total decisions, approval rate, avg confidence,
     rejection rate, and modification rate.
+    Only covers the strategies of the current suggestion engine.
     """
     # P45 fix: push aggregation to SQL instead of loading all decisions into memory
-    from sqlalchemy import case, literal_column
+    from sqlalchemy import case
     query = db.query(
         MappingDecision.suggestion_source,
         func.count(MappingDecision.id).label("total"),
@@ -385,10 +510,7 @@ def strategy_stats(
         func.avg(case((MappingDecision.action == "rejected", MappingDecision.confidence_score))).label("avg_confidence_rejected"),
     ).filter(
         MappingDecision.cdm_name == cdm_name,
-        MappingDecision.suggestion_source.isnot(None),
-        MappingDecision.suggestion_source != "",
-        MappingDecision.suggestion_source != "bulk",
-        ~MappingDecision.suggestion_source.startswith("rollback"),
+        MappingDecision.suggestion_source.in_(SUGGESTION_STRATEGY_SOURCES),
     ).group_by(MappingDecision.suggestion_source)
 
     if domain:

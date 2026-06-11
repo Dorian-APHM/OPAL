@@ -689,6 +689,22 @@ export interface MappingDomainStat {
   pct_rows_mapped: number;
   version: number;
   snapshot_date: string | null;
+  decisions: {
+    validated: number;
+    pending: number;
+    rejected: number;
+    to_push: number;
+  };
+  /** Mappings pushed to the CDM after the snapshot — displayed rates predate them */
+  stale: boolean;
+}
+
+/** Global decision pipeline (terms = distinct source_value→target pairs) */
+export interface MappingPipeline {
+  unmapped_terms: number;
+  pending_terms: number;
+  validated_terms: number;
+  to_push_terms: number;
 }
 
 /** Strategy confidence statistics */
@@ -710,7 +726,10 @@ export interface StrategyStats {
 export interface MappingDashboardData {
   cdm_name: string;
   domains: MappingDomainStat[];
+  /** Domains without any quality snapshot — decisions are still tracked */
+  never_analyzed: { domain: string; decisions: MappingDomainStat['decisions'] }[];
   decisions_summary: Record<string, number>;
+  pipeline: MappingPipeline;
 }
 
 /** Mapping evolution point */

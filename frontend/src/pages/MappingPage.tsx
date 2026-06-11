@@ -1,26 +1,27 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useSessionState } from '../hooks/useSessionState';
+import { useSessionState, setSessionStateValue } from '../hooks/useSessionState';
 import {
   Card, Tabs, Table, Tag, Button, Select, Input, TextArea, NumberInput,
-  Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, Alert, useToast,
+  Statistic, Empty, Spinner, Tooltip, Modal, Confirm, Checkbox, Alert, Progress, useToast,
 } from '../components/ui';
 import type { TabItem, Column } from '../components/ui';
 import {
   BarChart3, Search, Lightbulb, History, Download, Check, X, Edit,
   Undo2, Zap, AlertTriangle, StopCircle, RefreshCw, FileEdit, Link, CheckCircle2, Database, RotateCcw,
+  ChevronRight, Info,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
-  ResponsiveContainer, LineChart, Line, Legend, Rectangle,
+  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+  ResponsiveContainer, LineChart, Line, Legend,
 } from 'recharts';
 import { mappingApi, cdmAccessApi, authDownload, sapbertApi, type SapbertDomainState } from '../api/client';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAuth } from '../auth/KeycloakContext';
 import { useNotifDots } from '../hooks/useNotifDots';
 import type {
-  MappingDomainStat, MappingEvolutionPoint, UnmappedItem,
+  MappingDomainStat, MappingEvolutionPoint, MappingPipeline, UnmappedItem,
   SuggestionResult, MappingSuggestion, MappingDecisionEntry,
   StrategyStats, MappingApplyPreview, MappingWarningItem, MappingWarningFlag,
 } from '../types';
@@ -45,6 +46,15 @@ export default function MappingPage({ selectedCdm }: Props) {
     }
   };
 
+  // Cross-tab navigation from the dashboard: preset the target tab's
+  // session-state filters (it is unmounted, so it reads them on mount), then switch.
+  const navigateTo = (tab: string, presets?: Record<string, unknown>) => {
+    if (presets) {
+      for (const [k, v] of Object.entries(presets)) setSessionStateValue(k, v);
+    }
+    handleTabChange(tab);
+  };
+
   if (!selectedCdm) {
     return <Empty description={t('mapping.select_cdm', 'Select a CDM connection to explore mappings')} />;
   }
@@ -53,7 +63,7 @@ export default function MappingPage({ selectedCdm }: Props) {
     {
       key: 'dashboard',
       label: <span className="inline-flex items-center gap-1.5"><BarChart3 className="h-4 w-4" /> {t('mapping.dashboard', 'Dashboard')}</span>,
-      children: <MappingDashboardTab cdmName={selectedCdm} />,
+      children: <MappingDashboardTab cdmName={selectedCdm} onNavigate={navigateTo} />,
     },
     {
       key: 'explore',
@@ -96,14 +106,17 @@ export default function MappingPage({ selectedCdm }: Props) {
 
 // ============ TAB 1: MAPPING DASHBOARD ============
 
-function MappingDashboardTab({ cdmName }: { cdmName: string }) {
+type DashboardDomainRow = Partial<MappingDomainStat> & { domain: string; notAnalyzed?: boolean };
+
+function MappingDashboardTab({ cdmName, onNavigate }: { cdmName: string; onNavigate: (tab: string, presets?: Record<string, unknown>) => void }) {
   const { t } = useTranslation();
   const toast = useToast();
   const ct = useChartTheme();
   const [data, setData] = useState<MappingDomainStat[]>([]);
-  const [decisions, setDecisions] = useState<Record<string, number>>({});
+  const [neverAnalyzed, setNeverAnalyzed] = useState<{ domain: string; decisions: MappingDomainStat['decisions'] }[]>([]);
+  const [pipeline, setPipeline] = useState<MappingPipeline | null>(null);
   const [evolution, setEvolution] = useState<MappingEvolutionPoint[]>([]);
-  const [evoDomain, setEvoDomain] = useSessionState('mapping:dashboard:evoDomain', 'Condition');
+  const [evoDomain, setEvoDomain] = useSessionState('mapping:dashboard:evoDomain', '');
   const [loading, setLoading] = useState(true);
   const [strategyData, setStrategyData] = useState<StrategyStats[]>([]);
   const [strategyDomain, setStrategyDomain] = useSessionState<string | undefined>('mapping:dashboard:strategyDomain', undefined);
@@ -111,12 +124,20 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   useEffect(() => {
     setLoading(true);
     mappingApi.dashboard(cdmName)
-      .then(r => { setData(r.data.domains ?? []); setDecisions(r.data.decisions_summary ?? {}); })
+      .then(r => {
+        const domains = r.data.domains ?? [];
+        setData(domains);
+        setNeverAnalyzed(r.data.never_analyzed ?? []);
+        setPipeline(r.data.pipeline ?? null);
+        // Default the evolution chart to the first domain that actually has data
+        setEvoDomain(prev => (prev && domains.some(d => d.domain === prev) ? prev : domains[0]?.domain ?? ''));
+      })
       .catch(() => toast.error(t('mapping.load_failed', 'Failed to load mapping dashboard')))
       .finally(() => setLoading(false));
   }, [cdmName]);
 
   useEffect(() => {
+    if (!evoDomain) { setEvolution([]); return; }
     mappingApi.evolution(cdmName, evoDomain)
       .then(r => setEvolution(r.data.evolution ?? []))
       .catch(() => setEvolution([]));
@@ -138,6 +159,107 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
   const totalTerms = data.reduce((s, d) => s + d.total_terms, 0);
   const mappedTerms = data.reduce((s, d) => s + d.mapped_terms, 0);
   const pctOverall = totalTerms > 0 ? (mappedTerms / totalTerms * 100) : 0;
+  const totalRows = data.reduce((s, d) => s + d.total_rows, 0);
+  const mappedRows = data.reduce((s, d) => s + d.mapped_rows, 0);
+  const pctRowsOverall = totalRows > 0 ? (mappedRows / totalRows * 100) : 0;
+  const unmappedRowsTotal = data.reduce((s, d) => s + d.unmapped_rows, 0);
+
+  const goToUnmapped = (domain?: string) => {
+    onNavigate('explore', {
+      ...(domain ? { 'mapping:unmapped:domain': domain } : {}),
+      'mapping:unmapped:page': 1,
+      'mapping:unmapped:search': '',
+    });
+  };
+
+  const domainRows: DashboardDomainRow[] = [
+    ...data,
+    ...neverAnalyzed.map((n) => ({ domain: n.domain, decisions: n.decisions, notAnalyzed: true })),
+  ];
+
+  const domainColumns: Column<DashboardDomainRow>[] = [
+    {
+      title: t('quality.domain', 'Domain'), dataIndex: 'domain', key: 'domain',
+      render: (v: string, r: DashboardDomainRow) => (
+        <span className="flex items-center gap-1.5 font-medium">
+          {t(`domains.${v}`, v)}
+          {r.notAnalyzed && <Tag className="text-[10px]">{t('mapping.never_analyzed', 'Never analyzed')}</Tag>}
+        </span>
+      ),
+    },
+    {
+      title: t('mapping.terms_pct', '% Terms Mapped'), dataIndex: 'pct_terms_mapped', key: 'pct_terms',
+      sorter: (a: DashboardDomainRow, b: DashboardDomainRow) => (a.pct_terms_mapped ?? -1) - (b.pct_terms_mapped ?? -1),
+      render: (v: number | undefined, r: DashboardDomainRow) => r.notAnalyzed ? <span className="text-text-dim">—</span> : (
+        <span className="flex items-center gap-2 min-w-[130px]">
+          <span className="flex-1"><Progress percent={Math.round(v ?? 0)} size="small" strokeColor={(v ?? 0) >= 80 ? '#10B981' : (v ?? 0) >= 50 ? '#F59E0B' : '#EF4444'} showLabel={false} /></span>
+          <span className="text-xs w-11 text-right">{(v ?? 0).toFixed(1)}%</span>
+        </span>
+      ),
+    },
+    {
+      title: t('mapping.rows_pct', '% Rows Mapped'), dataIndex: 'pct_rows_mapped', key: 'pct_rows',
+      sorter: (a: DashboardDomainRow, b: DashboardDomainRow) => (a.pct_rows_mapped ?? -1) - (b.pct_rows_mapped ?? -1),
+      render: (v: number | undefined, r: DashboardDomainRow) => r.notAnalyzed ? <span className="text-text-dim">—</span> : <span className="text-xs">{(v ?? 0).toFixed(1)}%</span>,
+    },
+    {
+      title: t('mapping.terms_to_map', 'Terms to map'), dataIndex: 'unmapped_terms', key: 'unmapped_terms',
+      sorter: (a: DashboardDomainRow, b: DashboardDomainRow) => (a.unmapped_terms ?? -1) - (b.unmapped_terms ?? -1),
+      render: (v: number | undefined, r: DashboardDomainRow) => r.notAnalyzed ? <span className="text-text-dim">—</span> : (
+        <span className={v ? 'text-text-bright' : 'text-text-dim'}>{(v ?? 0).toLocaleString()}</span>
+      ),
+    },
+    {
+      title: t('mapping.rows_to_map', 'Rows to map'), dataIndex: 'unmapped_rows', key: 'unmapped_rows',
+      sorter: (a: DashboardDomainRow, b: DashboardDomainRow) => (a.unmapped_rows ?? -1) - (b.unmapped_rows ?? -1),
+      render: (v: number | undefined, r: DashboardDomainRow) => r.notAnalyzed ? <span className="text-text-dim">—</span> : (
+        <span className="text-text-muted">{(v ?? 0).toLocaleString()}</span>
+      ),
+    },
+    {
+      title: t('mapping.col_decisions', 'Decisions'), dataIndex: 'decisions', key: 'decisions',
+      render: (_: unknown, r: DashboardDomainRow) => {
+        // Decisions come from the app DB, not from quality snapshots —
+        // shown even for never-analyzed domains.
+        const d = r.decisions;
+        if (!d || (d.validated === 0 && d.pending === 0 && d.rejected === 0)) {
+          return <span className="text-text-dim">—</span>;
+        }
+        return (
+          <span className="flex flex-wrap gap-1">
+            {d.validated > 0 && <Tooltip title={t('mapping.tip_validated', 'Validated (consensus reached)')}><span><Tag color="green">{d.validated} ✓</Tag></span></Tooltip>}
+            {d.pending > 0 && <Tooltip title={t('mapping.tip_pending', 'Awaiting a second validator')}><span><Tag color="orange">{d.pending} ⏳</Tag></span></Tooltip>}
+            {d.rejected > 0 && <Tooltip title={t('mapping.tip_rejected', 'Rejected terms')}><span><Tag color="red">{d.rejected} ✗</Tag></span></Tooltip>}
+            {d.to_push > 0 && <Tooltip title={t('mapping.tip_to_push', 'Validated, not yet pushed to the CDM')}><span><Tag color="cyan">{d.to_push} → CDM</Tag></span></Tooltip>}
+          </span>
+        );
+      },
+    },
+    {
+      title: t('mapping.col_snapshot', 'Snapshot'), dataIndex: 'snapshot_date', key: 'snapshot',
+      render: (v: string | null | undefined, r: DashboardDomainRow) => {
+        if (r.notAnalyzed) return <span className="text-text-dim">—</span>;
+        return (
+          <span className="flex items-center gap-1.5 text-xs text-text-muted whitespace-nowrap">
+            v{r.version} · {v ? new Date(v).toLocaleDateString() : '—'}
+            {r.stale && (
+              <Tooltip title={t('mapping.stale_hint', 'Decisions are newer than this snapshot — the rates shown do not include them. Re-run the Quality analysis to refresh.')}>
+                <span><Tag color="orange"><AlertTriangle className="h-3 w-3 inline mr-0.5" />{t('mapping.stale', 'stale')}</Tag></span>
+              </Tooltip>
+            )}
+          </span>
+        );
+      },
+    },
+    {
+      title: '', dataIndex: 'domain', key: 'go',
+      render: (v: string) => (
+        <Tooltip title={t('mapping.open_unmapped', 'Open unmapped terms for this domain')}>
+          <span><Button size="small" variant="link" icon={<ChevronRight className="h-4 w-4" />} onClick={(e) => { e?.stopPropagation?.(); goToUnmapped(v); }} /></span>
+        </Tooltip>
+      ),
+    },
+  ];
 
   const strategyColumns: Column<StrategyStats>[] = [
     { title: t('mapping.strategy', 'Strategy'), dataIndex: 'strategy', key: 'strategy',
@@ -155,118 +277,158 @@ function MappingDashboardTab({ cdmName }: { cdmName: string }) {
       render: (v: number | null) => v != null ? <span className="text-emerald-400">{v}%</span> : '—' },
   ];
 
+  const kpiCells: { label: string; value: string; color?: string; hint: string; onClick?: () => void }[] = [
+    {
+      label: t('mapping.overall_rate', 'Overall Mapping Rate'),
+      value: `${pctOverall.toFixed(1)}%`,
+      hint: `${mappedTerms.toLocaleString()} / ${totalTerms.toLocaleString()} ${t('mapping.terms', 'terms')} · ${pctRowsOverall.toFixed(1)}% ${t('mapping.rows', 'rows')}`,
+    },
+    {
+      label: t('mapping.kpi_unmapped', 'Terms to map'),
+      value: (pipeline?.unmapped_terms ?? 0).toLocaleString(),
+      color: (pipeline?.unmapped_terms ?? 0) > 0 ? '#EF4444' : '#10B981',
+      hint: `${unmappedRowsTotal.toLocaleString()} ${t('mapping.unmapped_rows', 'Unmapped Rows').toLowerCase()}`,
+      onClick: () => goToUnmapped(),
+    },
+    {
+      label: t('mapping.kpi_pending', 'Awaiting consensus'),
+      value: (pipeline?.pending_terms ?? 0).toLocaleString(),
+      color: '#F59E0B',
+      hint: t('mapping.kpi_pending_hint', 'Second validator required'),
+      onClick: () => onNavigate('history', { 'mapping:history:filterAction': 'pending', 'mapping:history:page': 1 }),
+    },
+    {
+      label: t('mapping.kpi_to_push', 'To push to CDM'),
+      value: (pipeline?.to_push_terms ?? 0).toLocaleString(),
+      color: '#14b8a6',
+      hint: t('mapping.kpi_to_push_hint', 'Validated, not yet synced'),
+      onClick: () => onNavigate('history', { 'mapping:history:filterAction': '', 'mapping:history:hideSynced': true, 'mapping:history:page': 1 }),
+    },
+  ];
+
+  // Fixed-viewport layout on desktop: the KPI strip and the bottom row keep
+  // their natural height, the domains table takes the rest and scrolls inside.
   return (
-    <div>
-      {/* Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-        <Card><Statistic title={t('mapping.overall_rate', 'Overall Mapping Rate')} value={pctOverall.toFixed(1)} suffix="%" /></Card>
-        <Card><Statistic title={t('mapping.total_terms', 'Total Terms')} value={totalTerms.toLocaleString()} /></Card>
-        <Card><Statistic title={t('mapping.mapped', 'Mapped')} value={mappedTerms.toLocaleString()} valueStyle={{ color: '#10B981' }} /></Card>
-        <Card><Statistic title={t('mapping.decisions_made', 'Decisions Made')} value={Object.values(decisions).reduce((a, b) => a + b, 0).toLocaleString()} /></Card>
-      </div>
-
-      {/* Bar chart */}
-      <Card title={t('mapping.rates_by_domain', 'Mapping Rates by Domain')} className="mb-4">
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-            <XAxis dataKey="domain" stroke={ct.axis} />
-            <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
-            <RechartsTooltip cursor={false} formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
-            <Legend />
-            <Bar dataKey="pct_terms_mapped" name={t('mapping.terms_pct', '% Terms Mapped')} fill={ct.blue} activeBar={(p: any) => <Rectangle {...p} x={p.x - 3} width={p.width + 6} />} />
-            <Bar dataKey="pct_rows_mapped" name={t('mapping.rows_pct', '% Rows Mapped')} fill={ct.emerald} activeBar={(p: any) => <Rectangle {...p} x={p.x - 3} width={p.width + 6} />} />
-          </BarChart>
-        </ResponsiveContainer>
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-170px)]">
+      {/* Compact KPI strip */}
+      <Card size="small" hoverable={false} bodyClassName="!p-0" className="shrink-0">
+        <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-glass-border">
+          {kpiCells.map((k) => (
+            <button
+              key={k.label}
+              onClick={k.onClick}
+              disabled={!k.onClick}
+              className={`bg-transparent border-none text-left px-4 py-2 ${k.onClick ? 'cursor-pointer hover:bg-surface-light transition-colors' : 'cursor-default'}`}
+            >
+              <div className="text-[11px] uppercase tracking-wide text-text-dim truncate">{k.label}</div>
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-xl font-bold text-text-bright" style={k.color ? { color: k.color } : undefined}>{k.value}</span>
+                <span className="text-[11px] text-text-dim truncate">{k.hint}</span>
+              </div>
+            </button>
+          ))}
+        </div>
       </Card>
 
-      {/* Unmapped volume (weighted by records) */}
-      <Card title={t('mapping.unmapped_volume', 'Unmapped Volume (by records)')} className="mb-4">
-        <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-            <XAxis dataKey="domain" stroke={ct.axis} />
-            <YAxis stroke={ct.axis} />
-            <RechartsTooltip cursor={false} formatter={(v: number) => v.toLocaleString()} contentStyle={ct.tooltipStyle} />
-            <Bar dataKey="unmapped_rows" name={t('mapping.unmapped_rows', 'Unmapped Rows')} fill={ct.red} activeBar={(p: any) => <Rectangle {...p} x={p.x - 3} width={p.width + 6} />} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
-
-      {/* Evolution */}
+      {/* Per-domain table — bounded list, always shown in full */}
       <Card
-        title={t('mapping.evolution', 'Mapping Evolution')}
+        size="small"
+        hoverable={false}
+        title={t('mapping.domains_overview', 'Domains Overview')}
         extra={
-          <Select
-            size="small"
-            value={evoDomain}
-            onChange={setEvoDomain}
-            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-full sm:w-[150px]"
-          />
+          <Tooltip title={t('mapping.terms_vs_rows', 'Terms = distinct source values · Rows = record volume')}>
+            <span className="text-text-dim"><Info className="h-4 w-4" /></span>
+          </Tooltip>
         }
-        className="mb-4"
+        className="shrink-0"
+        bodyClassName="!p-0"
       >
-        {evolution.length > 0 ? (
-          <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={evolution}>
-              <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-              <XAxis dataKey="version" label={{ value: 'Version', position: 'insideBottom', offset: -5 }} stroke={ct.axis} />
-              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
-              <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
-              <Legend />
-              <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke={ct.blue} strokeWidth={2} />
-              <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke={ct.emerald} strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        ) : (
-          <span className="text-text-muted">{t('mapping.no_evolution', 'Run multiple analyses to see evolution')}</span>
-        )}
+        <Table
+          size="small"
+          dataSource={domainRows}
+          columns={domainColumns}
+          rowKey="domain"
+          pagination={false}
+          onRow={(r: DashboardDomainRow) => ({
+            // The unmapped explorer reads the source value cache, not the
+            // quality snapshots — navigation works for every domain.
+            onClick: () => goToUnmapped(r.domain),
+            className: 'cursor-pointer',
+          })}
+        />
       </Card>
 
-      {/* Strategy Confidence Stats */}
-      <Card
-        title={t('mapping.strategy_stats', 'Strategy Performance')}
-        extra={
-          <Select
-            size="small"
-            value={strategyDomain ?? ''}
-            onChange={(v) => setStrategyDomain(v || undefined)}
-            options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
-            className="w-full sm:w-[150px]"
-            allowClear
-            placeholder={t('mapping.all_domains', 'All domains')}
-          />
-        }
-      >
-        {strategyData.length > 0 ? (
-          <>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={strategyData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
-                <XAxis type="number" domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
-                <YAxis type="category" dataKey="strategy" width={120} tick={{ fontSize: 12 }} stroke={ct.axis} />
-                <RechartsTooltip cursor={false} formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
-                <Legend />
-                <Bar dataKey="approval_rate" name={t('mapping.approval_rate', 'Approval %')} fill={ct.emerald} stackId="a" activeBar={(p: any) => <Rectangle {...p} y={p.y - 5} height={p.height + 10} />} />
-                <Bar dataKey="modification_rate" name={t('mapping.modification_rate', 'Modification %')} fill={ct.orange} stackId="a" activeBar={(p: any) => <Rectangle {...p} y={p.y - 5} height={p.height + 10} />} />
-                <Bar dataKey="rejection_rate" name={t('mapping.rejection_rate', 'Rejection %')} fill={ct.red} stackId="a" activeBar={(p: any) => <Rectangle {...p} y={p.y - 5} height={p.height + 10} />} />
-              </BarChart>
-            </ResponsiveContainer>
-            <div className="mt-3">
-              <Table
-                size="small"
-                dataSource={strategyData}
-                rowKey="strategy"
-                pagination={false}
-                columns={strategyColumns}
-              />
+      {/* Evolution + Strategy side by side — absorb the remaining height, scroll inside */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 lg:flex-1 lg:min-h-[200px]">
+        <Card
+          size="small"
+          hoverable={false}
+          title={t('mapping.evolution', 'Mapping Evolution')}
+          extra={
+            <Select
+              size="small"
+              value={evoDomain}
+              onChange={setEvoDomain}
+              options={data.map(d => ({ value: d.domain, label: t(`domains.${d.domain}`, d.domain) }))}
+              className="w-full sm:w-[150px]"
+            />
+          }
+          className="lg:flex lg:flex-col lg:min-h-0"
+          bodyClassName="!p-2"
+        >
+          {evolution.length > 1 ? (
+            <div className="h-[220px] lg:h-auto lg:flex-1 lg:min-h-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={evolution}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                  <XAxis dataKey="version" stroke={ct.axis} />
+                  <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} stroke={ct.axis} />
+                  <RechartsTooltip formatter={(v: number) => `${v.toFixed(1)}%`} contentStyle={ct.tooltipStyle} />
+                  <Legend />
+                  <Line type="monotone" dataKey="pct_terms_mapped" name="% Terms" stroke={ct.blue} strokeWidth={2} />
+                  <Line type="monotone" dataKey="pct_rows_mapped" name="% Rows" stroke={ct.emerald} strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-          </>
-        ) : (
-          <Empty description={t('mapping.no_strategy_data', 'No mapping decisions yet. Approve or reject suggestions to see strategy performance.')} />
-        )}
-      </Card>
+          ) : (
+            <span className="text-text-muted text-sm px-2 py-3">{t('mapping.no_evolution', 'Run multiple analyses to see evolution')}</span>
+          )}
+        </Card>
+
+        <Card
+          size="small"
+          hoverable={false}
+          title={t('mapping.strategy_stats', 'Strategy Performance')}
+          extra={
+            <Select
+              size="small"
+              value={strategyDomain ?? ''}
+              onChange={(v) => setStrategyDomain(v || undefined)}
+              options={DOMAIN_LIST.map(d => ({ value: d, label: t(`domains.${d}`, d) }))}
+              className="w-full sm:w-[150px]"
+              allowClear
+              placeholder={t('mapping.all_domains', 'All domains')}
+            />
+          }
+          className="lg:flex lg:flex-col lg:min-h-0"
+          bodyClassName="!p-0"
+        >
+          {strategyData.length > 0 ? (
+            <Table
+              size="small"
+              fillHeight
+              dataSource={strategyData}
+              rowKey="strategy"
+              pagination={false}
+              columns={strategyColumns}
+            />
+          ) : (
+            <div className="p-4">
+              <Empty description={t('mapping.no_strategy_data', 'No mapping decisions yet. Approve or reject suggestions to see strategy performance.')} />
+            </div>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

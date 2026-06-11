@@ -53,6 +53,16 @@ export function useSessionState<T>(key: string, initialValue: T): [T, (v: T | ((
   return [state, setSessionState];
 }
 
+/**
+ * Pre-set a value for a key whose owning component is currently unmounted
+ * (e.g. cross-tab navigation: set the target tab's filters, then switch tab —
+ * the component reads the value from the store on mount).
+ * Has no effect on an already-mounted component.
+ */
+export function setSessionStateValue<T>(key: string, value: T) {
+  store.set(key, value);
+}
+
 /** Clear all session state (e.g. on logout) */
 export function clearSessionState() {
   store.clear();

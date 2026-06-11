@@ -65,6 +65,12 @@ def test_dashboard_empty(client, cdm_name):
     assert data["cdm_name"] == cdm_name
     assert data["domains"] == []
     assert data["decisions_summary"] == {}
+    # No snapshot at all → every configured domain is "never analyzed"
+    assert "Condition" in [e["domain"] for e in data["never_analyzed"]]
+    assert data["pipeline"] == {
+        "unmapped_terms": 0, "pending_terms": 0,
+        "validated_terms": 0, "to_push_terms": 0,
+    }
 
 
 def test_dashboard_with_snapshots(client, cdm_with_snapshots):
@@ -76,6 +82,10 @@ def test_dashboard_with_snapshots(client, cdm_with_snapshots):
     assert cond["total_terms"] == 100
     assert cond["mapped_terms"] == 70
     assert cond["pct_terms_mapped"] == 70.0
+    assert cond["decisions"] == {"validated": 0, "pending": 0, "rejected": 0, "to_push": 0}
+    assert cond["stale"] is False
+    assert "Condition" not in [e["domain"] for e in data["never_analyzed"]]
+    assert data["pipeline"]["unmapped_terms"] == 30
 
 
 def test_dashboard_with_decisions(client, cdm_name):
@@ -91,6 +101,93 @@ def test_dashboard_with_decisions(client, cdm_name):
     resp = client.get(f"/api/mapping/dashboard/{cdm_name}")
     data = resp.json()
     assert data["decisions_summary"].get("approved", 0) == 1
+    # Single user → no consensus yet
+    assert data["pipeline"]["pending_terms"] == 1
+    assert data["pipeline"]["validated_terms"] == 0
+    # No snapshot for Condition, but its decisions still surface
+    cond = next(e for e in data["never_analyzed"] if e["domain"] == "Condition")
+    assert cond["decisions"]["pending"] == 1
+
+
+def test_dashboard_pipeline_consensus(client, cdm_with_snapshots):
+    """Consensus-aware pipeline: 2 distinct users validate, synced pairs leave to_push."""
+    from db.models import MappingDecision
+    cdm = cdm_with_snapshots
+    db = TestSession()
+    # E11 → 201826 approved by two distinct users → validated + to_push
+    for user in ("alice", "bob"):
+        db.add(MappingDecision(
+            cdm_name=cdm, domain="Condition", source_value="E11",
+            action="approved", target_concept_id=201826, user=user,
+        ))
+    # I10 → 316866 approved by one user → pending
+    db.add(MappingDecision(
+        cdm_name=cdm, domain="Condition", source_value="I10",
+        action="approved", target_concept_id=316866, user="alice",
+    ))
+    # K35 → 440448 validated by two users AND synced → validated, NOT to_push
+    for user in ("alice", "bob"):
+        db.add(MappingDecision(
+            cdm_name=cdm, domain="Condition", source_value="K35",
+            action="modified", target_concept_id=440448, user=user, synced=1,
+        ))
+    # Z99 rejected
+    db.add(MappingDecision(
+        cdm_name=cdm, domain="Condition", source_value="Z99",
+        action="rejected", user="alice",
+    ))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/api/mapping/dashboard/{cdm}")
+    assert resp.status_code == 200
+    data = resp.json()
+    cond = next(d for d in data["domains"] if d["domain"] == "Condition")
+    assert cond["decisions"] == {"validated": 2, "pending": 1, "rejected": 1, "to_push": 1}
+    # Decisions alone don't change the CDM → not stale without a push
+    assert cond["stale"] is False
+    assert data["pipeline"]["validated_terms"] == 2
+    assert data["pipeline"]["pending_terms"] == 1
+    assert data["pipeline"]["to_push_terms"] == 1
+
+
+def test_dashboard_stale_after_push(client, cdm_with_snapshots):
+    """A push to the CDM after the snapshot marks the domain's rates as stale."""
+    from db.models import MappingApplyLog
+    cdm = cdm_with_snapshots
+    db = TestSession()
+    db.add(MappingApplyLog(
+        batch_id="batch-1", source_cdm_name=cdm, target_cdm_name=cdm,
+        domain="Condition", table_name="condition_occurrence",
+        column_name="condition_concept_id", source_value="E11",
+        new_concept_id=201826, row_count=10,
+    ))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/api/mapping/dashboard/{cdm}")
+    cond = next(d for d in resp.json()["domains"] if d["domain"] == "Condition")
+    assert cond["stale"] is True
+
+
+def test_strategy_stats_only_engine_sources(client, cdm_name):
+    """Strategy performance only covers the current engine strategies —
+    human origins (manual, history) and retired ones (keyword) are excluded."""
+    from db.models import MappingDecision
+    db = TestSession()
+    for source in ("exact", "sapbert", "manual", "history", "keyword", "bulk"):
+        db.add(MappingDecision(
+            cdm_name=cdm_name, domain="Condition", source_value=f"SV_{source}",
+            action="approved", target_concept_id=1, suggestion_source=source,
+            confidence_score=90.0, user="alice",
+        ))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/api/mapping/strategies/{cdm_name}")
+    assert resp.status_code == 200
+    strategies = {s["strategy"] for s in resp.json()["strategies"]}
+    assert strategies == {"exact", "sapbert"}
 
 
 # ──── Evolution tests ────
