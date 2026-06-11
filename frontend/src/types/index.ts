@@ -809,6 +809,7 @@ export interface MappingApplyPreview {
   };
   n_total_codes: number;
   n_pushable_codes: number;
+  n_redundant?: number;  // codes already correctly in the CDM (synced / same target), excluded
 }
 
 // ──── Concept Sets ────

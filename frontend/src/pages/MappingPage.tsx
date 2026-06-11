@@ -1482,7 +1482,8 @@ function ReasonCell({ value }: { value: string }) {
 
 const WARN_META: Record<MappingWarningFlag, { color: 'red' | 'orange'; key: string; fallback: string }> = {
   multiple_targets_opal: { color: 'red', key: 'mapping.warn_multiple_targets_opal', fallback: 'Multiple targets (OPAL)' },
-  already_mapped_cdm: { color: 'orange', key: 'mapping.warn_already_mapped_cdm', fallback: 'Already mapped (CDM)' },
+  // same-target already-mapped codes are dropped as redundant, so this only counts divergences now
+  already_mapped_cdm: { color: 'orange', key: 'mapping.warn_different_target_cdm', fallback: 'Already mapped in the CDM to a DIFFERENT target' },
   multiple_concepts_cdm: { color: 'red', key: 'mapping.warn_multiple_concepts_cdm', fallback: 'Multiple concepts (CDM)' },
 };
 
@@ -1555,6 +1556,7 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const [sortDir, setSortDir] = useSessionState<'asc' | 'desc'>('mapping:history:sortDir', 'asc');
   const [hideSynced, setHideSynced] = useSessionState('mapping:history:hideSynced', false);
   const [syncing, setSyncing] = useState(false);
+  const [syncSel, setSyncSel] = useState<Set<string>>(new Set());  // selected source_values to mark synced
   const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applyDomain, setApplyDomain] = useSessionState('mapping:history:applyDomain', 'Condition');
@@ -1579,11 +1581,22 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   useEffect(() => { load(); }, [load, refreshKey]);
 
   // Mark / unmark "already in the CDM with the same target" → hideable from history
+  const toggleSyncSel = (sv: string) => setSyncSel(prev => {
+    const next = new Set(prev);
+    if (next.has(sv)) next.delete(sv); else next.add(sv);
+    return next;
+  });
+  // Clear the selection whenever the visible set changes
+  useEffect(() => { setSyncSel(new Set()); }, [filterDomain, filterAction, filterUser, page, hideSynced, cdmName]);
+
   const handleMarkSynced = async () => {
+    const svs = Array.from(syncSel);
+    if (svs.length === 0) return;
     setSyncing(true);
     try {
-      const r = await mappingApi.markSynced(cdmName, filterDomain || undefined);
+      const r = await mappingApi.markSynced(cdmName, filterDomain || undefined, svs);
       toast.success(t('mapping.synced_marked', { n: r.data.marked, defaultValue: '{{n}} mapping(s) marked as synced' }));
+      setSyncSel(new Set());
       load();
     } catch (e: any) {
       toast.error(e.response?.data?.detail || t('common.error', 'An error occurred'));
@@ -1594,6 +1607,15 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
   const handleUnsyncRow = async (row: GroupedRow) => {
     try {
       await mappingApi.unmarkSynced(cdmName, row.domain, [row.source_value]);
+      load();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || t('common.error', 'An error occurred'));
+    }
+  };
+  const handleSyncRow = async (row: GroupedRow) => {
+    try {
+      const r = await mappingApi.markSynced(cdmName, row.domain, [row.source_value]);
+      if (!r.data.marked) toast.info(t('mapping.sync_not_candidate', 'Not marked — the CDM target differs from this decision'));
       load();
     } catch (e: any) {
       toast.error(e.response?.data?.detail || t('common.error', 'An error occurred'));
@@ -1701,11 +1723,14 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
     return colors[a] || 'default';
   };
 
+  // Displayed statuses (consensus-aware): an approved/modified decision is "pending"
+  // until 2+ users agree, then it shows as approved/modified.
   const actionOptions = [
-    { value: 'approved', label: 'Approved' },
-    { value: 'modified', label: 'Modified' },
-    { value: 'rejected', label: 'Rejected' },
-    { value: 'rolled_back', label: 'Rolled back' },
+    { value: 'pending', label: t('mapping.status_pending', 'Pending') },
+    { value: 'approved', label: t('mapping.status_approved', 'Approved (consensus)') },
+    { value: 'modified', label: t('mapping.status_modified', 'Modified (consensus)') },
+    { value: 'rejected', label: t('mapping.status_rejected', 'Rejected') },
+    { value: 'rolled_back', label: t('mapping.status_rolled_back', 'Rolled back') },
   ];
 
   // ── Group decisions: merge rows when same source_value + same target_concept_id ──
@@ -1831,7 +1856,24 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
     return groups;
   }, [items, sortKey, sortDir]);
 
+  // A row is "syncable" when the CDM already holds exactly its target (and it isn't synced yet)
+  const isSyncable = (r: GroupedRow) =>
+    !r.synced && r.cdm_concept_ids.length === 1 && r.target_concept_id != null && r.cdm_concept_ids[0] === r.target_concept_id;
+  const syncableSvs = useMemo(
+    () => Array.from(new Set(groupedRows.filter(isSyncable).map(g => g.source_value))),
+    [groupedRows],
+  );
+  const allSyncableSelected = syncableSvs.length > 0 && syncableSvs.every(sv => syncSel.has(sv));
+  const toggleAllSyncable = () => setSyncSel(allSyncableSelected ? new Set() : new Set(syncableSvs));
+
   const columns: Column<GroupedRow>[] = [
+    { key: 'sel', width: 36,
+      title: syncableSvs.length > 0
+        ? <Checkbox checked={allSyncableSelected} onChange={toggleAllSyncable} />
+        : '',
+      render: (_: any, r: GroupedRow) => isSyncable(r)
+        ? <Checkbox checked={syncSel.has(r.source_value)} onChange={() => toggleSyncSel(r.source_value)} />
+        : null },
     { title: '', key: 'status', width: 64,
       render: (_: any, r: GroupedRow) => {
         const hasConsensus = r.status !== 'single' && r.users.length > 1;
@@ -1900,6 +1942,13 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
         const canRollback = alreadyMine || isAdmin;
         return (
           <div className="flex items-center gap-1">
+            {!r.synced && isSyncable(r) && canWriteCdm && (
+              <Tooltip title={t('mapping.mark_synced', 'Mark synced')}>
+                <Button size="small" variant="link" onClick={() => handleSyncRow(r)}>
+                  <Database className="h-4 w-4 text-text-dim" />
+                </Button>
+              </Tooltip>
+            )}
             {r.synced && canWriteCdm && (
               <Tooltip title={t('mapping.unsync', 'Unmark synced')}>
                 <Button size="small" variant="link" onClick={() => handleUnsyncRow(r)}>
@@ -1958,9 +2007,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             value={filterAction}
             onChange={v => { setFilterAction(v); setPage(1); }}
             options={actionOptions}
-            className="w-full sm:w-[120px]"
+            className="w-full sm:w-[150px]"
             allowClear
-            placeholder="All actions"
+            placeholder={t('mapping.all_statuses', 'All statuses')}
           />
           <Select
             value={filterUser}
@@ -1989,9 +2038,9 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
               <span className="text-xs">{t('mapping.hide_synced', 'Hide synced')}</span>
             </Checkbox>
             {canWriteCdm && (
-              <Tooltip title={t('mapping.mark_synced_hint', 'Mark decisions already in the CDM with the same target as synced')}>
-                <Button size="small" icon={<Database className="h-4 w-4" />} loading={syncing} onClick={handleMarkSynced}>
-                  {t('mapping.mark_synced', 'Mark synced')}
+              <Tooltip title={t('mapping.mark_synced_hint', 'Select rows already in the CDM with the same target, then mark them synced')}>
+                <Button size="small" icon={<Database className="h-4 w-4" />} loading={syncing} disabled={syncSel.size === 0} onClick={handleMarkSynced}>
+                  {t('mapping.mark_synced', 'Mark synced')}{syncSel.size > 0 ? ` (${syncSel.size})` : ''}
                 </Button>
               </Tooltip>
             )}
@@ -2026,6 +2075,15 @@ function MappingHistoryTab({ cdmName, refreshKey }: { cdmName: string; refreshKe
             <Statistic title={t('mapping.impacted_rows', 'Impacted Rows')} value={applyPreview.impacted_rows.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
             <Statistic title={t('mapping.impacted_persons', 'Impacted Persons')} value={applyPreview.impacted_persons.toLocaleString()} valueStyle={{ color: '#ef4444' }} />
           </div>
+
+          {(applyPreview.n_redundant ?? 0) > 0 && (
+            <div className="mt-2 text-xs text-text-muted">
+              {t('mapping.redundant_excluded', {
+                n: applyPreview.n_redundant,
+                defaultValue: '{{n}} code(s) already in the CDM with the same target — excluded from preview & export',
+              })}
+            </div>
+          )}
 
           <MappingWarningsPanel preview={applyPreview} />
 

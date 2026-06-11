@@ -1175,6 +1175,34 @@ def _compute_mapping_warnings(conn, full_table: str, sv_col: str, concept_col: s
     return {"items": items, "counts": counts, "flagged": flagged}
 
 
+def _redundant_svs_live(conn, full_table: str, sv_col: str, concept_col: str, decisions: list) -> set:
+    """Source values already correctly in the CDM (mapped to exactly their single
+    consensus target) or already marked synced. Nothing to push or re-export — the
+    CDM already holds them — so they are dropped from preview and export."""
+    redundant = {d.source_value for d in decisions if getattr(d, "synced", 0)}
+    targets: dict[str, set] = {}
+    for d in decisions:
+        targets.setdefault(d.source_value, set()).add(d.target_concept_id)
+    svs = list(targets.keys())
+    cdm_ids: dict[str, set] = {}
+    if svs:
+        from psycopg2.extras import DictCursor
+        with conn.cursor(cursor_factory=DictCursor) as cur:
+            cur.execute(
+                f"SELECT {sv_col} AS sv, {concept_col} AS cid FROM {full_table} "
+                f"WHERE {sv_col} = ANY(%(svs)s) AND {concept_col} IS NOT NULL AND {concept_col} <> 0 "
+                f"GROUP BY {sv_col}, {concept_col}",
+                {"svs": svs},
+            )
+            for row in cur.fetchall():
+                cdm_ids.setdefault(row["sv"], set()).add(row["cid"])
+    for sv, tgts in targets.items():
+        ids = cdm_ids.get(sv, set())
+        if len(ids) == 1 and len(tgts) == 1 and ids == tgts:
+            redundant.add(sv)
+    return redundant
+
+
 @router.post("/apply")
 def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depends(get_db)):
     """
@@ -1506,7 +1534,7 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
     }
     if not decisions or req.domain not in DOMAIN_CONFIG:
         return {"total_decisions": 0, "impacted_rows": 0, "impacted_persons": 0,
-                "warnings": _EMPTY_WARNINGS, "n_total_codes": 0, "n_pushable_codes": 0}
+                "warnings": _EMPTY_WARNINGS, "n_total_codes": 0, "n_pushable_codes": 0, "n_redundant": 0}
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
     schema = _get_schema(db, cdm)
@@ -1516,19 +1544,26 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
     sv_col = safe_identifier(cfg["source_value"])
     concept_col = safe_identifier(cfg["concept_id"])
 
-    source_values = [d.source_value for d in decisions]
-
     try:
         from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(f"""
-                SELECT COUNT(*) AS n_rows, COUNT(DISTINCT person_id) AS n_persons
-                FROM {full_table}
-                WHERE {sv_col} = ANY(%(svs)s)
-            """, {"svs": source_values})
-            row = cur.fetchone()
-        # Compile warnings (same set that drives the push exclusion) while connected
-        warnings = _compute_mapping_warnings(conn, full_table, sv_col, concept_col, decisions)
+        # Drop codes already correctly in the CDM (synced / same target) — nothing to push or export
+        redundant = _redundant_svs_live(conn, full_table, sv_col, concept_col, decisions)
+        effective = [d for d in decisions if d.source_value not in redundant]
+        source_values = [d.source_value for d in effective]
+        if not source_values:
+            row = None
+            warnings = _compute_mapping_warnings(conn, full_table, sv_col, concept_col, [])
+        else:
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                cur.execute(f"""
+                    SELECT COUNT(*) AS n_rows, COUNT(DISTINCT person_id) AS n_persons
+                    FROM {full_table}
+                    WHERE {sv_col} = ANY(%(svs)s)
+                """, {"svs": source_values})
+                row = cur.fetchone()
+            # Warnings on the effective (non-redundant) set: already-mapped now means
+            # "mapped to a DIFFERENT target" (the same-target ones were dropped as redundant).
+            warnings = _compute_mapping_warnings(conn, full_table, sv_col, concept_col, effective)
     except Exception as e:
         logger.exception("Mapping preview query failed")
         raise HTTPException(status_code=500, detail="An internal error occurred during preview")
@@ -1537,12 +1572,13 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
 
     n_total_codes = len(set(source_values))
     return {
-        "total_decisions": len(decisions),
+        "total_decisions": len(effective),
         "impacted_rows": row["n_rows"] if row else 0,
         "impacted_persons": row["n_persons"] if row else 0,
         "warnings": {"items": warnings["items"], "counts": warnings["counts"]},
         "n_total_codes": n_total_codes,
         "n_pushable_codes": n_total_codes - warnings["counts"]["total_flagged"],
+        "n_redundant": len(redundant),
     }
 
 
@@ -1601,30 +1637,42 @@ def export_stcm(cdm_name: str, domain: str, request: Request, db: Session = Depe
 
     source_vocab = _DOMAIN_TO_SOURCE_VOCAB.get(domain, "")
 
-    # Lookup concept_code and concept_class_id from CDM (not stored in MappingDecision)
+    # Lookup concept_code/class from CDM + drop codes already correctly in the CDM
+    # (synced / same single target) — those need neither push nor re-export.
     concept_info: dict[int, dict] = {}
+    redundant: set = set()
     target_ids = [d.target_concept_id for d in decisions if d.target_concept_id]
-    if target_ids:
+    if decisions:
         try:
             cdm_obj, conn = _get_cdm_conn(db, cdm_name)
             schema = _get_schema(db, cdm_obj)
             try:
                 from psycopg2.extras import DictCursor
-                with conn.cursor(cursor_factory=DictCursor) as cur:
-                    cur.execute(
-                        f"SELECT concept_id, concept_code, concept_class_id "
-                        f"FROM {schema.t('concept')} WHERE concept_id = ANY(%(ids)s)",
-                        {"ids": target_ids},
-                    )
-                    for row in cur.fetchall():
-                        concept_info[row["concept_id"]] = {
-                            "concept_code": row["concept_code"],
-                            "concept_class_id": row["concept_class_id"],
-                        }
+                if target_ids:
+                    with conn.cursor(cursor_factory=DictCursor) as cur:
+                        cur.execute(
+                            f"SELECT concept_id, concept_code, concept_class_id "
+                            f"FROM {schema.t('concept')} WHERE concept_id = ANY(%(ids)s)",
+                            {"ids": target_ids},
+                        )
+                        for row in cur.fetchall():
+                            concept_info[row["concept_id"]] = {
+                                "concept_code": row["concept_code"],
+                                "concept_class_id": row["concept_class_id"],
+                            }
+                if domain in DOMAIN_CONFIG:
+                    cfg = get_domain_config(conn, schema, domain)
+                    full_table = f"{schema.t(safe_identifier(cfg['table']))}"
+                    sv_col = safe_identifier(cfg["source_value"])
+                    concept_col = safe_identifier(cfg["concept_id"])
+                    redundant = _redundant_svs_live(conn, full_table, sv_col, concept_col, decisions)
             finally:
                 conn.close()
         except Exception:
-            logger.warning("Failed to lookup target concept info for export", exc_info=True)
+            logger.warning("Failed export CDM lookups", exc_info=True)
+
+    if redundant:
+        decisions = [d for d in decisions if d.source_value not in redundant]
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -1681,11 +1729,67 @@ def export_stcm(cdm_name: str, domain: str, request: Request, db: Session = Depe
 
 # ──── 5.6 History & Audit ────
 
+def _status_decision_ids(db: Session, cdm_name: str, domain: str | None, status: str) -> list[int] | None:
+    """Decision ids matching a *displayed* status (consensus-aware). Returns None for
+    statuses that map directly onto the raw action column (rejected / rolled_back).
+
+    Display rule: an approved/modified decision shows as 'pending' until 2+ distinct
+    users approve the same (source_value → target); only then does it show as
+    'approved' / 'modified'. So filtering must account for consensus, not the raw action.
+    """
+    if status not in ("pending", "approved", "modified"):
+        return None
+    from sqlalchemy import distinct
+    cons_q = db.query(MappingDecision.source_value, MappingDecision.target_concept_id).filter(
+        MappingDecision.cdm_name == cdm_name,
+        MappingDecision.action.in_(["approved", "modified"]),
+        MappingDecision.target_concept_id.isnot(None),
+    )
+    if domain:
+        cons_q = cons_q.filter(MappingDecision.domain == domain)
+    consensus = {
+        (sv, tid) for sv, tid in
+        cons_q.group_by(MappingDecision.source_value, MappingDecision.target_concept_id)
+              .having(func.count(distinct(MappingDecision.user)) >= 2).all()
+    }
+    cand_q = db.query(
+        MappingDecision.id, MappingDecision.source_value,
+        MappingDecision.target_concept_id, MappingDecision.action,
+    ).filter(
+        MappingDecision.cdm_name == cdm_name,
+        MappingDecision.action.in_(["approved", "modified"]),
+    )
+    if domain:
+        cand_q = cand_q.filter(MappingDecision.domain == domain)
+    ids: list[int] = []
+    for cid, sv, tid, act in cand_q.all():
+        cons = (sv, tid) in consensus
+        if status == "pending" and not cons:
+            ids.append(cid)
+        elif status == "approved" and cons and act == "approved":
+            ids.append(cid)
+        elif status == "modified" and cons and act == "modified":
+            ids.append(cid)
+    return ids
+
+
+def _apply_status_filter(query, db: Session, cdm_name: str, domain: str | None, status: str | None):
+    """Filter a MappingDecision query by displayed status (consensus-aware)."""
+    if not status:
+        return query
+    if status in ("rejected", "rolled_back"):
+        return query.filter(MappingDecision.action == status)
+    ids = _status_decision_ids(db, cdm_name, domain, status)
+    if ids is not None:
+        return query.filter(MappingDecision.id.in_(ids or [-1]))
+    return query
+
+
 @router.get("/history/{cdm_name}")
 def mapping_history(
     cdm_name: str,
     domain: str | None = None,
-    action: str | None = None,
+    status: str | None = None,
     user_filter: str | None = Query(default=None, alias="user"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
@@ -1699,8 +1803,7 @@ def mapping_history(
 
     if domain:
         query = query.filter(MappingDecision.domain == domain)
-    if action:
-        query = query.filter(MappingDecision.action == action)
+    query = _apply_status_filter(query, db, cdm_name, domain, status)
     if user_filter:
         query = query.filter(MappingDecision.user == user_filter)
     if hide_synced:
@@ -1836,7 +1939,7 @@ def unmark_synced(req: SyncRequest, request: Request, db: Session = Depends(get_
 def export_mapping_history(
     cdm_name: str,
     domain: str | None = None,
-    action: str | None = None,
+    status: str | None = None,
     user_filter: str | None = Query(default=None, alias="user"),
     db: Session = Depends(get_db),
 ):
@@ -1844,8 +1947,7 @@ def export_mapping_history(
     query = db.query(MappingDecision).filter(MappingDecision.cdm_name == cdm_name)
     if domain:
         query = query.filter(MappingDecision.domain == domain)
-    if action:
-        query = query.filter(MappingDecision.action == action)
+    query = _apply_status_filter(query, db, cdm_name, domain, status)
     if user_filter:
         query = query.filter(MappingDecision.user == user_filter)
     query = query.order_by(desc(MappingDecision.created_at))

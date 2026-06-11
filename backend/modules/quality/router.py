@@ -791,80 +791,19 @@ def export_csv(snapshot_id: int, table_type: str, db: Session = Depends(get_db))
     )
 
 
-@router.get("/timeline/{cdm_name}")
-def get_timeline(
+@router.get("/analyzed-domains/{cdm_name}")
+def get_analyzed_domains(
     cdm_name: str,
-    domain: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """
-    Return KPI evolution across all snapshots for a CDM.
-    If domain is specified, returns timeline for that domain only.
-    Otherwise returns a summary across all domains.
-    """
-    query = (
-        db.query(AnalysisSnapshot)
+    """Return the list of domains that have at least one analysis snapshot for a CDM."""
+    rows = (
+        db.query(AnalysisSnapshot.domain)
         .filter(AnalysisSnapshot.cdm_name == cdm_name)
+        .distinct()
+        .all()
     )
-    if domain:
-        query = query.filter(AnalysisSnapshot.domain == domain)
-
-    snapshots = query.order_by(AnalysisSnapshot.domain, AnalysisSnapshot.version).all()
-
-    if not snapshots:
-        return {"cdm_name": cdm_name, "timelines": {}}
-
-    timelines: dict[str, list] = {}
-    for s in snapshots:
-        d = s.domain
-        if d not in timelines:
-            timelines[d] = []
-        point = _extract_kpis(s)
-        timelines[d].append(point)
-
-    return {"cdm_name": cdm_name, "timelines": timelines}
-
-
-def _extract_kpis(snapshot: AnalysisSnapshot) -> dict:
-    """Extract key KPIs from a snapshot for timeline display."""
-    r = snapshot.results or {}
-    point = {
-        "snapshot_id": snapshot.id,
-        "version": snapshot.version,
-        "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
-    }
-
-    domain = r.get("domain", snapshot.domain)
-
-    if domain == "Dashboard":
-        summary = r.get("summary", {})
-        point["total_persons"] = summary.get("total_persons")
-        domains_list = summary.get("domains", [])
-        total_records = sum(d.get("total_records", 0) for d in domains_list)
-        avg_mapping = None
-        mapping_vals = [d.get("pct_terms_mapped") for d in domains_list if d.get("pct_terms_mapped") is not None]
-        if mapping_vals:
-            avg_mapping = round(sum(mapping_vals) / len(mapping_vals), 1)
-        point["total_records"] = total_records
-        point["avg_pct_terms_mapped"] = avg_mapping
-
-    elif domain == "Person":
-        ps = r.get("achilles_like", {}).get("person_summary", {})
-        point["total_persons"] = ps.get("total_persons")
-
-    elif domain == "ObservationPeriod":
-        pass
-
-    else:
-        g = r.get("achilles_like", {}).get("global", {})
-        point["total_records"] = g.get("total_rows")
-        point["distinct_persons"] = g.get("distinct_persons")
-        mt = r.get("mapping", {}).get("terms", {})
-        point["pct_terms_mapped"] = mt.get("pct_terms_mapped")
-        mr = r.get("mapping", {}).get("rows", {})
-        point["pct_rows_mapped"] = mr.get("pct_rows_mapped")
-
-    return point
+    return {"cdm_name": cdm_name, "domains": [r[0] for r in rows]}
 
 
 @router.get("/report/comparison")

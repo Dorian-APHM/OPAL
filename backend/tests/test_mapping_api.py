@@ -250,19 +250,37 @@ def test_history_filter_by_domain(client, cdm_name):
     assert resp.json()["items"][0]["domain"] == "Condition"
 
 
-def test_history_filter_by_action(client, cdm_name):
+def test_history_filter_by_status(client, cdm_name):
+    """Status filter is consensus-aware: approved-without-2-users shows as 'pending',
+    not 'approved'."""
+    # E11: approved by ONE user → displays as pending
     client.post("/api/mapping/decide", json={
         "cdm_name": cdm_name, "domain": "Condition",
         "source_value": "E11", "action": "approved", "target_concept_id": 201826,
-    })
+    }, headers={"X-Test-Username": "u1"})
+    # E12: approved by TWO users → consensus → displays as approved
+    decide_e12 = {"cdm_name": cdm_name, "domain": "Condition",
+                  "source_value": "E12", "action": "approved", "target_concept_id": 201827}
+    client.post("/api/mapping/decide", json=decide_e12, headers={"X-Test-Username": "u1"})
+    client.post("/api/mapping/decide", json=decide_e12, headers={"X-Test-Username": "u2"})
+    # E13: rejected
     client.post("/api/mapping/decide", json={
         "cdm_name": cdm_name, "domain": "Condition",
         "source_value": "E13", "action": "rejected",
     })
 
-    resp = client.get(f"/api/mapping/history/{cdm_name}", params={"action": "rejected"})
-    assert resp.json()["total"] == 1
-    assert resp.json()["items"][0]["action"] == "rejected"
+    rejected = client.get(f"/api/mapping/history/{cdm_name}", params={"status": "rejected"})
+    assert {it["source_value"] for it in rejected.json()["items"]} == {"E13"}
+
+    # pending = approved/modified WITHOUT consensus → E11 only
+    pending = client.get(f"/api/mapping/history/{cdm_name}", params={"status": "pending"})
+    sv_pending = {it["source_value"] for it in pending.json()["items"]}
+    assert "E11" in sv_pending and "E12" not in sv_pending and "E13" not in sv_pending
+
+    # approved = consensus only → E12 only, NOT the pending E11
+    approved = client.get(f"/api/mapping/history/{cdm_name}", params={"status": "approved"})
+    sv_approved = {it["source_value"] for it in approved.json()["items"]}
+    assert "E12" in sv_approved and "E11" not in sv_approved
 
 
 def test_history_pagination(client, cdm_name):
@@ -485,6 +503,33 @@ def test_mark_and_unmark_synced(client, cdm_name):
     assert u.json()["unmarked"] == 1
     h2 = client.get(f"/api/mapping/history/{cdm_name}", params={"hide_synced": "true"})
     assert "I10" in {it["source_value"] for it in h2.json()["items"]}
+
+
+def test_redundant_svs_live():
+    """Codes already correctly in the CDM (same single target) or synced are redundant
+    → dropped from preview/export. Divergent / 1→N / unmapped are NOT redundant."""
+    from types import SimpleNamespace
+    from modules.mapping.router import _redundant_svs_live
+    from tests.omop_mock import make_omop_conn
+
+    decisions = [
+        SimpleNamespace(source_value="SAME", target_concept_id=500, synced=0),     # CDM=500 → redundant
+        SimpleNamespace(source_value="SYNCED", target_concept_id=600, synced=1),   # flag → redundant
+        SimpleNamespace(source_value="DIFF", target_concept_id=700, synced=0),     # CDM=800 → keep
+        SimpleNamespace(source_value="MULTI", target_concept_id=900, synced=0),    # CDM={900,901} → keep
+        SimpleNamespace(source_value="UNMAPPED", target_concept_id=1000, synced=0),# CDM=∅ → keep
+    ]
+    conn = make_omop_conn([
+        [
+            {"sv": "SAME", "cid": 500},
+            {"sv": "SYNCED", "cid": 600},
+            {"sv": "DIFF", "cid": 800},
+            {"sv": "MULTI", "cid": 900},
+            {"sv": "MULTI", "cid": 901},
+        ],
+    ])
+    redundant = _redundant_svs_live(conn, "cdm.condition_occurrence", "condition_source_value", "condition_concept_id", decisions)
+    assert redundant == {"SAME", "SYNCED"}
 
 
 # ──── Export tests ────

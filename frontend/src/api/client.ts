@@ -250,10 +250,8 @@ export const qualityApi = {
     api.post(`/quality/analyze/cancel/${analysisId}`),
   activeAnalyses: () =>
     api.get<{ active: { analysis_id: string; cancelled: boolean; cdm_name: string; type: string; domains: string[]; completed: number; total: number; domain_status: { domain: string; status: string }[]; current_step?: string }[] }>('/quality/analyze/active'),
-  timeline: (cdmName: string, domain?: string) =>
-    api.get<{ cdm_name: string; timelines: Record<string, any[]> }>(
-      `/quality/timeline/${cdmName}`, { params: domain ? { domain } : {} }
-    ),
+  analyzedDomains: (cdmName: string) =>
+    api.get<{ cdm_name: string; domains: string[] }>(`/quality/analyzed-domains/${cdmName}`),
   reportUrl: (cdmName: string, lang: string = 'en') =>
     `/api/quality/report/${cdmName}?lang=${lang}`,
   comparisonReportUrl: (cdmNameA: string, cdmNameB: string, lang: string = 'en', domain?: string) =>
@@ -418,17 +416,17 @@ export const mappingApi = {
     ),
   exportStcmUrl: (cdmName: string, domain: string) =>
     `/api/mapping/apply/export/${cdmName}/${domain}`,
-  exportHistoryUrl: (cdmName: string, domain?: string, action?: string, user?: string) => {
+  exportHistoryUrl: (cdmName: string, domain?: string, status?: string, user?: string) => {
     const p = new URLSearchParams();
     if (domain) p.set('domain', domain);
-    if (action) p.set('action', action);
+    if (status) p.set('status', status);
     if (user) p.set('user', user);
     const qs = p.toString();
     return `/api/mapping/history/${cdmName}/export${qs ? `?${qs}` : ''}`;
   },
-  history: (cdmName: string, domain?: string, action?: string, page?: number, pageSize?: number, user?: string, sortBy?: string | null, sortDir?: 'asc' | 'desc', hideSynced?: boolean) =>
+  history: (cdmName: string, domain?: string, status?: string, page?: number, pageSize?: number, user?: string, sortBy?: string | null, sortDir?: 'asc' | 'desc', hideSynced?: boolean) =>
     api.get<{ total: number; page: number; total_pages: number; users: string[]; items: MappingDecisionEntry[] }>(
-      `/mapping/history/${cdmName}`, { params: { domain: domain || '', action: action || '', user: user || '', page: page || 1, page_size: pageSize || 50, sort_by: sortBy || '', sort_dir: sortDir || 'asc', hide_synced: hideSynced || false } }
+      `/mapping/history/${cdmName}`, { params: { domain: domain || '', status: status || '', user: user || '', page: page || 1, page_size: pageSize || 50, sort_by: sortBy || '', sort_dir: sortDir || 'asc', hide_synced: hideSynced || false } }
     ),
   markSynced: (cdmName: string, domain?: string, sourceValues?: string[]) =>
     api.post<{ marked: number }>('/mapping/decisions/mark-synced', { cdm_name: cdmName, domain: domain || null, source_values: sourceValues || null }),

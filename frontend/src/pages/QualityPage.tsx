@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionState } from '../hooks/useSessionState';
 import {
-  Play, Zap, ArrowLeftRight, History, Download, LineChart,
+  Play, Zap, ArrowLeftRight, History, Download,
   CheckCircle, StopCircle, LayoutDashboard, ShieldCheck,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +10,6 @@ import { Card, Button, Select, Switch, Tag, Progress, Spinner, Alert, Tabs, Tabl
 import type { Column } from '../components/ui';
 import AnalysisResults from '../components/quality/AnalysisResults';
 import ComparisonView from '../components/quality/ComparisonView';
-import SnapshotTimeline from '../components/quality/SnapshotTimeline';
 import { useNotifDots } from '../hooks/useNotifDots';
 import type { SnapshotMeta, BatchProgressEvent } from '../types';
 
@@ -370,7 +369,6 @@ export default function QualityPage({ selectedCdm }: Props) {
   const [compareMode, setCompareMode] = useSessionState('quality:compareMode', false);
   const [compareCdm, setCompareCdm] = useSessionState<string | null>('quality:compareCdm', null);
   const [snapshots, setSnapshots] = useSessionState('quality:snapshots', [] as SnapshotMeta[]);
-  const [showTimeline, setShowTimeline] = useSessionState('quality:showTimeline', false);
   const [analyzedDomains, setAnalyzedDomains] = useSessionState('quality:analyzedDomains', new Set<string>());
   const streamAbortRef = useRef<AbortController | null>(null);
   const analysisIdRef = useRef<string | null>(null);
@@ -399,8 +397,8 @@ export default function QualityPage({ selectedCdm }: Props) {
       const notif = (e as CustomEvent).detail;
       if (!notif || notif.type !== 'quality_done') return;
       if (selectedCdm && notif.link && notif.link.includes(`cdm=${selectedCdm}`)) {
-        qualityApi.timeline(selectedCdm).then((r) => {
-          if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines ?? {})));
+        qualityApi.analyzedDomains(selectedCdm).then((r) => {
+          if (mountedRef.current) setAnalyzedDomains(new Set(r.data.domains ?? []));
         }).catch(() => {});
         if (selectedDomain) {
           loadLatestSnapshot();
@@ -420,8 +418,8 @@ export default function QualityPage({ selectedCdm }: Props) {
 
   useEffect(() => {
     if (!selectedCdm) { setAnalyzedDomains(new Set()); return; }
-    qualityApi.timeline(selectedCdm).then((res) => {
-      setAnalyzedDomains(new Set(Object.keys(res.data.timelines ?? {})));
+    qualityApi.analyzedDomains(selectedCdm).then((res) => {
+      setAnalyzedDomains(new Set(res.data.domains ?? []));
     }).catch(() => setAnalyzedDomains(new Set()));
   }, [selectedCdm]);
 
@@ -497,9 +495,9 @@ export default function QualityPage({ selectedCdm }: Props) {
             // Toast is handled globally by TopNav via WebSocket notification
             // Refresh analyzed domains
             if (selectedCdm) {
-              qualityApi.timeline(selectedCdm).then((r) => {
-                if (mountedRef.current) setAnalyzedDomains(new Set(Object.keys(r.data.timelines ?? {})));
-              }).catch(() => toast.error(t('quality.timeline_failed', 'Failed to refresh timeline')));
+              qualityApi.analyzedDomains(selectedCdm).then((r) => {
+                if (mountedRef.current) setAnalyzedDomains(new Set(r.data.domains ?? []));
+              }).catch(() => toast.error(t('quality.load_failed', 'Failed to check analysis status')));
             }
             // Reload current snapshot if viewing an analyzed domain
             if (selectedDomain) {
@@ -746,14 +744,6 @@ export default function QualityPage({ selectedCdm }: Props) {
         </h3>
         <div className="flex items-center gap-2 flex-wrap">
           <Button
-            icon={<LineChart className="h-4 w-4" />}
-            variant={showTimeline ? 'primary' : 'default'}
-            onClick={() => setShowTimeline(!showTimeline)}
-            size="small"
-          >
-            {t('quality.timeline_title')}
-          </Button>
-          <Button
             icon={<Download className="h-4 w-4" />}
             size="small"
             onClick={() => authDownload(
@@ -889,12 +879,6 @@ export default function QualityPage({ selectedCdm }: Props) {
 
         {/* Main content */}
         <div className="w-full lg:col-span-10">
-          {showTimeline && (
-            <div className="mb-4">
-              <SnapshotTimeline selectedCdm={selectedCdm} />
-            </div>
-          )}
-
           {loading && (
             <div className="text-center py-16">
               <Spinner size="large" />
