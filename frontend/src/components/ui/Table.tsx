@@ -24,6 +24,8 @@ interface TableProps<T> {
   pagination?: false | { pageSize: number; current?: number; total?: number; onChange?: (page: number) => void };
   serverSort?: { key: string | null; dir: 'asc' | 'desc'; onChange: (key: string, dir: 'asc' | 'desc') => void };
   className?: string;
+  /** Fill the parent's height: the body scrolls inside (sticky header), instead of growing the page */
+  fillHeight?: boolean;
 }
 
 function getNestedValue(obj: any, path: string): any {
@@ -42,6 +44,7 @@ export function Table<T extends Record<string, any>>({
   pagination,
   serverSort,
   className = '',
+  fillHeight = false,
 }: TableProps<T>) {
   const [internalSortKey, setInternalSortKey] = useState<string | null>(null);
   const [internalSortDir, setInternalSortDir] = useState<'asc' | 'desc'>('asc');
@@ -98,8 +101,8 @@ export function Table<T extends Record<string, any>>({
   const px = size === 'small' ? 'px-3' : 'px-4';
 
   return (
-    <div className={`w-full ${className}`}>
-      <div className="overflow-auto" style={scroll?.y ? { maxHeight: scroll.y } : undefined}>
+    <div className={`w-full ${fillHeight ? 'h-full min-h-0 flex flex-col' : ''} ${className}`}>
+      <div className={`overflow-auto ${fillHeight ? 'flex-1 min-h-0' : ''}`} style={scroll?.y ? { maxHeight: scroll.y } : undefined}>
         <table className="w-full border-collapse" role="table">
           <thead>
             <tr>
