@@ -56,6 +56,41 @@ class OracleDialect(Dialect):
         except Exception:
             pass
 
+    # ── metadata / streaming (best-effort) ──────────────────────────────────
+    # Oracle has no information_schema; use the ALL_* data-dictionary views.
+    # OMOP-on-Oracle object names are typically stored upper-cased, so match
+    # case-insensitively.
+    def table_exists(self, conn, schema, table) -> bool:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM all_tables "
+                "WHERE owner = UPPER(:1) AND table_name = UPPER(:2) AND ROWNUM = 1",
+                [schema, table],
+            )
+            return cur.fetchone() is not None
+
+    def column_exists(self, conn, schema, table, column) -> bool:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM all_tab_columns "
+                "WHERE owner = UPPER(:1) AND table_name = UPPER(:2) AND column_name = UPPER(:3) "
+                "AND ROWNUM = 1",
+                [schema, table, column],
+            )
+            return cur.fetchone() is not None
+
+    def disable_statement_timeout(self, conn) -> None:
+        try:
+            conn.call_timeout = 0  # 0 == no timeout
+        except Exception:
+            pass
+
+    def stream_cursor(self, conn, sql, itersize):
+        cur = conn.cursor()
+        cur.arraysize = itersize
+        cur.execute(sql)
+        return DictRowCursor(cur)
+
     # ── SQL fragments (best-effort) ─────────────────────────────────────────
     def ilike(self, col_sql: str, param_ph: str) -> str:
         return f"LOWER({col_sql}) LIKE LOWER({param_ph})"

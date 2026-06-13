@@ -104,6 +104,30 @@ class Dialect:
         except Exception:
             pass
 
+    # ── metadata / streaming (used by the source-value cache builder) ───────
+    def table_exists(self, conn, schema: str, table: str) -> bool:
+        """Whether ``schema.table`` exists in the CDM. Identifiers are caller-
+        validated (safe_identifier) but passed as *values* to the metadata query."""
+        raise NotImplementedError
+
+    def column_exists(self, conn, schema: str, table: str, column: str) -> bool:
+        raise NotImplementedError
+
+    def disable_statement_timeout(self, conn) -> None:
+        """Remove the per-statement timeout for a long full-table aggregation."""
+        return None
+
+    def stream_cursor(self, conn, sql: str, itersize: int):
+        """Return a cursor that has executed ``sql`` and streams dict rows in
+        batches via ``fetchmany(itersize)``. Caller must ``close()`` it."""
+        raise NotImplementedError
+
+    def quote_ident(self, name: str) -> str:
+        """Quote a caller-validated identifier for inline SQL. PostgreSQL keeps
+        names unquoted (safe_identifier already restricts the charset), so the
+        reference engine's SQL is unchanged."""
+        return name
+
     # ── SQL fragment helpers (extension point) ──────────────────────────────
     # These return engine-correct SQL strings. PostgreSQL returns its native
     # idioms so migrated builders stay identical to today on PG.

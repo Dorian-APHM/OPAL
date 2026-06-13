@@ -63,6 +63,38 @@ class SqlServerDialect(Dialect):
         except Exception:
             pass
 
+    # ── metadata / streaming (best-effort) ──────────────────────────────────
+    # SQL Server supports INFORMATION_SCHEMA; paramstyle is qmark (?).
+    def table_exists(self, conn, schema, table) -> bool:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = ? AND table_name = ?",
+                (schema, table),
+            )
+            return cur.fetchone() is not None
+
+    def column_exists(self, conn, schema, table, column) -> bool:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = ? AND table_name = ? AND column_name = ?",
+                (schema, table, column),
+            )
+            return cur.fetchone() is not None
+
+    def disable_statement_timeout(self, conn) -> None:
+        try:
+            conn.timeout = 0  # 0 == no query timeout
+        except Exception:
+            pass
+
+    def stream_cursor(self, conn, sql, itersize):
+        cur = conn.cursor()
+        cur.arraysize = itersize
+        cur.execute(sql)
+        return DictRowCursor(cur)
+
     # ── SQL fragments (best-effort) ─────────────────────────────────────────
     def ilike(self, col_sql: str, param_ph: str) -> str:
         return f"LOWER({col_sql}) LIKE LOWER({param_ph})"

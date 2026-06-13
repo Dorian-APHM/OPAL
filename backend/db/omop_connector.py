@@ -152,6 +152,11 @@ class PooledConnection:
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
+    @property
+    def dialect(self):
+        """The Dialect backing this connection (PostgreSQL when unknown)."""
+        return self._dialect if self._dialect is not None else get_dialect(DEFAULT_DB_TYPE)
+
     # -- close → return to pool --------------------------------------------
     def close(self):
         if self._closed:

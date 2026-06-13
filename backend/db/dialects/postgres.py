@@ -38,6 +38,38 @@ class PostgresDialect(Dialect):
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = %s", (ms,))
 
+    # ── metadata / streaming (kept identical to the historical cache builder) ─
+    def table_exists(self, conn, schema, table) -> bool:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = %s AND table_name = %s LIMIT 1",
+                (schema, table),
+            )
+            return cur.fetchone() is not None
+
+    def column_exists(self, conn, schema, table, column) -> bool:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
+                (schema, table, column),
+            )
+            return cur.fetchone() is not None
+
+    def disable_statement_timeout(self, conn) -> None:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 0")
+
+    def stream_cursor(self, conn, sql, itersize):
+        # Server-side (named) cursor: streams the GROUP-BY result in batches
+        # instead of materialising a whole clinical table in client memory.
+        import uuid
+        cur = conn.cursor(name=f"svcache_{uuid.uuid4().hex}", cursor_factory=RealDictCursor)
+        cur.itersize = itersize
+        cur.execute(sql)
+        return cur
+
     # ── SQL fragments (native PostgreSQL) ───────────────────────────────────
     def unaccent(self, expr: str) -> str:
         return f"unaccent({expr})"
