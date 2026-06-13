@@ -114,11 +114,31 @@ aucun `psycopg2.sql` ni `RealDictCursor` dans le module) : `/search`, `/domains`
 (table qualifiée), `dialect.ilike/cast/limit_offset/in_list/quote_ident/execute`.
 
 ### Harnais d'intégration sur vraie base — `tests/test_integration_omop.py`
-Exécute le **vrai SQL** des endpoints contre un PostgreSQL OMOP réel (seed
-`tests/fixtures/omop_mini_seed.sql`), activé par `OPAL_ITEST_OMOP_HOST`. C'est la
-preuve de non-régression : on lance la suite **avant et après** chaque port et on
-exige le même résultat. (Hôte = IP non-loopback car l'API bloque loopback/SSRF.)
+Exécute le **vrai SQL** des endpoints contre un OMOP réel, activé par
+`OPAL_ITEST_OMOP_HOST` (+ `OPAL_ITEST_OMOP_DBTYPE`, défaut `postgresql`). Seeds :
+`tests/fixtures/omop_mini_seed.sql` (PostgreSQL) et
+`tests/fixtures/omop_mini_seed_oracle.sql` (Oracle). C'est la preuve de
+non-régression : on lance la suite **avant et après** chaque port et on exige le
+même résultat. (Hôte = IP non-loopback car l'API bloque loopback/SSRF.)
 C'est le garde-fou à réutiliser pour porter les modules restants.
+
+### Validation Oracle des endpoints portés — FAIT (vrai Oracle Free 23)
+Le harnais a été exécuté sur **Oracle** (`db_type=oracle`, image
+`container-registry.oracle.com/database/free`) : les 17 tests passent, comme sur
+PostgreSQL (qui reste à 17/17 + suite unitaire verte). En plus du case-folding des
+identifiants déjà géré par `quote_ident` (non quoté → Oracle remonte en majuscules),
+trois écarts de portabilité, invisibles tant qu'on n'exécutait que sur PG, ont dû
+être corrigés :
+
+1. **Casse des colonnes en sortie** — `DictRowCursor` normalise les clés en
+   minuscules (Oracle remonte les noms de colonnes en majuscules), pour que les
+   lecteurs gardent l'accès `row["concept_id"]` comme avec `RealDictCursor`.
+2. **Alias en underscore** — `concept/router.py` n'utilise plus l'alias
+   `_total_count` (un identifiant Oracle ne peut commencer par `_` sans guillemets ;
+   `ORA-00911`).
+3. **Détection de colonnes optionnelles** — `cdm_helper._column_exists()` passe par
+   `conn.dialect.column_exists()` (catalogue `ALL_TAB_COLUMNS` sur Oracle) au lieu
+   d'une requête `information_schema … LIMIT 1` propre à PostgreSQL.
 
 ## 5. État du port par module — TERMINÉ ✅
 

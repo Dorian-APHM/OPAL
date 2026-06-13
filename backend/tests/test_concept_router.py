@@ -57,7 +57,7 @@ def test_search_concepts(mock_decrypt, mock_get_conn, client, cdm_name):
         DictRow({"concept_id": 201826, "concept_name": "Type 2 diabetes",
                  "concept_code": "E11", "domain_id": "Condition",
                  "vocabulary_id": "SNOMED", "concept_class_id": "Clinical Finding",
-                 "standard_concept": "S", "_total_count": 1}),
+                 "standard_concept": "S", "total_count": 1}),
     ]
     cursor.description = [("concept_id",), ("concept_name",)]
 

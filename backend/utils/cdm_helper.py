@@ -132,14 +132,11 @@ def _column_exists(conn, schema: str, table: str, column: str) -> bool:
     if cached is not None:
         return cached
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
-            (schema, table, column),
-        )
-        exists = cur.fetchone() is not None
-        cur.close()
+        # Route through the connection's dialect so non-PostgreSQL engines use
+        # their own metadata catalog (e.g. Oracle ALL_TAB_COLUMNS) instead of the
+        # PostgreSQL-only information_schema/LIMIT query. The PostgreSQL dialect
+        # runs the exact same information_schema query as before.
+        exists = conn.dialect.column_exists(conn, schema, table, column)
     except Exception:
         # Do NOT cache failures: a transient error must not permanently disable
         # a column that actually exists. Return False for this call only.

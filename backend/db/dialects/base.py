@@ -91,7 +91,11 @@ class DictRowCursor:
         return False
 
     def _cols(self):
-        return [d[0] for d in (self._cur.description or [])]
+        # Normalize to lower-case so callers get the same ``row["concept_id"]``
+        # access as psycopg2's RealDictCursor. Oracle (and SQL Server for unquoted
+        # names) report column/alias names upper-cased in the cursor description,
+        # which would otherwise force every reader to know the engine's casing.
+        return [d[0].lower() for d in (self._cur.description or [])]
 
     def fetchone(self):
         row = self._cur.fetchone()

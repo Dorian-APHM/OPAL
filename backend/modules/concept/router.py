@@ -186,7 +186,7 @@ def search_concepts(
                        {dialect.cast('c.valid_start_date', 'text')} AS valid_start_date,
                        {dialect.cast('c.valid_end_date', 'text')} AS valid_end_date,
                        c.invalid_reason,
-                       COUNT(*) OVER() AS _total_count
+                       COUNT(*) OVER() AS total_count
                 FROM {concept_tbl} c
                 {where}
                 ORDER BY c.concept_name
@@ -194,8 +194,8 @@ def search_concepts(
             """
             dialect.execute(cur, sql, params)
             rows = cur.fetchall()
-            total = rows[0]["_total_count"] if rows else 0
-            concepts = [{k: v for k, v in dict(r).items() if k != "_total_count"} for r in rows]
+            total = rows[0]["total_count"] if rows else 0
+            concepts = [{k: v for k, v in dict(r).items() if k != "total_count"} for r in rows]
 
         return {"concepts": concepts, "total": total, "limit": limit, "offset": offset}
     finally:
