@@ -15,12 +15,14 @@ def _make_mock_conn(table_names, fetchone_sequence):
     - fetchone_sequence: list of tuples returned by successive fetchone() calls.
       Each element should be a tuple matching the row returned by the query.
     """
+    from db.dialects import get_dialect
     conn = MagicMock()
+    conn.dialect = get_dialect("postgresql")
     cursor = MagicMock()
     conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
     conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-    # First call is always fetchall() for information_schema.tables
+    # Table-existence check (dialect.list_tables) reads positional rows (r[0]).
     cursor.fetchall = MagicMock(return_value=[(t,) for t in table_names])
 
     # All subsequent calls are fetchone() — return tuples in order
