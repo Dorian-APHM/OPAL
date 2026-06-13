@@ -120,12 +120,41 @@ preuve de non-régression : on lance la suite **avant et après** chaque port et
 exige le même résultat. (Hôte = IP non-loopback car l'API bloque loopback/SSRF.)
 C'est le garde-fou à réutiliser pour porter les modules restants.
 
-## 5. Reste à faire (port analytique) — méthode et garde-fous
+## 5. État du port par module
 
-Modules générant encore du SQL PostgreSQL via `psycopg2.sql` : `cohort/sql_builder.py`
-+ `pathways.py` + `characterization.py`, `quality/*`, `incidence`, `estimation`,
-`search_router.py`, `mapping/suggest.py`, et `mapping/router.py` (`/concept-lookup`,
-apply). *(`concept/router.py` et `source_value_cache.py` sont faits.)*
+**FAIT et validé sur vrai PostgreSQL (aucune régression PG)** : `concept/router.py`,
+`source_value_cache.py`, `search_router.py`, `mapping/suggest.py`, `mapping/router.py`
+(y compris le chemin d'écriture *apply*), `atc_labels.py`, `concept_set/router.py`,
+`sapbert_build.py`, `datamanagement/{router,extractor}.py`, `cohort/sql_builder.py`
+(clé de voûte cohortes/incidence/estimation/extraction), `cohort/router.py`,
+`incidence/engine.py`, `estimation/router.py`, `quality/conformity.py`,
+`quality/domains/person.py`, `quality/domains/dashboard.py`.
+
+**RESTE — constructions « dures » (le 20 % structurel annoncé)**, à finir avec un
+helper dédié + validation sur vraie base :
+
+| Fichier | Construction non triviale | Piste |
+|---|---|---|
+| `quality/domains/clinical.py` | `LATERAL` join, `STRING_AGG(DISTINCT … ORDER BY)` | LATERAL→`CROSS APPLY` (MSSQL) ; STRING_AGG→`LISTAGG` (Oracle). Le reste (global/monthly/mapping stats) est fragment-level, trivial. |
+| `quality/domains/observation_period.py` | `generate_series(années)`, `AGE()`, `DATE_PART('month', AGE())` | helpers `generate_series` (CTE récursive non-PG), `age_years`, `months_between` |
+| `cohort/pathways.py` | tables temporaires (`CREATE TABLE _pw_*`), `ANALYZE`, `CREATE INDEX` anonyme, `INTERVAL` | couche DDL temp-tables par moteur (`SELECT … INTO` MSSQL, `GLOBAL TEMPORARY` Oracle) |
+| `cohort/characterization.py` | idem (temp tables, `SAVEPOINT`, `PERCENTILE_CONT`) | idem ; `SAVEPOINT`/`PERCENTILE_CONT` sont déjà portables |
+
+Tous les **helpers de dialecte** nécessaires existent déjà (`date_add/sub`,
+`interval_literal`, `date_trunc`, `extract`, `cast`, `least/greatest`,
+`count_filter/sum_filter`, `percentile_cont`, `in_list/not_in_list`, `length`,
+`list_tables/list_columns`, `stream_cursor`, `execute` avec paramstyle %s/:name/?).
+Le port restant est mécanique sauf les 4 constructions ci-dessus (LATERAL,
+STRING_AGG, generate_series, temp-tables) qui demandent un helper par moteur.
+
+## 6. Harnais de validation
+
+Un vrai PostgreSQL + un mini-OMOP (`backend/tests/fixtures/omop_mini_seed.sql`)
+permettent de rejouer le SQL réel des endpoints (`tests/test_integration_omop.py`,
+gate `OPAL_ITEST_OMOP_HOST`). Méthode appliquée à chaque module : lancer la suite
+**avant** le port (référence PG), porter, relancer → résultat identique. Pour
+valider Oracle/SQL Server, brancher le harnais sur une vraie instance (même schéma
+OMOP) ; le SQL est généré, il « suffit » de l'exécuter.
 
 ⚠️ **Garde-fou régression** : les tests de ces modules sont *mock-based* (curseur
 factice renvoyant des données canned) et **ne valident pas le texte SQL**. Réécrire
