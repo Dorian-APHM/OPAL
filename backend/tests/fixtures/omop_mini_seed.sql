@@ -47,37 +47,50 @@ INSERT INTO concept_synonym VALUES (320128,'High blood pressure');
 CREATE TABLE person (person_id BIGINT PRIMARY KEY, gender_concept_id BIGINT, year_of_birth INT);
 INSERT INTO person VALUES (1,8507,1970),(2,8532,1985),(3,8507,1990);
 
+CREATE TABLE observation_period (
+  observation_period_id BIGINT PRIMARY KEY, person_id BIGINT,
+  observation_period_start_date DATE, observation_period_end_date DATE,
+  period_type_concept_id BIGINT
+);
+INSERT INTO observation_period VALUES
+ (1,1,'2015-01-01','2023-12-31',0),
+ (2,2,'2016-01-01','2023-12-31',0),
+ (3,3,'2017-01-01','2023-12-31',0);
+
 CREATE TABLE condition_occurrence (
   condition_occurrence_id BIGINT PRIMARY KEY, person_id BIGINT,
-  condition_concept_id BIGINT, condition_start_date DATE,
+  condition_concept_id BIGINT, condition_start_date DATE, condition_end_date DATE,
+  visit_occurrence_id BIGINT,
   condition_source_value TEXT, condition_source_concept_id BIGINT
 );
 INSERT INTO condition_occurrence VALUES
- (1,1,320128,'2020-01-05','I10',0),
- (2,2,320128,'2020-02-10','I10',0),
- (3,3,0,'2021-03-01','E11',0),
- (4,1,201826,'2021-06-01','E11.9',0);
+ (1,1,320128,'2020-01-05','2020-01-20',10,'I10',0),
+ (2,2,320128,'2020-02-10','2020-02-20',20,'I10',0),
+ (3,3,0,'2021-03-01','2021-03-10',30,'E11',0),
+ (4,1,201826,'2021-06-01','2021-06-15',11,'E11.9',0);
 
 CREATE TABLE drug_exposure (
   drug_exposure_id BIGINT PRIMARY KEY, person_id BIGINT,
-  drug_concept_id BIGINT, drug_exposure_start_date DATE,
+  drug_concept_id BIGINT, drug_exposure_start_date DATE, drug_exposure_end_date DATE,
+  visit_occurrence_id BIGINT,
   drug_source_value TEXT, drug_source_name TEXT, drug_source_atc TEXT,
   drug_source_concept_id BIGINT
 );
 INSERT INTO drug_exposure VALUES
- (1,1,1503297,'2020-01-10','3679884','METFORMINE 500MG','A10BA02',0),
- (2,2,1503297,'2020-05-10','3679884','METFORMINE 500MG','A10BA02',0),
- (3,3,0,'2021-01-10','9999','PRODUIT INCONNU','Z99ZZ99',0);
+ (1,1,1503297,'2020-01-10','2020-02-10',10,'3679884','METFORMINE 500MG','A10BA02',0),
+ (2,2,1503297,'2020-05-10','2020-06-10',20,'3679884','METFORMINE 500MG','A10BA02',0),
+ (3,3,0,'2021-01-10','2021-02-10',30,'9999','PRODUIT INCONNU','Z99ZZ99',0);
 
 CREATE TABLE measurement (
   measurement_id BIGINT PRIMARY KEY, person_id BIGINT,
   measurement_concept_id BIGINT, measurement_date DATE,
+  visit_occurrence_id BIGINT,
   measurement_source_value TEXT, measurement_source_name TEXT,
   measurement_source_concept_id BIGINT, value_as_number DOUBLE PRECISION
 );
 INSERT INTO measurement VALUES
- (1,1,3004249,'2020-01-05','SYS','Systolic BP',0,140.0),
- (2,2,3004249,'2020-02-10','SYS','Systolic BP',0,130.0);
+ (1,1,3004249,'2020-01-05',10,'SYS','Systolic BP',0,140.0),
+ (2,2,3004249,'2020-02-10',20,'SYS','Systolic BP',0,130.0);
 
 -- Remaining OMOP clinical domain tables (empty) so cross-domain UNION queries
 -- (e.g. /counts) reference existing relations on this mini-CDM.

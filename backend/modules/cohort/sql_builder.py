@@ -37,6 +37,14 @@ def _smap(omop_schema):
     return SchemaMap(omop_schema)
 
 
+def _dia(omop_schema):
+    """The engine Dialect for this build. It's carried on the SchemaMap (set by
+    build_cohort_sql) so the many builder helpers need no extra parameter. Defaults
+    to PostgreSQL — keeping the generated SQL identical to the historical output."""
+    from db.dialects import get_dialect
+    return getattr(omop_schema, "_dialect", None) or get_dialect("postgresql")
+
+
 # Mapping from domain names to OMOP table metadata
 _DOMAIN_TABLE_MAP = {
     name: {
@@ -76,6 +84,7 @@ _TEMPORAL_RELATION_SQL = {
 
 def build_cohort_sql(
     criteria: dict, omop_schema: str = "omop_cdm", include_visit_id: bool = False,
+    dialect=None,
 ) -> str:
     """
     Build a complete SQL query from a cohort criteria JSON object.
@@ -88,6 +97,8 @@ def build_cohort_sql(
     visit-level characterization.
     """
     omop_schema = _smap(omop_schema)
+    if dialect is not None:
+        omop_schema._dialect = dialect
     _validate_identifier(omop_schema)
     ctes: list[str] = []
     cte_names: list[str] = []
@@ -856,7 +867,7 @@ def _build_criterion_cte(
                 f"  SELECT person_id, event_date,\n"
                 f"    COUNT(*) OVER (\n"
                 f"      PARTITION BY person_id ORDER BY event_date\n"
-                f"      RANGE BETWEEN CURRENT ROW AND INTERVAL '{int(occ_window_days)} days' FOLLOWING\n"
+                f"      RANGE BETWEEN CURRENT ROW AND {_dia(omop_schema).interval_literal(int(occ_window_days))} FOLLOWING\n"
                 f"    ) AS cnt\n"
                 f"  FROM {inner_name}\n"
                 f")"
@@ -915,11 +926,11 @@ def _build_criterion_cte(
                 # Reference the designated initial event CTE
                 if days_before:
                     temp_conditions.append(
-                        f"a.event_date >= (idx.event_date - INTERVAL '{int(days_before)} days')"
+                        f"a.event_date >= {_dia(omop_schema).date_sub('idx.event_date', int(days_before))}"
                     )
                 if days_after:
                     temp_conditions.append(
-                        f"a.event_date <= (idx.event_date + INTERVAL '{int(days_after)} days')"
+                        f"a.event_date <= {_dia(omop_schema).date_add('idx.event_date', int(days_after))}"
                     )
                 temp_where = " AND ".join(temp_conditions)
                 temp_sql = (
@@ -934,11 +945,11 @@ def _build_criterion_cte(
                 # Fallback: self-join using the criterion's own domain as index
                 if days_before:
                     temp_conditions.append(
-                        f"t.{date_col} >= (idx.index_date - INTERVAL '{int(days_before)} days')"
+                        f"t.{date_col} >= {_dia(omop_schema).date_sub('idx.index_date', int(days_before))}"
                     )
                 if days_after:
                     temp_conditions.append(
-                        f"t.{date_col} <= (idx.index_date + INTERVAL '{int(days_after)} days')"
+                        f"t.{date_col} <= {_dia(omop_schema).date_add('idx.index_date', int(days_after))}"
                     )
                 temp_where = " AND ".join(temp_conditions)
                 temp_sql = (
@@ -997,11 +1008,11 @@ def _build_criterion_cte(
             # Optional time window
             if days_before is not None:
                 conditions.append(
-                    f"a.event_date >= (ref.event_date - INTERVAL '{int(days_before)} days')"
+                    f"a.event_date >= {_dia(omop_schema).date_sub('ref.event_date', int(days_before))}"
                 )
             if days_after is not None:
                 conditions.append(
-                    f"a.event_date <= (ref.event_date + INTERVAL '{int(days_after)} days')"
+                    f"a.event_date <= {_dia(omop_schema).date_add('ref.event_date', int(days_after))}"
                 )
 
             temp_where = " AND ".join(conditions) if conditions else "TRUE"
@@ -1110,11 +1121,12 @@ def _build_demographics_cte(
     if age:
         age_min = age.get("min")
         age_max = age.get("max")
+        _d = _dia(omop_schema)
         if age.get("at") == "index" and index_date_cte:
-            age_expr = "EXTRACT(YEAR FROM idx.index_date) - p.year_of_birth"
+            age_expr = f"{_d.extract('YEAR', 'idx.index_date')} - p.year_of_birth"
             join_index = True
         else:
-            age_expr = "EXTRACT(YEAR FROM CURRENT_DATE) - p.year_of_birth"
+            age_expr = f"{_d.extract('YEAR', _d.current_date())} - p.year_of_birth"
         if age_min is not None:
             wheres.append(f"({age_expr}) >= {int(age_min)}")
         if age_max is not None:
@@ -1189,9 +1201,10 @@ def build_cohort_dated_sql(
 
     if exit_type == "fixed_duration" and exit_criteria:
         duration_days = int(exit_criteria.get("duration_days", 365))
-        end_expr = (
-            f"LEAST(op.observation_period_end_date, "
-            f"MIN(t.{date_col}) + INTERVAL '{duration_days} days')"
+        _d = _dia(omop_schema)
+        end_expr = _d.least(
+            "op.observation_period_end_date",
+            _d.date_add(f"MIN(t.{date_col})", duration_days),
         )
     elif exit_type == "event_based" and exit_criteria and exit_criteria.get("exit_event"):
         exit_event = exit_criteria["exit_event"]

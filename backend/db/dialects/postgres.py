@@ -124,7 +124,13 @@ class PostgresDialect(Dialect):
 
     # ── date / time + analytical (native PostgreSQL) ────────────────────────
     def date_add(self, date_expr: str, n, unit: str = "day") -> str:
-        return f"({date_expr} + INTERVAL '{n} {unit}')"
+        return f"({date_expr} + INTERVAL '{n} {unit}s')"
+
+    def date_sub(self, date_expr: str, n, unit: str = "day") -> str:
+        return f"({date_expr} - INTERVAL '{n} {unit}s')"
+
+    def interval_literal(self, n, unit: str = "day") -> str:
+        return f"INTERVAL '{n} {unit}s'"
 
     def date_diff_days(self, end_expr: str, start_expr: str) -> str:
         return f"(({end_expr}) - ({start_expr}))"

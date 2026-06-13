@@ -102,6 +102,13 @@ def get_cdm_connection(db: Session, cdm_name: str):
     )
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
     schema = build_schema_map(cdm, settings)
+    # Carry the engine dialect on the schema map so SQL builders that only receive
+    # ``schema`` (e.g. cohort/sql_builder) can produce engine-correct SQL without an
+    # extra parameter threaded through every helper.
+    try:
+        schema._dialect = conn.dialect
+    except Exception:
+        pass
     return conn, schema
 
 

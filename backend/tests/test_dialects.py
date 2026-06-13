@@ -129,15 +129,20 @@ def test_quote_ident_per_engine():
     assert get_dialect("sqlserver").quote_ident("concept") == "[concept]"
 
 
-def test_date_add_per_engine():
+def test_date_add_sub_per_engine():
     pg, o, ms = get_dialect("postgresql"), get_dialect("oracle"), get_dialect("sqlserver")
-    assert pg.date_add("d", 7) == "(d + INTERVAL '7 day')"
-    assert pg.date_add("d", -5, "day") == "(d + INTERVAL '-5 day')"
-    assert pg.date_add("d", 12, "month") == "(d + INTERVAL '12 month')"
+    # PostgreSQL keeps the exact historical text (plural unit, +/- INTERVAL).
+    assert pg.date_add("d", 7) == "(d + INTERVAL '7 days')"
+    assert pg.date_sub("d", 7) == "(d - INTERVAL '7 days')"
+    assert pg.date_add("d", 12, "month") == "(d + INTERVAL '12 months')"
+    assert pg.interval_literal(30) == "INTERVAL '30 days'"
     assert o.date_add("d", 7) == "(d + 7)"
+    assert o.date_sub("d", 7) == "(d - 7)"
     assert o.date_add("d", 12, "month") == "ADD_MONTHS(d, 12)"
     assert ms.date_add("d", 7) == "DATEADD(day, 7, d)"
-    assert ms.date_add("d", 12, "month") == "DATEADD(month, 12, d)"
+    assert ms.date_sub("d", 7) == "DATEADD(day, -(7), d)"
+    with pytest.raises(NotImplementedError):
+        ms.interval_literal(7)
 
 
 def test_date_diff_and_trunc_and_extract():

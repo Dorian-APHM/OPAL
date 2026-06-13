@@ -234,8 +234,16 @@ class Dialect:
     # so migrated builders stay equivalent to today on PG. ``n``/``unit`` are
     # caller-validated (ints / fixed keywords), never user input.
     def date_add(self, date_expr: str, n, unit: str = "day") -> str:
-        """``date_expr`` shifted by ``n`` units (``unit`` in {day, month, year}).
-        ``n`` may be negative to subtract."""
+        """``date_expr`` plus ``n`` units (``unit`` in {day, month, year})."""
+        raise NotImplementedError
+
+    def date_sub(self, date_expr: str, n, unit: str = "day") -> str:
+        """``date_expr`` minus ``n`` units."""
+        raise NotImplementedError
+
+    def interval_literal(self, n, unit: str = "day") -> str:
+        """A standalone interval value (e.g. for a window-frame bound). Not all
+        engines have one — SQL Server raises."""
         raise NotImplementedError
 
     def date_diff_days(self, end_expr: str, start_expr: str) -> str:

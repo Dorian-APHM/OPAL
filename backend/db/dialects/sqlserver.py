@@ -156,6 +156,15 @@ class SqlServerDialect(Dialect):
     def date_add(self, date_expr: str, n, unit: str = "day") -> str:
         return f"DATEADD({unit}, {n}, {date_expr})"
 
+    def date_sub(self, date_expr: str, n, unit: str = "day") -> str:
+        return f"DATEADD({unit}, -({n}), {date_expr})"
+
+    def interval_literal(self, n, unit: str = "day") -> str:
+        # SQL Server has no interval value type — date math must use DATEADD.
+        raise NotImplementedError(
+            "SQL Server has no interval literal; use date_add/date_sub (DATEADD)."
+        )
+
     def date_diff_days(self, end_expr: str, start_expr: str) -> str:
         return f"DATEDIFF(day, {start_expr}, {end_expr})"
 

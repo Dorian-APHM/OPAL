@@ -147,8 +147,20 @@ class OracleDialect(Dialect):
         if unit == "month":
             return f"ADD_MONTHS({date_expr}, {n})"
         if unit == "year":
-            return f"ADD_MONTHS({date_expr}, {int(n) * 12 if str(n).lstrip('-').isdigit() else f'({n})*12'})"
+            return f"ADD_MONTHS({date_expr}, ({n}) * 12)"
         return f"({date_expr} + NUMTODSINTERVAL({n}, '{unit}'))"
+
+    def date_sub(self, date_expr: str, n, unit: str = "day") -> str:
+        if unit == "day":
+            return f"({date_expr} - {n})"
+        if unit == "month":
+            return f"ADD_MONTHS({date_expr}, -({n}))"
+        if unit == "year":
+            return f"ADD_MONTHS({date_expr}, -({n}) * 12)"
+        return f"({date_expr} - NUMTODSINTERVAL({n}, '{unit}'))"
+
+    def interval_literal(self, n, unit: str = "day") -> str:
+        return f"NUMTODSINTERVAL({n}, '{unit.upper()}')"
 
     def date_diff_days(self, end_expr: str, start_expr: str) -> str:
         return f"(({end_expr}) - ({start_expr}))"     # Oracle DATE - DATE = days
