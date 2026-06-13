@@ -1,7 +1,19 @@
+/** Supported external CDM database engines. */
+export type CdmEngine = 'postgresql' | 'oracle' | 'sqlserver';
+
+/** A selectable CDM engine returned by GET /api/cdm/engines. */
+export interface CdmEngineChoice {
+  value: CdmEngine;
+  label: string;
+  default_port: number;
+}
+
 /** CDM connection configuration */
 export interface CdmConfig {
   id: number;
   name: string;
+  /** Database engine driving this CDM connection. Defaults to postgresql. */
+  db_type: CdmEngine;
   db_host: string;
   db_port: number;
   db_name: string;

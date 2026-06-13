@@ -1,6 +1,8 @@
 import axios from 'axios';
 import type {
   CdmConfig,
+  CdmEngine,
+  CdmEngineChoice,
   SchemaCategoriesInfo,
   SnapshotMeta,
   Snapshot,
@@ -188,8 +190,10 @@ export function authDownload(url: string, filename?: string) {
 export const cdmApi = {
   list: () => api.get<{ cdms: CdmConfig[] }>('/cdm/'),
   categories: () => api.get<SchemaCategoriesInfo>('/cdm/categories'),
+  engines: () => api.get<{ engines: CdmEngineChoice[]; default: CdmEngine }>('/cdm/engines'),
   create: (data: {
     name: string;
+    db_type?: CdmEngine;
     db_host: string;
     db_port: number;
     db_name: string;
@@ -199,6 +203,7 @@ export const cdmApi = {
     schema_categories?: Record<string, string> | null;
   }) => api.post('/cdm/', data),
   test: (data: {
+    db_type?: CdmEngine;
     db_host: string;
     db_port: number;
     db_name: string;

@@ -177,11 +177,18 @@ export default function ConceptExplorerPage({ selectedCdm }: Props) {
       setSourceResults(res.data.results ?? []);
       setSourceTotal(res.data.total ?? 0);
       setSourcePage(p);
-    } catch {
+    } catch (err: any) {
       if (ctrl.signal.aborted) return;
       setSourceResults([]);
       setSourceTotal(0);
-      toast.error(t('common.error', 'An error occurred'));
+      if (err?.response?.status === 409 && err?.response?.data?.detail?.code === 'source_value_cache_missing') {
+        // Source-value search is cache-backed (engine-agnostic). Prompt a build
+        // instead of a generic error.
+        toast.error(err.response.data.detail.message
+          || t('concepts.cache_missing', 'Source value cache not built for this CDM yet. Build it from Data Management.'));
+      } else {
+        toast.error(t('common.error', 'An error occurred'));
+      }
     } finally {
       if (!ctrl.signal.aborted) setSourceLoading(false);
       if (abortRef.current === ctrl) abortRef.current = null;
