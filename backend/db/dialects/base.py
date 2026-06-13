@@ -295,6 +295,11 @@ class Dialect:
     def length(self, expr: str) -> str:
         return f"LENGTH({expr})"
 
+    def non_empty(self, col: str) -> str:
+        """Condition for a non-NULL, non-empty string. Oracle treats '' as NULL,
+        so ``IS NOT NULL`` already excludes empties there."""
+        return f"{col} IS NOT NULL AND {col} <> ''"
+
     def least(self, a: str, b: str) -> str:
         return f"LEAST({a}, {b})"
 

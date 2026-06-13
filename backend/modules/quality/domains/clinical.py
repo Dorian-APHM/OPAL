@@ -112,7 +112,7 @@ def _get_top_concepts(dialect, cur, schema: str, table: str, concept_id: str,
         f"    WHERE {cid} = top.concept_id"
         f"    {dialect.limit_offset('10', '0')}"
         f"  ) sub"
-        f" ) sv ON true",
+        f" ) sv ON 1=1",
         (limit,))
     return [
         {

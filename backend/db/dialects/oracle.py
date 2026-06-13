@@ -51,7 +51,14 @@ class OracleDialect(Dialect):
         return DictRowCursor(conn.cursor())
 
     def quote_ident(self, name: str) -> str:
-        return f'"{name}"'
+        # DO NOT quote: Oracle folds unquoted identifiers to UPPERCASE, which
+        # matches the conventional uppercase OMOP objects (PERSON, OMOP_CDM, …)
+        # created by OHDSI DDL. The application config stores names in lowercase;
+        # leaving them unquoted lets Oracle's folding resolve them. (safe_identifier
+        # already restricts the charset, and OMOP names aren't reserved words.)
+        # Quoting (e.g. "person") would force a *lowercase* match and break with
+        # ORA-00942 on a standard uppercase CDM.
+        return name
 
     # ── scratch-table DDL (best-effort) ─────────────────────────────────────
     def drop_table_if_exists(self, name: str) -> str:
@@ -139,6 +146,9 @@ class OracleDialect(Dialect):
             return {r[0] for r in cur.fetchall()}
 
     # ── SQL fragments (best-effort) ─────────────────────────────────────────
+    def non_empty(self, col: str) -> str:
+        return f"{col} IS NOT NULL"  # Oracle: '' IS NULL, so this suffices
+
     def ilike(self, col_sql: str, param_ph: str) -> str:
         return f"LOWER({col_sql}) LIKE LOWER({param_ph})"
 

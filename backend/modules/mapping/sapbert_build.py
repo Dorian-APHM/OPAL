@@ -79,8 +79,7 @@ def _fetch_standard_concepts(conn, schema, domain: str) -> list[dict]:
         WHERE domain_id = %s
           AND standard_concept = 'S'
           AND invalid_reason IS NULL
-          AND concept_name IS NOT NULL
-          AND concept_name <> ''
+          AND {dialect.non_empty('concept_name')}
           AND NOT ({dialect.ilike('concept_name', "'%%(deprecated)%%'")})
     """
     out: list[dict] = []

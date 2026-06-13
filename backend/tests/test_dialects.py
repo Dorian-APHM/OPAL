@@ -128,9 +128,20 @@ def test_named_param_execute_per_engine():
     assert ms.sql == "WHERE a=? AND b=?" and ms.params == [2, 1]
 
 
+def test_non_empty_per_engine():
+    # PostgreSQL / SQL Server: '' is a real empty string distinct from NULL.
+    assert get_dialect("postgresql").non_empty("c") == "c IS NOT NULL AND c <> ''"
+    assert get_dialect("sqlserver").non_empty("c") == "c IS NOT NULL AND c <> ''"
+    # Oracle: '' IS NULL, so IS NOT NULL alone excludes empties (and '<> '''
+    # would wrongly drop every row since x <> NULL is never true).
+    assert get_dialect("oracle").non_empty("c") == "c IS NOT NULL"
+
+
 def test_quote_ident_per_engine():
     assert get_dialect("postgresql").quote_ident("concept") == '"concept"'
-    assert get_dialect("oracle").quote_ident("concept") == '"concept"'
+    # Oracle: identifiers left unquoted so they fold to UPPERCASE and match the
+    # conventional uppercase OMOP objects (a quoted lowercase name would ORA-00942).
+    assert get_dialect("oracle").quote_ident("concept") == "concept"
     assert get_dialect("sqlserver").quote_ident("concept") == "[concept]"
 
 
