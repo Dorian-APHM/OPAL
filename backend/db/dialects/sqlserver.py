@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 
-from .base import Dialect, DictRowCursor
+from .base import Dialect, DictRowCursor, translate_pyformat
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,14 @@ class SqlServerDialect(Dialect):
 
     def dict_cursor(self, conn):
         return DictRowCursor(conn.cursor())
+
+    def quote_ident(self, name: str) -> str:
+        return f"[{name}]"
+
+    def execute(self, cursor, sql: str, params=None):
+        translated = translate_pyformat(sql, lambda i: "?")
+        cursor.execute(translated, list(params) if params is not None else [])
+        return cursor
 
     def set_statement_timeout(self, conn, ms: int) -> None:
         try:

@@ -61,6 +61,45 @@ def test_sqlserver_interval_unsupported():
         ms.interval_days("7")
 
 
+def test_pyformat_placeholder_translation():
+    from db.dialects.base import translate_pyformat
+    sql = "SELECT 1 FROM t WHERE a = %s AND b = %s AND c LIKE '50%%'"
+    assert translate_pyformat(sql, lambda i: f":{i}") == \
+        "SELECT 1 FROM t WHERE a = :1 AND b = :2 AND c LIKE '50%'"
+    assert translate_pyformat(sql, lambda i: "?") == \
+        "SELECT 1 FROM t WHERE a = ? AND b = ? AND c LIKE '50%'"
+
+
+def test_dialect_execute_translates_and_preserves_order():
+    class FakeCur:
+        def __init__(self):
+            self.sql = None
+            self.params = None
+        def execute(self, sql, params):
+            self.sql, self.params = sql, params
+
+    # PostgreSQL: passthrough (no regression).
+    pg_cur = FakeCur()
+    get_dialect("postgresql").execute(pg_cur, "WHERE a=%s AND b=%s", (1, 2))
+    assert pg_cur.sql == "WHERE a=%s AND b=%s" and pg_cur.params == (1, 2)
+
+    # Oracle: numeric named placeholders, params as list, same order.
+    o_cur = FakeCur()
+    get_dialect("oracle").execute(o_cur, "WHERE a=%s AND b=%s", (1, 2))
+    assert o_cur.sql == "WHERE a=:1 AND b=:2" and o_cur.params == [1, 2]
+
+    # SQL Server: qmark.
+    ms_cur = FakeCur()
+    get_dialect("sqlserver").execute(ms_cur, "WHERE a=%s AND b=%s", (1, 2))
+    assert ms_cur.sql == "WHERE a=? AND b=?" and ms_cur.params == [1, 2]
+
+
+def test_quote_ident_per_engine():
+    assert get_dialect("postgresql").quote_ident("concept") == "concept"
+    assert get_dialect("oracle").quote_ident("concept") == '"concept"'
+    assert get_dialect("sqlserver").quote_ident("concept") == "[concept]"
+
+
 def test_dict_row_cursor_maps_rows():
     class FakeCur:
         description = [("a",), ("b",)]

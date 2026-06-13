@@ -77,21 +77,51 @@ Le front doit proposer la construction du cache plutôt que d'afficher une liste
 > cache** (`source_value_cache.py`, un `SELECT DISTINCT ... GROUP BY`) doit savoir lire
 > le CDM. Toute la recherche de valeurs source retombe sur la base OPAL.
 
-## 4. Étape 3/4 — couche de dialecte (en cours)
+## 4. Couche de dialecte (FAIT — infrastructure)
 
-Voir `backend/db/dialects/`. Principe : un `Dialect` par moteur fournit le driver,
-la fabrique de curseur « rows as dict », le paramstyle et les fragments SQL non
-portables (ilike/unaccent, interval, cast, extract, current_date, timeout…). Le
-chemin PostgreSQL reste strictement identique à l'existant (mêmes pools psycopg2,
-même SQL) pour garantir l'absence de régression de perf.
+Voir `backend/db/dialects/`. Un `Dialect` par moteur fournit :
 
-`CdmConfig.db_type` (nouveau, défaut `postgresql`) sélectionne le dialecte. La page
-de configuration des connexions expose le choix du moteur.
+- **connexion** : `connect()`, `dict_cursor()` (psycopg2 `RealDictCursor` pour PG ;
+  `DictRowCursor` proxy pour Oracle/MSSQL), `set_statement_timeout()`, `reset_session()`.
+- **métadonnées / streaming** : `table_exists()`, `column_exists()`,
+  `disable_statement_timeout()`, `stream_cursor()` (curseur serveur nommé pour PG,
+  curseur batché pour les autres).
+- **exécution / paramstyle** : `execute(cursor, sql, params)` écrit le SQL en `%s`
+  (style psycopg2) et le traduit vers `:1` (Oracle) ou `?` (ODBC) — voir
+  `translate_pyformat()`. `quote_ident()` (`"x"` PG/Oracle, `[x]` MSSQL).
+- **fragments SQL** (point d'extension du port analytique) : `ilike`, `unaccent`,
+  `cast`, `current_date`, `interval_days`, `extract_year`, `limit_offset`.
 
-## 5. Reste à faire (port analytique)
+Le chemin **PostgreSQL est strictement identique à l'existant** (mêmes pools psycopg2,
+même SQL, `execute()` est un passthrough) → aucune régression de perf.
 
-Le cœur analytique (`cohort/sql_builder.py`, `quality/*`, `incidence`, `estimation`)
-génère du SQL PostgreSQL en clair. Sa migration vers les helpers de dialecte est le
-gros du travail restant, à faire **module par module** avec validation sur vraie base
-Oracle / SQL Server. Piste recommandée : réutiliser `SqlRender` (OHDSI) pour les
-requêtes analytiques lourdes plutôt que réécrire une traduction maison.
+`CdmConfig.db_type` (défaut `postgresql`, migration `c9d0e1f2a3b4` qui *backfill* les
+CDM existants en `postgresql`) sélectionne le dialecte. La page de config expose le
+choix du moteur (`GET /api/cdm/engines`). Drivers : `oracledb` (thin), `pyodbc`
+(import paresseux ; `unixodbc` dans l'image, `msodbcsql18` à ajouter pour MSSQL).
+
+### Verticale source-value / mapping — FAIT, agnostique
+Le **builder du cache** (`source_value_cache.py`) passe par le dialecte
+(metadata + timeout + streaming). Comme la recherche de valeurs source est 100 %
+cache (§3), **un CDM non-PG est pleinement utilisable** pour la recherche de codes
+sources et l'explorateur de mapping dès que le cache est construit.
+
+## 5. Reste à faire (port analytique) — méthode et garde-fous
+
+Modules générant encore du SQL PostgreSQL via `psycopg2.sql` : `concept/router.py`
+(recherche vocabulaire), `cohort/sql_builder.py` + `pathways.py` + `characterization.py`,
+`quality/*`, `incidence`, `estimation`, `search_router.py`, `mapping/suggest.py`.
+
+⚠️ **Garde-fou régression** : les tests de ces modules sont *mock-based* (curseur
+factice renvoyant des données canned) et **ne valident pas le texte SQL**. Réécrire
+leurs requêtes ne peut donc PAS être prouvé sans régression sans une vraie instance
+PostgreSQL (et Oracle/SQL Server pour le best-effort). Ce port doit se faire
+**module par module, chaque module validé sur de vraies bases** avant merge.
+
+Mécanique cible par requête : remplacer la composition `psycopg2.sql.Identifier/SQL`
+par des f-strings utilisant `dialect.quote_ident(safe_identifier(x))` pour les
+identifiants et `dialect.ilike(...)` / fragments pour le SQL non portable, garder les
+paramètres en `%s` et exécuter via `dialect.execute(cur, sql, params)`.
+
+Piste recommandée pour les requêtes analytiques lourdes (cohortes, qualité) :
+réutiliser **`SqlRender` (OHDSI)** plutôt qu'une traduction maison.

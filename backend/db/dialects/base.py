@@ -15,9 +15,31 @@ Each Dialect provides three things:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Matches a psycopg2-style ``%s`` placeholder or a ``%%`` literal-percent escape.
+_PYFORMAT_PH = re.compile(r"%%|%s")
+
+
+def translate_pyformat(sql: str, make_placeholder) -> str:
+    """Rewrite psycopg2 ``%s`` placeholders to another positional paramstyle.
+
+    ``make_placeholder(index)`` returns the engine placeholder for the 1-based
+    positional parameter (e.g. ``":1"`` for Oracle, ``"?"`` for ODBC). ``%%`` is
+    un-escaped to a literal ``%``. Order is preserved, so the original positional
+    params tuple needs no reordering."""
+    counter = {"n": 0}
+
+    def _repl(m):
+        if m.group(0) == "%%":
+            return "%"
+        counter["n"] += 1
+        return make_placeholder(counter["n"])
+
+    return _PYFORMAT_PH.sub(_repl, sql)
 
 
 class DictRowCursor:
@@ -127,6 +149,15 @@ class Dialect:
         names unquoted (safe_identifier already restricts the charset), so the
         reference engine's SQL is unchanged."""
         return name
+
+    def execute(self, cursor, sql: str, params=None):
+        """Execute SQL authored with psycopg2-style ``%s`` placeholders.
+
+        PostgreSQL runs it unchanged. Other engines translate the placeholders to
+        their own paramstyle first (positional order preserved). This lets query
+        builders keep authoring a single ``%s`` dialect of SQL."""
+        cursor.execute(sql, params if params is not None else ())
+        return cursor
 
     # ── SQL fragment helpers (extension point) ──────────────────────────────
     # These return engine-correct SQL strings. PostgreSQL returns its native
