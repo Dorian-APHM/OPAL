@@ -102,17 +102,7 @@ def get_table_columns(conn, omop_schema: str, table_name: str) -> list[dict]:
     schema = omop_schema.schema_for(table_name) if hasattr(omop_schema, "schema_for") else omop_schema
     schema = _safe(schema)
     table = _safe(table_name)
-
-    sql = """
-        SELECT column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = %s AND table_name = %s
-        ORDER BY ordinal_position
-    """
-    from psycopg2.extras import DictCursor
-    with conn.cursor(cursor_factory=DictCursor) as cur:
-        cur.execute(sql, (schema, table))
-        return [{"column_name": r["column_name"], "data_type": r["data_type"]} for r in cur.fetchall()]
+    return conn.dialect.list_columns(conn, schema, table)
 
 
 def list_available_tables(conn, omop_schema: str) -> list[str]:
@@ -122,16 +112,7 @@ def list_available_tables(conn, omop_schema: str) -> list[str]:
     schema; resolve it from a representative clinical table."""
     schema = omop_schema.schema_for("person") if hasattr(omop_schema, "schema_for") else omop_schema
     schema = _safe(schema)
-    sql = """
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = %s AND table_type = 'BASE TABLE'
-        ORDER BY table_name
-    """
-    from psycopg2.extras import DictCursor
-    with conn.cursor(cursor_factory=DictCursor) as cur:
-        cur.execute(sql, (schema,))
-        existing = {r["table_name"] for r in cur.fetchall()}
+    existing = conn.dialect.list_tables(conn, schema)
     return sorted(t for t in EXTRACTABLE_TABLES if t in existing)
 
 

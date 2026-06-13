@@ -22,7 +22,6 @@ from utils.rate_limit import limiter
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from psycopg2.extras import DictCursor
 
 from db.app_db import get_db, SessionLocal
 from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings
@@ -356,12 +355,7 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                         writer = csv.writer(csv_buf)
                         row_count = 0
 
-                        with conn.cursor(
-                            name=f"extract_{tbl_name}",
-                            cursor_factory=DictCursor,
-                        ) as cur:
-                            cur.itersize = 2000
-                            cur.execute(table_sql)
+                        with conn.dialect.stream_cursor(conn, table_sql, 2000) as cur:
                             first_row = cur.fetchone()
                             csv_columns = (
                                 [desc[0] for desc in cur.description]

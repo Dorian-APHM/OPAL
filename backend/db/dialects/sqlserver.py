@@ -110,6 +110,24 @@ class SqlServerDialect(Dialect):
         except Exception:
             pass
 
+    def list_columns(self, conn, schema, table):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+                (schema, table),
+            )
+            return [{"column_name": r[0], "data_type": r[1]} for r in cur.fetchall()]
+
+    def list_tables(self, conn, schema):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = ? AND table_type = 'BASE TABLE'",
+                (schema,),
+            )
+            return {r[0] for r in cur.fetchall()}
+
     # ── SQL fragments (best-effort) ─────────────────────────────────────────
     def ilike(self, col_sql: str, param_ph: str) -> str:
         return f"LOWER({col_sql}) LIKE LOWER({param_ph})"

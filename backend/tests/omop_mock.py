@@ -17,7 +17,10 @@ from unittest.mock import MagicMock, patch
 
 class DictRow(dict):
     """A dict subclass that mimics psycopg2 DictRow (supports both key and index access)."""
-    pass
+    def __getitem__(self, k):
+        if isinstance(k, int):
+            return list(self.values())[k]
+        return super().__getitem__(k)
 
 
 class MockCursor:
@@ -102,5 +105,9 @@ def make_omop_conn(responses=None):
     conn.cursor.return_value = cursor
     conn.rollback = MagicMock()
     conn.close = MagicMock()
+    # Advertise the real PostgreSQL dialect so dialect-routed code (dict_cursor,
+    # execute, list_columns/list_tables, …) flows back to this mock cursor.
+    from db.dialects import get_dialect
+    conn.dialect = get_dialect("postgresql")
 
     return conn

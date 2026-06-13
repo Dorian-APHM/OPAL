@@ -61,6 +61,24 @@ class PostgresDialect(Dialect):
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = 0")
 
+    def list_columns(self, conn, schema, table):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+                (schema, table),
+            )
+            return [{"column_name": r[0], "data_type": r[1]} for r in cur.fetchall()]
+
+    def list_tables(self, conn, schema):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = %s AND table_type = 'BASE TABLE'",
+                (schema,),
+            )
+            return {r[0] for r in cur.fetchall()}
+
     def stream_cursor(self, conn, sql, itersize, params=None):
         # Server-side (named) cursor: streams the result in batches instead of
         # materialising a whole table in client memory.

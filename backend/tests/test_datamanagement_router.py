@@ -39,16 +39,16 @@ def test_cohorts_list_empty(client, cdm_name):
 def test_tables_list(mock_decrypt, mock_get_conn, client, cdm_name):
     """List available tables in OMOP schema."""
     mock_decrypt.return_value = "pass"
+    from db.dialects import get_dialect
     conn = MagicMock()
+    conn.dialect = get_dialect("postgresql")
     cursor = MagicMock()
     conn.cursor.return_value = cursor
     conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
     conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-    from tests.omop_mock import DictRow
+    # Dialect.list_tables reads positional rows (r[0]).
     cursor.fetchall.return_value = [
-        DictRow({"table_name": "person"}),
-        DictRow({"table_name": "visit_occurrence"}),
-        DictRow({"table_name": "condition_occurrence"}),
+        ("person",), ("visit_occurrence",), ("condition_occurrence",),
     ]
     mock_get_conn.return_value = conn
 
@@ -65,16 +65,18 @@ def test_tables_list(mock_decrypt, mock_get_conn, client, cdm_name):
 def test_table_columns(mock_decrypt, mock_get_conn, client, cdm_name):
     """List columns for a specific table."""
     mock_decrypt.return_value = "pass"
+    from db.dialects import get_dialect
     conn = MagicMock()
+    conn.dialect = get_dialect("postgresql")
     cursor = MagicMock()
     conn.cursor.return_value = cursor
     conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
     conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-    from tests.omop_mock import DictRow
+    # Dialect.list_columns reads positional rows (r[0]=name, r[1]=type).
     cursor.fetchall.return_value = [
-        DictRow({"column_name": "person_id", "data_type": "integer"}),
-        DictRow({"column_name": "year_of_birth", "data_type": "integer"}),
-        DictRow({"column_name": "gender_concept_id", "data_type": "integer"}),
+        ("person_id", "integer"),
+        ("year_of_birth", "integer"),
+        ("gender_concept_id", "integer"),
     ]
     mock_get_conn.return_value = conn
 

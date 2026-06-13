@@ -105,6 +105,20 @@ class OracleDialect(Dialect):
         except Exception:
             pass
 
+    def list_columns(self, conn, schema, table):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT LOWER(column_name), LOWER(data_type) FROM all_tab_columns "
+                "WHERE owner = UPPER(:1) AND table_name = UPPER(:2) ORDER BY column_id",
+                [schema, table],
+            )
+            return [{"column_name": r[0], "data_type": r[1]} for r in cur.fetchall()]
+
+    def list_tables(self, conn, schema):
+        with conn.cursor() as cur:
+            cur.execute("SELECT LOWER(table_name) FROM all_tables WHERE owner = UPPER(:1)", [schema])
+            return {r[0] for r in cur.fetchall()}
+
     # ── SQL fragments (best-effort) ─────────────────────────────────────────
     def ilike(self, col_sql: str, param_ph: str) -> str:
         return f"LOWER({col_sql}) LIKE LOWER({param_ph})"

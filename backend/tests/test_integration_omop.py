@@ -133,6 +133,18 @@ def test_global_search_by_concept_id(client, cdm):
     assert any(c["concept_id"] == 320128 for c in r.json()["results"]["concepts"])
 
 
+def test_datamanagement_tables_and_columns(client, cdm):
+    r = client.get(f"/api/datamanagement/tables?cdm_name={cdm}")
+    assert r.status_code == 200
+    names = [t["table_name"] if isinstance(t, dict) else t for t in r.json()["tables"]]
+    assert "person" in names and "drug_exposure" in names
+
+    r2 = client.get(f"/api/datamanagement/tables/person/columns?cdm_name={cdm}")
+    assert r2.status_code == 200
+    cols = {c["column_name"] if isinstance(c, dict) else c for c in r2.json()["columns"]}
+    assert {"person_id", "year_of_birth"} <= cols
+
+
 def test_mapping_suggest_exact_match(client, cdm):
     # concept_code '6809' (Metformin, RxNorm) → exact match strategy.
     r = client.post("/api/mapping/suggest", json={

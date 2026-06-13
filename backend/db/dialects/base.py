@@ -159,6 +159,14 @@ class Dialect:
     def column_exists(self, conn, schema: str, table: str, column: str) -> bool:
         raise NotImplementedError
 
+    def list_columns(self, conn, schema: str, table: str) -> list:
+        """``[{"column_name", "data_type"}, ...]`` for a table, in ordinal order."""
+        raise NotImplementedError
+
+    def list_tables(self, conn, schema: str) -> set:
+        """Set of base-table names in a schema."""
+        raise NotImplementedError
+
     def disable_statement_timeout(self, conn) -> None:
         """Remove the per-statement timeout for a long full-table aggregation."""
         return None
