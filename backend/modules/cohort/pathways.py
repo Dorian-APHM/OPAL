@@ -98,8 +98,8 @@ def run_pathways_analysis(
     with dialect.dict_cursor(conn) as cur:
         # ── Step 1: Materialise target cohort with observation period ──
         cohort_sql = build_cohort_sql(criteria, omop_schema)
-        cur.execute(dialect.drop_table_if_exists("_pw_target"))
-        cur.execute(dialect.create_temp_table_as("_pw_target", f"""
+        cur.execute(dialect.drop_table_if_exists("opal_pw_target"))
+        cur.execute(dialect.create_temp_table_as("opal_pw_target", f"""
             SELECT DISTINCT p.person_id,
                    op.observation_period_start_date AS cohort_start,
                    op.observation_period_end_date   AS cohort_end
@@ -107,17 +107,17 @@ def run_pathways_analysis(
             JOIN {omop_schema.t('observation_period')} op
               ON p.person_id = op.person_id
         """))
-        cur.execute(dialect.create_index("_pw_target", "person_id"))
-        _analyze(cur, "_pw_target")
-        cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM _pw_target")
+        cur.execute(dialect.create_index("opal_pw_target", "person_id"))
+        _analyze(cur, "opal_pw_target")
+        cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM opal_pw_target")
         target_size = cur.fetchone()["n"]
         _report("Target cohort materialised")
 
         # ── Step 2: For each event cohort, collect raw events ──
-        cur.execute(dialect.drop_table_if_exists("_pw_events"))
+        cur.execute(dialect.drop_table_if_exists("opal_pw_events"))
         cur.execute(dialect.create_temp_table(
-            "_pw_events",
-            "person_id BIGINT, event_name VARCHAR(255), event_start DATE, event_end DATE",
+            "opal_pw_events",
+            f"person_id {dialect.big_int_type()}, event_name VARCHAR(255), event_start DATE, event_end DATE",
         ))
 
         for ec in event_cohorts:
@@ -201,12 +201,12 @@ def run_pathways_analysis(
                 continue
 
             dialect.execute(cur, f"""
-                INSERT INTO _pw_events (person_id, event_name, event_start, event_end)
+                INSERT INTO opal_pw_events (person_id, event_name, event_start, event_end)
                 SELECT tgt.person_id,
                        %(ename)s,
                        t.{date_col},
                        {end_expr}
-                FROM _pw_target tgt
+                FROM opal_pw_target tgt
                 JOIN {omop_schema.t(table)} t
                   ON tgt.person_id = t.person_id
                  AND t.{date_col} BETWEEN tgt.cohort_start AND tgt.cohort_end
@@ -214,24 +214,24 @@ def run_pathways_analysis(
             """, event_params)
             _report(f"Events: {name}")
 
-        cur.execute(dialect.create_index("_pw_events", "person_id, event_start"))
-        _analyze(cur, "_pw_events")
+        cur.execute(dialect.create_index("opal_pw_events", "person_id, event_start"))
+        _analyze(cur, "opal_pw_events")
 
         # ── Step 3: Build eras (collapse overlapping events of same name) ──
         # Using a gap-merge approach: events of the same type within
         # combo_window days are merged into one continuous era.
-        cur.execute(dialect.drop_table_if_exists("_pw_eras"))
-        cur.execute(dialect.create_temp_table_as("_pw_eras", f"""
+        cur.execute(dialect.drop_table_if_exists("opal_pw_eras"))
+        cur.execute(dialect.create_temp_table_as("opal_pw_eras", f"""
             WITH ordered AS (
                 SELECT person_id, event_name, event_start, event_end,
                        LAG(event_end) OVER (
                            PARTITION BY person_id, event_name
                            ORDER BY event_start
                        ) AS prev_end
-                FROM _pw_events
+                FROM opal_pw_events
             ),
             groups AS (
-                SELECT *,
+                SELECT ordered.*,
                        SUM(CASE
                            WHEN prev_end IS NULL
                              OR event_start > {dialect.date_add('prev_end', int(combo_window))}
@@ -249,8 +249,8 @@ def run_pathways_analysis(
             FROM groups
             GROUP BY person_id, event_name, era_group
         """))
-        cur.execute(dialect.create_index("_pw_eras", "person_id, era_start"))
-        _analyze(cur, "_pw_eras")
+        cur.execute(dialect.create_index("opal_pw_eras", "person_id, era_start"))
+        _analyze(cur, "opal_pw_eras")
         _report("Eras collapsed")
 
         # ── Step 4: Build per-person pathway sequences ──
@@ -263,11 +263,11 @@ def run_pathways_analysis(
                        DENSE_RANK() OVER (
                            PARTITION BY person_id ORDER BY era_start
                        ) AS step_rank
-                FROM _pw_eras
+                FROM opal_pw_eras
             ),
             steps AS (
                 SELECT person_id, step_rank,
-                       STRING_AGG(event_name, '+' ORDER BY event_name) AS step_label
+                       {dialect.string_agg('event_name', '+', order_by='event_name')} AS step_label
                 FROM ranked
                 WHERE step_rank <= {int(max_depth)}
                 GROUP BY person_id, step_rank
@@ -279,9 +279,9 @@ def run_pathways_analysis(
         rows = cur.fetchall()
 
         # Clean up temp tables
-        cur.execute(dialect.drop_table_if_exists("_pw_eras"))
-        cur.execute(dialect.drop_table_if_exists("_pw_events"))
-        cur.execute(dialect.drop_table_if_exists("_pw_target"))
+        cur.execute(dialect.drop_table_if_exists("opal_pw_eras"))
+        cur.execute(dialect.drop_table_if_exists("opal_pw_events"))
+        cur.execute(dialect.drop_table_if_exists("opal_pw_target"))
 
     # ── Step 5: Aggregate pathways in Python ──
     # Build per-person pathway list

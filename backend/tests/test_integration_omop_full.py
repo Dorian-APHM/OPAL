@@ -199,6 +199,40 @@ def test_mapping_unmapped(client, cdm, raw_conn):
     populate_domain(cdm, "Drug", conn, schema)
     _ok(client.get(f"/api/mapping/unmapped/{cdm}/Drug"))
 
+def test_sapbert_fetch_standard_concepts(raw_conn):
+    # The only CDM-reading part of the SapBERT build (the rest calls the runner).
+    from modules.mapping.sapbert_build import _fetch_standard_concepts
+    conn, schema = raw_conn
+    rows = _fetch_standard_concepts(conn, schema, "Drug")
+    assert isinstance(rows, list)
+    assert any(r["concept_id"] == 1503297 for r in rows)
+
+def test_mapping_apply_and_rollback(client, cdm):
+    """Exercise the only CDM *write* path: apply consensus mappings (UPDATE the
+    clinical table) then roll them back, leaving the seed unchanged."""
+    from tests.conftest import TestSession
+    from db.models import MappingDecision
+    db = TestSession()
+    try:
+        # Consensus = same (source_value, target) approved by 2+ distinct users.
+        # Seed drug_exposure has an unmapped row with drug_source_value '9999'.
+        for u in ("u1", "u2"):
+            db.add(MappingDecision(
+                cdm_name=cdm, domain="Drug", source_value="9999",
+                target_concept_id=1503297, target_vocabulary_id="RxNorm",
+                action="approved", user=u,
+            ))
+        db.commit()
+    finally:
+        db.close()
+    r = _ok(client.post("/api/mapping/apply", json={
+        "cdm_name": cdm, "domain": "Drug", "write_to_cdm": True}))
+    assert r.get("written_to_cdm") is True
+    batch_id = r["batch_id"]
+    # Read-back the apply batch detail, then roll the write back.
+    _ok(client.get(f"/api/mapping/apply/batch/{batch_id}"))
+    _ok(client.post(f"/api/mapping/apply/rollback/{batch_id}"))
+
 
 # ── COHORT router ───────────────────────────────────────────────────────────
 def test_cohort_concept_search(client, cdm):
@@ -241,6 +275,38 @@ def test_cohort_characterize_worker(raw_conn):
     conn, schema = raw_conn
     res = run_characterization(conn, CRIT, schema, top_n=10)
     assert isinstance(res, dict)
+
+def test_cohort_pathways_worker(raw_conn):
+    from modules.cohort.pathways import run_pathways_analysis
+    conn, schema = raw_conn
+    events = [
+        {"name": "metformin", "domain": "Drug", "concept_ids": [1503297], "include_descendants": False},
+        {"name": "diabetes", "domain": "Condition", "concept_ids": [201826], "include_descendants": False},
+    ]
+    res = run_pathways_analysis(conn, CRIT, events, schema, min_cell_count=1)
+    assert isinstance(res, dict)
+
+# Richer cohort definition: temporal window + exclusion + occurrence + descendants
+# — exercises more sql_builder branches than the simple CRIT above.
+CRIT_COMPLEX = {
+    "inclusion": {"operator": "AND", "criteria": [
+        {"domain": "Condition", "concepts": [320128], "include_descendants": True,
+         "temporal": {"type": "window", "start": -365, "end": 365},
+         "occurrence": {"type": "at_least", "count": 1}},
+        {"domain": "Drug", "concepts": [1503297], "include_descendants": True,
+         "temporal": {"type": "any_time"}, "occurrence": {"type": "any", "count": 1}},
+    ]},
+    "exclusion": {"operator": "OR", "criteria": [
+        {"domain": "Condition", "concepts": [201826], "temporal": {"type": "any_time"},
+         "occurrence": {"type": "any", "count": 1}},
+    ]},
+}
+
+def test_cohort_count_complex(client, cdm):
+    _ok(client.post("/api/cohorts/count", json={"cdm_name": cdm, "criteria": CRIT_COMPLEX}))
+
+def test_cohort_attrition_complex(client, cdm):
+    _ok(client.post("/api/cohorts/attrition", json={"cdm_name": cdm, "criteria": CRIT_COMPLEX}))
 
 
 # ── QUALITY router ──────────────────────────────────────────────────────────

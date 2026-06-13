@@ -307,6 +307,11 @@ class Dialect:
         ``RANDOM()``; Oracle overrides with ``DBMS_RANDOM.VALUE``."""
         return "RANDOM()"
 
+    def big_int_type(self) -> str:
+        """Column type for a 64-bit integer in a CREATE TABLE. PostgreSQL
+        ``BIGINT``; Oracle has no BIGINT and overrides with ``NUMBER(19)``."""
+        return "BIGINT"
+
     def string_agg(self, expr: str, sep: str, order_by: str | None = None, distinct: bool = False) -> str:
         """Concatenate ``expr`` across a group, separated by ``sep``. PostgreSQL
         ``STRING_AGG``; Oracle overrides with ``LISTAGG``."""

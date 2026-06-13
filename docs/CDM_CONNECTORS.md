@@ -180,9 +180,18 @@ HTTP ; async/workers — quality analyze/conformity, characterization,
 suggest-batch, cache build, extract — appelés directement contre une vraie
 connexion). Lancé sur un vrai PostgreSQL 16 **et** un vrai Oracle Free 23 :
 
-- **PostgreSQL : 54/54** (37 du harnais exhaustif + 17 de `test_integration_omop.py`).
-- **Oracle : 54/54** — toute la surface CDM s'exécute, y compris les
+- **PostgreSQL : 59/59** (42 du harnais exhaustif + 17 de `test_integration_omop.py`).
+- **Oracle : 59/59** — toute la surface CDM s'exécute, y compris les
   « constructions dures » du tableau ci-dessus.
+
+Couverture du harnais : les 45 endpoints CDM, plus `cohort/pathways.py` (tables
+temp, `STRING_AGG`), le **chemin d'écriture** `mapping/apply` + `apply/rollback`
++ `apply/batch`, la lecture CDM de `sapbert_build`, et un jeu de critères de
+cohorte « complexes » (fenêtre temporelle + exclusion + occurrence + descendants)
+en plus des critères simples. Restent hors harnais : le build SapBERT *complet*
+(dépend du runner SapBERT, hors SQL CDM) et **SQL Server** (pas d'instance).
+Le harnais est surtout *smoke* (exécution sans erreur moteur) ; les assertions
+valeur-par-valeur restent celles de `test_integration_omop.py` + quelques-unes ici.
 
 Le port Oracle des constructions dures a nécessité, en plus de l'infrastructure
 de dialecte existante :
@@ -198,6 +207,10 @@ de dialecte existante :
 - `cohort/characterization.py` : table de travail renommée sans underscore de
   tête (ORA-00911), alias dérivés sans `AS`, `RELEASE SAVEPOINT` via
   `dialect.release_savepoint_sql()` (no-op sur Oracle).
+- `cohort/pathways.py` : tables temp `_pw_*` renommées (ORA-00911), type de
+  colonne via `dialect.big_int_type()` (`NUMBER(19)` sur Oracle, ORA-00902),
+  `SELECT t.*, …` qualifié (Oracle refuse `SELECT *, expr`, ORA-00923),
+  `STRING_AGG` → `dialect.string_agg()`.
 - `utils/cdm_helper.build_schema_map()` attache désormais le dialecte issu de
   `db_type` au `SchemaMap`, pour que les builders qui ne reçoivent que le schéma
   émettent du SQL du bon moteur (au lieu de retomber sur PostgreSQL).

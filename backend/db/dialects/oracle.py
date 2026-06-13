@@ -204,6 +204,9 @@ class OracleDialect(Dialect):
     def random_func(self) -> str:
         return "DBMS_RANDOM.VALUE"
 
+    def big_int_type(self) -> str:
+        return "NUMBER(19)"
+
     def release_savepoint_sql(self, name: str) -> str | None:
         return None  # Oracle has no RELEASE SAVEPOINT; savepoints just go out of scope
 
