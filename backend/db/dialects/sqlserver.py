@@ -60,6 +60,21 @@ class SqlServerDialect(Dialect):
     def quote_ident(self, name: str) -> str:
         return f"[{name}]"
 
+    # ── scratch-table DDL (best-effort) ─────────────────────────────────────
+    def create_table_as(self, name: str, select_sql: str) -> str:
+        # SQL Server has no CTAS; SELECT … INTO creates the table.
+        return f"SELECT * INTO {name} FROM ({select_sql}) _src"
+
+    def create_temp_table_as(self, name: str, select_sql: str) -> str:
+        return f"SELECT * INTO {name} FROM ({select_sql}) _src"  # best-effort regular table
+
+    def analyze_table(self, name: str):
+        return f"UPDATE STATISTICS {name}"
+
+    def create_index(self, table: str, columns: str, index_name: str | None = None) -> str:
+        idx = index_name or f"ix_{abs(hash((table, columns))) % 10_000_000}"
+        return f"CREATE INDEX {idx} ON {table} ({columns})"
+
     def _prepare(self, sql: str, params=None):
         if isinstance(params, dict):
             # pyodbc supports only positional '?': reorder dict values to match.

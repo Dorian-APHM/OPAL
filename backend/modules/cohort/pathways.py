@@ -18,8 +18,6 @@ import logging
 from collections import Counter, defaultdict
 from typing import Any
 
-from psycopg2.extensions import adapt as _pg_adapt
-
 from config import DOMAIN_CONFIG
 from modules.cohort.sql_builder import build_cohort_sql
 from utils.sql_safety import safe_identifier
@@ -81,7 +79,13 @@ def run_pathways_analysis(
     from modules.cohort.sql_builder import _smap
     omop_schema = _smap(omop_schema)
     safe_identifier(omop_schema)
-    from psycopg2.extras import RealDictCursor
+    dialect = conn.dialect
+    omop_schema._dialect = dialect
+
+    def _analyze(cur, name):
+        sql = dialect.analyze_table(name)
+        if sql:
+            cur.execute(sql)
 
     total_steps = 3 + len(event_cohorts)
     completed = [0]
@@ -91,35 +95,30 @@ def run_pathways_analysis(
         if progress_callback:
             progress_callback(completed[0], total_steps, label)
 
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with dialect.dict_cursor(conn) as cur:
         # ── Step 1: Materialise target cohort with observation period ──
         cohort_sql = build_cohort_sql(criteria, omop_schema)
-        cur.execute("DROP TABLE IF EXISTS _pw_target")
-        cur.execute(f"""
-            CREATE TEMP TABLE _pw_target AS
+        cur.execute(dialect.drop_table_if_exists("_pw_target"))
+        cur.execute(dialect.create_temp_table_as("_pw_target", f"""
             SELECT DISTINCT p.person_id,
                    op.observation_period_start_date AS cohort_start,
                    op.observation_period_end_date   AS cohort_end
             FROM ({cohort_sql}) p
             JOIN {omop_schema.t('observation_period')} op
               ON p.person_id = op.person_id
-        """)
-        cur.execute("CREATE INDEX ON _pw_target (person_id)")
-        cur.execute("ANALYZE _pw_target")
+        """))
+        cur.execute(dialect.create_index("_pw_target", "person_id"))
+        _analyze(cur, "_pw_target")
         cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM _pw_target")
         target_size = cur.fetchone()["n"]
         _report("Target cohort materialised")
 
         # ── Step 2: For each event cohort, collect raw events ──
-        cur.execute("DROP TABLE IF EXISTS _pw_events")
-        cur.execute("""
-            CREATE TEMP TABLE _pw_events (
-                person_id BIGINT,
-                event_name TEXT,
-                event_start DATE,
-                event_end DATE
-            )
-        """)
+        cur.execute(dialect.drop_table_if_exists("_pw_events"))
+        cur.execute(dialect.create_temp_table(
+            "_pw_events",
+            "person_id BIGINT, event_name VARCHAR(255), event_start DATE, event_end DATE",
+        ))
 
         for ec in event_cohorts:
             name = ec["name"]
@@ -165,29 +164,29 @@ def run_pathways_analysis(
             if validated_ids:
                 ids_str = ",".join(str(cid) for cid in validated_ids)
                 if include_desc:
-                    concept_filter = f"""
-                        t.{cid_col} IN (
-                            SELECT v FROM (
-                                SELECT unnest(ARRAY[{ids_str}]) AS v
-                                UNION
-                                SELECT descendant_concept_id
-                                FROM {omop_schema.t('concept_ancestor')}
-                                WHERE ancestor_concept_id IN ({ids_str})
-                            ) _exp
-                        )
-                    """
+                    # Explicit ids OR their descendants (engine-neutral; avoids unnest/ARRAY).
+                    concept_filter = (
+                        f"(t.{cid_col} IN ({ids_str})"
+                        f" OR t.{cid_col} IN ("
+                        f"   SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')}"
+                        f"   WHERE ancestor_concept_id IN ({ids_str})))"
+                    )
                 else:
                     concept_filter = f"t.{cid_col} IN ({ids_str})"
 
-            # Build source code filter
+            # Build source code filter (parameterised — no engine-specific literal quoting)
             source_filter = None
+            event_params: dict = {"ename": name}
             if source_codes and source_value_col:
-                quoted = ", ".join(
-                    _pg_adapt(str(code)).getquoted().decode("utf-8") for code in source_codes
-                )
-                source_parts = [f"t.{source_value_col} IN ({quoted})"]
+                sc_keys = []
+                for i, code in enumerate(source_codes):
+                    k = f"sc{i}"
+                    event_params[k] = str(code)
+                    sc_keys.append(f"%({k})s")
+                placeholders = ", ".join(sc_keys)
+                source_parts = [f"t.{source_value_col} IN ({placeholders})"]
                 if source_name_col:
-                    source_parts.append(f"t.{source_name_col} IN ({quoted})")
+                    source_parts.append(f"t.{source_name_col} IN ({placeholders})")
                 source_filter = f"({' OR '.join(source_parts)})"
 
             # Combine filters with OR
@@ -201,7 +200,7 @@ def run_pathways_analysis(
                 _report(f"Skipped {name} (no valid filters)")
                 continue
 
-            cur.execute(f"""
+            dialect.execute(cur, f"""
                 INSERT INTO _pw_events (person_id, event_name, event_start, event_end)
                 SELECT tgt.person_id,
                        %(ename)s,
@@ -212,18 +211,17 @@ def run_pathways_analysis(
                   ON tgt.person_id = t.person_id
                  AND t.{date_col} BETWEEN tgt.cohort_start AND tgt.cohort_end
                 WHERE {where_filter}
-            """, {"ename": name})
+            """, event_params)
             _report(f"Events: {name}")
 
-        cur.execute("CREATE INDEX ON _pw_events (person_id, event_start)")
-        cur.execute("ANALYZE _pw_events")
+        cur.execute(dialect.create_index("_pw_events", "person_id, event_start"))
+        _analyze(cur, "_pw_events")
 
         # ── Step 3: Build eras (collapse overlapping events of same name) ──
         # Using a gap-merge approach: events of the same type within
         # combo_window days are merged into one continuous era.
-        cur.execute("DROP TABLE IF EXISTS _pw_eras")
-        cur.execute(f"""
-            CREATE TEMP TABLE _pw_eras AS
+        cur.execute(dialect.drop_table_if_exists("_pw_eras"))
+        cur.execute(dialect.create_temp_table_as("_pw_eras", f"""
             WITH ordered AS (
                 SELECT person_id, event_name, event_start, event_end,
                        LAG(event_end) OVER (
@@ -236,7 +234,7 @@ def run_pathways_analysis(
                 SELECT *,
                        SUM(CASE
                            WHEN prev_end IS NULL
-                             OR event_start > prev_end + INTERVAL '{int(combo_window)} days'
+                             OR event_start > {dialect.date_add('prev_end', int(combo_window))}
                            THEN 1 ELSE 0
                        END) OVER (
                            PARTITION BY person_id, event_name
@@ -250,9 +248,9 @@ def run_pathways_analysis(
                    MAX(event_end)   AS era_end
             FROM groups
             GROUP BY person_id, event_name, era_group
-        """)
-        cur.execute("CREATE INDEX ON _pw_eras (person_id, era_start)")
-        cur.execute("ANALYZE _pw_eras")
+        """))
+        cur.execute(dialect.create_index("_pw_eras", "person_id, era_start"))
+        _analyze(cur, "_pw_eras")
         _report("Eras collapsed")
 
         # ── Step 4: Build per-person pathway sequences ──
@@ -281,9 +279,9 @@ def run_pathways_analysis(
         rows = cur.fetchall()
 
         # Clean up temp tables
-        cur.execute("DROP TABLE IF EXISTS _pw_eras")
-        cur.execute("DROP TABLE IF EXISTS _pw_events")
-        cur.execute("DROP TABLE IF EXISTS _pw_target")
+        cur.execute(dialect.drop_table_if_exists("_pw_eras"))
+        cur.execute(dialect.drop_table_if_exists("_pw_events"))
+        cur.execute(dialect.drop_table_if_exists("_pw_target"))
 
     # ── Step 5: Aggregate pathways in Python ──
     # Build per-person pathway list

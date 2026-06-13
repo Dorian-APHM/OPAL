@@ -53,6 +53,25 @@ class OracleDialect(Dialect):
     def quote_ident(self, name: str) -> str:
         return f'"{name}"'
 
+    # ── scratch-table DDL (best-effort) ─────────────────────────────────────
+    def drop_table_if_exists(self, name: str) -> str:
+        # Oracle has no DROP TABLE IF EXISTS; swallow ORA-00942 in a PL/SQL block.
+        return (f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {name}'; "
+                f"EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;")
+
+    def analyze_table(self, name: str):
+        return None  # rely on Oracle automatic stats; the hint is non-essential
+
+    def create_temp_table_as(self, name: str, select_sql: str) -> str:
+        return f"CREATE TABLE {name} AS {select_sql}"  # best-effort regular table
+
+    def create_temp_table(self, name: str, column_defs: str) -> str:
+        return f"CREATE TABLE {name} ({column_defs})"
+
+    def create_index(self, table: str, columns: str, index_name: str | None = None) -> str:
+        idx = index_name or f"ix_{abs(hash((table, columns))) % 10_000_000}"
+        return f"CREATE INDEX {idx} ON {table} ({columns})"
+
     def _prepare(self, sql: str, params=None):
         if isinstance(params, dict):
             return translate_named(sql, lambda name: f":{name}"), params

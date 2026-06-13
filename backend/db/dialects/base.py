@@ -182,6 +182,34 @@ class Dialect:
         reference engine's SQL is unchanged."""
         return name
 
+    # ── scratch-table DDL (used by pathways / characterization) ─────────────
+    def drop_table_if_exists(self, name: str) -> str:
+        return f"DROP TABLE IF EXISTS {name}"
+
+    def create_table_as(self, name: str, select_sql: str) -> str:
+        """``CREATE TABLE name AS <select>``. SQL Server uses ``SELECT … INTO``."""
+        return f"CREATE TABLE {name} AS {select_sql}"
+
+    def create_temp_table_as(self, name: str, select_sql: str) -> str:
+        """Session-scratch table from a SELECT. PostgreSQL uses ``CREATE TEMP
+        TABLE``; other engines fall back to a regular table (best-effort — loses
+        session isolation but works since callers drop it each run)."""
+        return f"CREATE TEMP TABLE {name} AS {select_sql}"
+
+    def create_temp_table(self, name: str, column_defs: str) -> str:
+        """Empty session-scratch table with explicit columns."""
+        return f"CREATE TEMP TABLE {name} ({column_defs})"
+
+    def analyze_table(self, name: str):
+        """SQL to refresh planner stats, or ``None`` if not applicable (it's only
+        a performance hint; callers skip when None)."""
+        return f"ANALYZE {name}"
+
+    def create_index(self, table: str, columns: str, index_name: str | None = None) -> str:
+        """Create an index on ``table(columns)``. PostgreSQL allows an anonymous
+        index; other engines need an explicit name (``index_name``)."""
+        return f"CREATE INDEX ON {table} ({columns})"
+
     def in_list(self, col_sql: str, values) -> tuple[str, list]:
         """Return ``(sql_fragment, params)`` for ``col IN (values)``.
 
