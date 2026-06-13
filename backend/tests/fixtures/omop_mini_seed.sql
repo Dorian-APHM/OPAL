@@ -106,8 +106,12 @@ CREATE TABLE procedure_occurrence (procedure_occurrence_id BIGINT PRIMARY KEY, p
   procedure_concept_id BIGINT, procedure_date DATE,
   procedure_source_value TEXT, procedure_source_concept_id BIGINT);
 CREATE TABLE visit_occurrence (visit_occurrence_id BIGINT PRIMARY KEY, person_id BIGINT,
-  visit_concept_id BIGINT, visit_start_date DATE,
+  visit_concept_id BIGINT, visit_start_date DATE, visit_end_date DATE,
   visit_source_value TEXT, visit_source_concept_id BIGINT);
+INSERT INTO visit_occurrence VALUES
+ (10,1,9201,'2020-01-05','2020-01-08','I',0),
+ (20,2,9201,'2020-02-10','2020-02-12','I',0),
+ (30,3,9202,'2021-03-01','2021-03-01','O',0);
 CREATE TABLE device_exposure (device_exposure_id BIGINT PRIMARY KEY, person_id BIGINT,
   device_concept_id BIGINT, device_exposure_start_date DATE,
   device_source_value TEXT, device_source_concept_id BIGINT);
