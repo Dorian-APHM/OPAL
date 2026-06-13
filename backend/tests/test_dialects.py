@@ -111,6 +111,41 @@ def test_quote_ident_per_engine():
     assert get_dialect("sqlserver").quote_ident("concept") == "[concept]"
 
 
+def test_date_add_per_engine():
+    pg, o, ms = get_dialect("postgresql"), get_dialect("oracle"), get_dialect("sqlserver")
+    assert pg.date_add("d", 7) == "(d + INTERVAL '7 day')"
+    assert pg.date_add("d", -5, "day") == "(d + INTERVAL '-5 day')"
+    assert pg.date_add("d", 12, "month") == "(d + INTERVAL '12 month')"
+    assert o.date_add("d", 7) == "(d + 7)"
+    assert o.date_add("d", 12, "month") == "ADD_MONTHS(d, 12)"
+    assert ms.date_add("d", 7) == "DATEADD(day, 7, d)"
+    assert ms.date_add("d", 12, "month") == "DATEADD(month, 12, d)"
+
+
+def test_date_diff_and_trunc_and_extract():
+    pg, o, ms = get_dialect("postgresql"), get_dialect("oracle"), get_dialect("sqlserver")
+    assert pg.date_diff_days("a", "b") == "((a) - (b))"
+    assert ms.date_diff_days("a", "b") == "DATEDIFF(day, b, a)"
+    assert pg.date_trunc("month", "x") == "date_trunc('month', x)"
+    assert o.date_trunc("month", "x") == "TRUNC(x, 'MM')"
+    assert "DATEDIFF(month" in ms.date_trunc("month", "x")
+    assert pg.extract("YEAR", "x") == "EXTRACT(YEAR FROM x)"
+    assert ms.extract("year", "x") == "DATEPART(year, x)"
+
+
+def test_filter_and_least_per_engine():
+    pg, o, ms = get_dialect("postgresql"), get_dialect("oracle"), get_dialect("sqlserver")
+    assert pg.count_filter("x > 0") == "COUNT(*) FILTER (WHERE x > 0)"
+    assert o.count_filter("x > 0") == "SUM(CASE WHEN x > 0 THEN 1 ELSE 0 END)"
+    assert pg.sum_filter("n", "x > 0") == "SUM(n) FILTER (WHERE x > 0)"
+    assert ms.sum_filter("n", "x > 0") == "SUM(CASE WHEN x > 0 THEN n ELSE 0 END)"
+    assert pg.least("a", "b") == "LEAST(a, b)"
+    assert ms.least("a", "b") == "(CASE WHEN a <= b THEN a ELSE b END)"
+    # PERCENTILE_CONT is standard across all three.
+    assert pg.percentile_cont(0.5, "v") == o.percentile_cont(0.5, "v") == \
+        "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v)"
+
+
 def test_dict_row_cursor_maps_rows():
     class FakeCur:
         description = [("a",), ("b",)]

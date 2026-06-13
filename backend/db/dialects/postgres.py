@@ -100,3 +100,22 @@ class PostgresDialect(Dialect):
 
     def limit_offset(self, limit_ph: str, offset_ph: str) -> str:
         return f"LIMIT {limit_ph} OFFSET {offset_ph}"
+
+    # ── date / time + analytical (native PostgreSQL) ────────────────────────
+    def date_add(self, date_expr: str, n, unit: str = "day") -> str:
+        return f"({date_expr} + INTERVAL '{n} {unit}')"
+
+    def date_diff_days(self, end_expr: str, start_expr: str) -> str:
+        return f"(({end_expr}) - ({start_expr}))"
+
+    def date_trunc(self, unit: str, expr: str) -> str:
+        return f"date_trunc('{unit}', {expr})"
+
+    def extract(self, part: str, expr: str) -> str:
+        return f"EXTRACT({part} FROM {expr})"
+
+    def count_filter(self, condition: str) -> str:
+        return f"COUNT(*) FILTER (WHERE {condition})"
+
+    def sum_filter(self, value_expr: str, condition: str) -> str:
+        return f"SUM({value_expr}) FILTER (WHERE {condition})"

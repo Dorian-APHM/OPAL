@@ -119,3 +119,23 @@ class OracleDialect(Dialect):
 
     def limit_offset(self, limit_ph: str, offset_ph: str) -> str:
         return f"OFFSET {offset_ph} ROWS FETCH NEXT {limit_ph} ROWS ONLY"
+
+    # ── date / time + analytical (best-effort) ──────────────────────────────
+    def date_add(self, date_expr: str, n, unit: str = "day") -> str:
+        if unit == "day":
+            return f"({date_expr} + {n})"            # Oracle DATE + number = days
+        if unit == "month":
+            return f"ADD_MONTHS({date_expr}, {n})"
+        if unit == "year":
+            return f"ADD_MONTHS({date_expr}, {int(n) * 12 if str(n).lstrip('-').isdigit() else f'({n})*12'})"
+        return f"({date_expr} + NUMTODSINTERVAL({n}, '{unit}'))"
+
+    def date_diff_days(self, end_expr: str, start_expr: str) -> str:
+        return f"(({end_expr}) - ({start_expr}))"     # Oracle DATE - DATE = days
+
+    def date_trunc(self, unit: str, expr: str) -> str:
+        fmt = {"day": "DD", "month": "MM", "year": "YYYY"}.get(unit, unit)
+        return f"TRUNC({expr}, '{fmt}')"
+
+    def extract(self, part: str, expr: str) -> str:
+        return f"EXTRACT({part} FROM {expr})"

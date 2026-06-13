@@ -196,3 +196,41 @@ class Dialect:
     def limit_offset(self, limit_ph: str, offset_ph: str) -> str:
         """Trailing pagination clause for ``ORDER BY ... <here>``."""
         raise NotImplementedError
+
+    # ── date / time + analytical fragments ──────────────────────────────────
+    # All take/return SQL fragment strings. PostgreSQL returns its native idioms
+    # so migrated builders stay equivalent to today on PG. ``n``/``unit`` are
+    # caller-validated (ints / fixed keywords), never user input.
+    def date_add(self, date_expr: str, n, unit: str = "day") -> str:
+        """``date_expr`` shifted by ``n`` units (``unit`` in {day, month, year}).
+        ``n`` may be negative to subtract."""
+        raise NotImplementedError
+
+    def date_diff_days(self, end_expr: str, start_expr: str) -> str:
+        """Whole days between two dates (``end - start``)."""
+        raise NotImplementedError
+
+    def date_trunc(self, unit: str, expr: str) -> str:
+        """Truncate a date/timestamp to ``unit`` (day/month/year)."""
+        raise NotImplementedError
+
+    def extract(self, part: str, expr: str) -> str:
+        """Extract a calendar field (year/month/day) as a number."""
+        raise NotImplementedError
+
+    def least(self, a: str, b: str) -> str:
+        return f"LEAST({a}, {b})"
+
+    def greatest(self, a: str, b: str) -> str:
+        return f"GREATEST({a}, {b})"
+
+    def percentile_cont(self, fraction, order_expr: str) -> str:
+        # Standard SQL — supported by PostgreSQL, Oracle and SQL Server 2012+.
+        return f"PERCENTILE_CONT({fraction}) WITHIN GROUP (ORDER BY {order_expr})"
+
+    def count_filter(self, condition: str) -> str:
+        """``COUNT(*)`` restricted to rows matching ``condition``."""
+        return f"SUM(CASE WHEN {condition} THEN 1 ELSE 0 END)"
+
+    def sum_filter(self, value_expr: str, condition: str) -> str:
+        return f"SUM(CASE WHEN {condition} THEN {value_expr} ELSE 0 END)"

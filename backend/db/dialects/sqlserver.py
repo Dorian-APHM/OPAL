@@ -126,3 +126,26 @@ class SqlServerDialect(Dialect):
 
     def limit_offset(self, limit_ph: str, offset_ph: str) -> str:
         return f"OFFSET {offset_ph} ROWS FETCH NEXT {limit_ph} ROWS ONLY"
+
+    # ── date / time + analytical (best-effort) ──────────────────────────────
+    def date_add(self, date_expr: str, n, unit: str = "day") -> str:
+        return f"DATEADD({unit}, {n}, {date_expr})"
+
+    def date_diff_days(self, end_expr: str, start_expr: str) -> str:
+        return f"DATEDIFF(day, {start_expr}, {end_expr})"
+
+    def date_trunc(self, unit: str, expr: str) -> str:
+        # DATETRUNC requires SQL Server 2022+. Fallback for day/month/year via
+        # DATEADD/DATEDIFF from the epoch keeps older versions working.
+        anchor = "0001-01-01"
+        return f"DATEADD({unit}, DATEDIFF({unit}, '{anchor}', {expr}), CAST('{anchor}' AS date))"
+
+    def extract(self, part: str, expr: str) -> str:
+        return f"DATEPART({part}, {expr})"
+
+    def least(self, a: str, b: str) -> str:
+        # LEAST/GREATEST exist only in SQL Server 2022+; CASE is universal.
+        return f"(CASE WHEN {a} <= {b} THEN {a} ELSE {b} END)"
+
+    def greatest(self, a: str, b: str) -> str:
+        return f"(CASE WHEN {a} >= {b} THEN {a} ELSE {b} END)"
