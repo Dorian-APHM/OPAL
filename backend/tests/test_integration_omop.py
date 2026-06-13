@@ -133,6 +133,16 @@ def test_global_search_by_concept_id(client, cdm):
     assert any(c["concept_id"] == 320128 for c in r.json()["results"]["concepts"])
 
 
+def test_cohort_concept_search(client, cdm):
+    r = client.post("/api/cohorts/concepts/search", json={
+        "cdm_name": cdm, "query": "metformin", "limit": 10,
+    })
+    assert r.status_code == 200
+    concepts = r.json().get("concepts", r.json())
+    ids = [c["concept_id"] for c in concepts]
+    assert 1503297 in ids
+
+
 def test_datamanagement_tables_and_columns(client, cdm):
     r = client.get(f"/api/datamanagement/tables?cdm_name={cdm}")
     assert r.status_code == 200
