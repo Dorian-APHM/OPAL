@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 
-from .base import Dialect, DictRowCursor, translate_pyformat
+from .base import Dialect, DictRowCursor, translate_pyformat, translate_named_to_positional
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,13 @@ class SqlServerDialect(Dialect):
         return f"[{name}]"
 
     def execute(self, cursor, sql: str, params=None):
-        translated = translate_pyformat(sql, lambda i: "?")
-        cursor.execute(translated, list(params) if params is not None else [])
+        if isinstance(params, dict):
+            # pyodbc supports only positional '?': reorder dict values to match.
+            translated, ordered = translate_named_to_positional(sql, params, lambda i: "?")
+            cursor.execute(translated, ordered)
+        else:
+            translated = translate_pyformat(sql, lambda i: "?")
+            cursor.execute(translated, list(params) if params is not None else [])
         return cursor
 
     def set_statement_timeout(self, conn, ms: int) -> None:

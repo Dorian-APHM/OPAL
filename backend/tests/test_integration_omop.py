@@ -133,6 +133,26 @@ def test_global_search_by_concept_id(client, cdm):
     assert any(c["concept_id"] == 320128 for c in r.json()["results"]["concepts"])
 
 
+def test_mapping_suggest_exact_match(client, cdm):
+    # concept_code '6809' (Metformin, RxNorm) → exact match strategy.
+    r = client.post("/api/mapping/suggest", json={
+        "cdm_name": cdm, "domain": "Drug", "source_value": "6809", "source_name": "metformine",
+    })
+    assert r.status_code == 200
+    sugg = r.json()["suggestions"]
+    assert any(s["concept_id"] == 1503297 and s["source"] == "exact" for s in sugg)
+
+
+def test_mapping_suggest_relationship_match(client, cdm):
+    # 'Maps to' from concept_code 59621000 (320128) → standard concept 201826.
+    r = client.post("/api/mapping/suggest", json={
+        "cdm_name": cdm, "domain": "Condition", "source_value": "59621000", "source_name": "hypertension",
+    })
+    assert r.status_code == 200
+    sugg = r.json()["suggestions"]
+    assert any(s["concept_id"] == 201826 and s["source"] == "relationship" for s in sugg)
+
+
 def test_concept_counts(client, cdm):
     # 320128 (hypertension) appears twice in condition_occurrence; 1503297 (metformin)
     # twice in drug_exposure. Exercises the IN-list/= ANY UNION across domain tables.

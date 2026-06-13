@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from .base import Dialect, DictRowCursor, translate_pyformat
+from .base import Dialect, DictRowCursor, translate_pyformat, translate_named
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,12 @@ class OracleDialect(Dialect):
         return f'"{name}"'
 
     def execute(self, cursor, sql: str, params=None):
-        translated = translate_pyformat(sql, lambda i: f":{i}")
-        cursor.execute(translated, list(params) if params is not None else [])
+        if isinstance(params, dict):
+            # Named binds: %(name)s -> :name, dict kept as-is.
+            cursor.execute(translate_named(sql, lambda name: f":{name}"), params)
+        else:
+            translated = translate_pyformat(sql, lambda i: f":{i}")
+            cursor.execute(translated, list(params) if params is not None else [])
         return cursor
 
     def set_statement_timeout(self, conn, ms: int) -> None:

@@ -13,9 +13,6 @@ Proposes concept mappings for unmapped source values using 5 strategies
 import logging
 import re
 
-from psycopg2 import sql as psysql
-from psycopg2.extras import DictCursor
-
 from utils.sql_safety import safe_identifier
 
 logger = logging.getLogger(__name__)
@@ -57,13 +54,14 @@ def suggest_mappings(
                 suggestions.append(s)
                 seen_concept_ids.add(s["concept_id"])
 
-    with conn.cursor(cursor_factory=DictCursor) as cur:
+    dialect = conn.dialect
+    with dialect.dict_cursor(conn) as cur:
         if enable_exact:
-            _add(_exact_match(cur, source_value, domain, omop_schema))
+            _add(_exact_match(dialect, cur, source_value, domain, omop_schema))
         if enable_relationship and source_name:
-            _add(_relationship_match(cur, source_value, domain, omop_schema))
+            _add(_relationship_match(dialect, cur, source_value, domain, omop_schema))
         if enable_ingredient and source_name:
-            _add(_ingredient_match(cur, source_name, domain, omop_schema))
+            _add(_ingredient_match(dialect, cur, source_name, domain, omop_schema))
 
     suggestions.sort(key=lambda x: x["confidence"], reverse=True)
     return suggestions[:max_suggestions]
@@ -111,21 +109,22 @@ def suggest_batch(
 
 # ──── Strategy 1: Exact Match ────
 
-def _exact_match(cur, source_value: str, domain: str, schema: str) -> list[dict]:
+def _exact_match(dialect, cur, source_value: str, domain: str, schema: str) -> list[dict]:
     """Find concepts where concept_code exactly matches source_value."""
+    concept = f"{dialect.quote_ident(schema)}.{dialect.quote_ident('concept')}"
     try:
-        cur.execute(psysql.SQL("""
+        dialect.execute(cur, f"""
             SELECT c.concept_id, c.concept_name, c.concept_code,
                    c.vocabulary_id, c.domain_id, c.standard_concept
-            FROM {}.{} c
+            FROM {concept} c
             WHERE c.concept_code = %(sv)s
               AND c.invalid_reason IS NULL
               AND c.standard_concept = 'S'
             ORDER BY
               CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
               c.concept_name
-            LIMIT 5
-        """).format(psysql.Identifier(schema), psysql.Identifier('concept')), {"sv": source_value, "domain": domain})
+            {dialect.limit_offset('5', '0')}
+        """, {"sv": source_value, "domain": domain})
         rows = cur.fetchall()
         return [
             {
@@ -148,32 +147,30 @@ def _exact_match(cur, source_value: str, domain: str, schema: str) -> list[dict]
 
 # ──── Strategy 2: Concept Relationships ────
 
-def _relationship_match(cur, source_value: str, domain: str, schema: str) -> list[dict]:
+def _relationship_match(dialect, cur, source_value: str, domain: str, schema: str) -> list[dict]:
     """Find 'Maps to' relationships from source concept codes."""
+    sch = dialect.quote_ident(schema)
+    concept = f"{sch}.{dialect.quote_ident('concept')}"
+    concept_relationship = f"{sch}.{dialect.quote_ident('concept_relationship')}"
     try:
-        cur.execute(psysql.SQL("""
+        dialect.execute(cur, f"""
             SELECT DISTINCT
                 c2.concept_id, c2.concept_name, c2.concept_code,
                 c2.vocabulary_id, c2.domain_id, c2.standard_concept,
                 CASE WHEN c2.domain_id = %(domain)s THEN 0 ELSE 1 END AS domain_rank
-            FROM {schema}.{concept} c1
-            JOIN {schema}.{concept_relationship} cr
+            FROM {concept} c1
+            JOIN {concept_relationship} cr
               ON c1.concept_id = cr.concept_id_1
               AND cr.relationship_id = 'Maps to'
               AND cr.invalid_reason IS NULL
-            JOIN {schema}.{concept2} c2
+            JOIN {concept} c2
               ON cr.concept_id_2 = c2.concept_id
               AND c2.standard_concept = 'S'
               AND c2.invalid_reason IS NULL
             WHERE c1.concept_code = %(sv)s
             ORDER BY domain_rank
-            LIMIT 5
-        """).format(
-            schema=psysql.Identifier(schema),
-            concept=psysql.Identifier('concept'),
-            concept_relationship=psysql.Identifier('concept_relationship'),
-            concept2=psysql.Identifier('concept'),
-        ), {"sv": source_value, "domain": domain})
+            {dialect.limit_offset('5', '0')}
+        """, {"sv": source_value, "domain": domain})
         rows = cur.fetchall()
         return [
             {
@@ -410,12 +407,12 @@ def _extract_ingredient_dosage_form(
     return name, dosage, form_keywords, brand
 
 
-def _form_order_clause(form_keywords: list[str], alias: str = "c") -> str:
+def _form_order_clause(dialect, form_keywords: list[str], alias: str = "c") -> str:
     """Build a CASE WHEN clause to prioritize concepts matching the galenic form."""
     if not form_keywords:
         return "0+0"
     conditions = " OR ".join(
-        f"unaccent({alias}.concept_name) ILIKE unaccent(%({_form_param(i)})s)"
+        dialect.ilike(f"{alias}.concept_name", f"%({_form_param(i)})s")
         for i in range(len(form_keywords))
     )
     return f"CASE WHEN {conditions} THEN 0 ELSE 1 END"
@@ -437,7 +434,7 @@ def _form_matches(concept_name: str, form_keywords: list[str]) -> bool:
 
 
 def _ingredient_match(
-    cur, source_name: str, domain: str, schema: str
+    dialect, cur, source_name: str, domain: str, schema: str
 ) -> list[dict]:
     """
     Extract the active ingredient (DCI/INN) from a French source_name and
@@ -457,12 +454,12 @@ def _ingredient_match(
         else:
             ingredient_en = ingredient
 
-    form_order = _form_order_clause(form_keywords)
+    form_order = _form_order_clause(dialect, form_keywords)
     fparams = _form_params(form_keywords)
 
     # Brand name ordering: concepts with [BrandName] ranked higher
     if brand:
-        brand_order = "CASE WHEN unaccent(c.concept_name) ILIKE unaccent(%(brand_pat)s) THEN 0 ELSE 1 END"
+        brand_order = f"CASE WHEN {dialect.ilike('c.concept_name', '%(brand_pat)s')} THEN 0 ELSE 1 END"
         fparams["brand_pat"] = f"%{brand}%"
     else:
         brand_order = "0+0"
@@ -496,22 +493,21 @@ def _ingredient_match(
             if len(results) >= 5:
                 break
 
-            ingredient_sql = psysql.SQL("""
+            concept_tbl = f"{dialect.quote_ident(schema)}.{dialect.quote_ident('concept')}"
+            # brand_order and form_order are code-generated SQL fragments (not user input)
+            ingredient_sql = f"""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.{table} c
-                WHERE unaccent(c.concept_name) ILIKE unaccent(%(term)s)
+                FROM {concept_tbl} c
+                WHERE {dialect.ilike('c.concept_name', '%(term)s')}
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
                 ORDER BY
                   CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
-            """).format(schema=psysql.Identifier(schema), table=psysql.Identifier('concept'))
-            # brand_order and form_order are code-generated SQL fragments (not user input)
-            order_tail = psysql.SQL("  {brand_order}, {form_order}, LENGTH(c.concept_name) LIMIT 5").format(
-                brand_order=psysql.SQL(brand_order),
-                form_order=psysql.SQL(form_order),
-            )
-            cur.execute(ingredient_sql + order_tail, {"term": search_term, "domain": domain, **fparams})
+                  {brand_order}, {form_order}, {dialect.length('c.concept_name')}
+                {dialect.limit_offset('5', '0')}
+            """
+            dialect.execute(cur, ingredient_sql, {"term": search_term, "domain": domain, **fparams})
             rows = cur.fetchall()
             for r in rows:
                 if r["concept_id"] not in seen:
@@ -536,25 +532,24 @@ def _ingredient_match(
         # Also search concept_synonym (use original French ingredient for synonyms)
         if len(results) < 5:
             syn_term = f"%{ingredient}%" if not dosage else f"%{ingredient}%{dosage}%"
-            cur.execute(psysql.SQL("""
+            sch = dialect.quote_ident(schema)
+            syn_tbl = f"{sch}.{dialect.quote_ident('concept_synonym')}"
+            concept_tbl = f"{sch}.{dialect.quote_ident('concept')}"
+            dialect.execute(cur, f"""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.vocabulary_id, c.domain_id, c.standard_concept
-                FROM {schema}.{syn_table} cs
-                JOIN {schema}.{concept} c ON cs.concept_id = c.concept_id
-                WHERE unaccent(cs.concept_synonym_name) ILIKE unaccent(%(term)s)
+                FROM {syn_tbl} cs
+                JOIN {concept_tbl} c ON cs.concept_id = c.concept_id
+                WHERE {dialect.ilike('cs.concept_synonym_name', '%(term)s')}
                   AND c.standard_concept = 'S'
                   AND c.invalid_reason IS NULL
                 GROUP BY c.concept_id, c.concept_name, c.concept_code,
                          c.vocabulary_id, c.domain_id, c.standard_concept
                 ORDER BY
                   CASE WHEN c.domain_id = %(domain)s THEN 0 ELSE 1 END,
-                  LENGTH(c.concept_name)
-                LIMIT 5
-            """).format(
-                schema=psysql.Identifier(schema),
-                syn_table=psysql.Identifier('concept_synonym'),
-                concept=psysql.Identifier('concept'),
-            ), {"term": syn_term, "domain": domain})
+                  {dialect.length('c.concept_name')}
+                {dialect.limit_offset('5', '0')}
+            """, {"term": syn_term, "domain": domain})
             rows = cur.fetchall()
             seen = {r["concept_id"] for r in results}
             for r in rows:

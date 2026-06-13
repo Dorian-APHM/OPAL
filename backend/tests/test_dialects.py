@@ -105,6 +105,24 @@ def test_in_list_per_engine():
     assert frag == "[c] IN (%s)" and params == [9]
 
 
+def test_named_param_execute_per_engine():
+    class FakeCur:
+        def execute(self, sql, params):
+            self.sql, self.params = sql, params
+
+    # PostgreSQL: passthrough (psycopg2 understands %(name)s + dict).
+    pg = FakeCur(); get_dialect("postgresql").execute(pg, "WHERE a=%(x)s AND b=%(y)s", {"x": 1, "y": 2})
+    assert pg.sql == "WHERE a=%(x)s AND b=%(y)s" and pg.params == {"x": 1, "y": 2}
+
+    # Oracle: %(name)s -> :name, dict kept.
+    o = FakeCur(); get_dialect("oracle").execute(o, "WHERE a=%(x)s AND b=%(y)s", {"x": 1, "y": 2})
+    assert o.sql == "WHERE a=:x AND b=:y" and o.params == {"x": 1, "y": 2}
+
+    # SQL Server: named -> ? with values reordered by appearance.
+    ms = FakeCur(); get_dialect("sqlserver").execute(ms, "WHERE a=%(y)s AND b=%(x)s", {"x": 1, "y": 2})
+    assert ms.sql == "WHERE a=? AND b=?" and ms.params == [2, 1]
+
+
 def test_quote_ident_per_engine():
     assert get_dialect("postgresql").quote_ident("concept") == '"concept"'
     assert get_dialect("oracle").quote_ident("concept") == '"concept"'

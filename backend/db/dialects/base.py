@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # Matches a psycopg2-style ``%s`` placeholder or a ``%%`` literal-percent escape.
 _PYFORMAT_PH = re.compile(r"%%|%s")
+# Matches a psycopg2 *named* placeholder ``%(name)s``.
+_NAMED_PH = re.compile(r"%\((\w+)\)s")
 
 
 def translate_pyformat(sql: str, make_placeholder) -> str:
@@ -40,6 +42,28 @@ def translate_pyformat(sql: str, make_placeholder) -> str:
         return make_placeholder(counter["n"])
 
     return _PYFORMAT_PH.sub(_repl, sql)
+
+
+def translate_named_to_positional(sql: str, params: dict, make_placeholder):
+    """Rewrite psycopg2 *named* ``%(name)s`` placeholders to a positional style.
+
+    Returns ``(translated_sql, ordered_params)`` where ``ordered_params`` lists the
+    dict values in placeholder order — for drivers (pyodbc) that only support the
+    ``?`` qmark style. ``make_placeholder(index)`` returns the engine placeholder."""
+    ordered: list = []
+
+    def _repl(m):
+        ordered.append(params[m.group(1)])
+        return make_placeholder(len(ordered))
+
+    translated = _NAMED_PH.sub(_repl, sql).replace("%%", "%")
+    return translated, ordered
+
+
+def translate_named(sql: str, make_placeholder) -> str:
+    """Rewrite ``%(name)s`` placeholders to a *named* style (e.g. Oracle ``:name``),
+    keeping a dict bind. ``make_placeholder(name)`` returns the engine placeholder."""
+    return _NAMED_PH.sub(lambda m: make_placeholder(m.group(1)), sql).replace("%%", "%")
 
 
 class DictRowCursor:
