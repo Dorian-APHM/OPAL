@@ -143,6 +143,9 @@ class SqlServerDialect(Dialect):
     def extract(self, part: str, expr: str) -> str:
         return f"DATEPART({part}, {expr})"
 
+    def length(self, expr: str) -> str:
+        return f"LEN({expr})"
+
     def least(self, a: str, b: str) -> str:
         # LEAST/GREATEST exist only in SQL Server 2022+; CASE is universal.
         return f"(CASE WHEN {a} <= {b} THEN {a} ELSE {b} END)"

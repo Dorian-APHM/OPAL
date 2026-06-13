@@ -118,6 +118,21 @@ def test_hierarchy_descendants(client, cdm):
     assert any(d["concept_id"] == 1503297 for d in body["descendants"])
 
 
+def test_global_search_concepts_and_source_values(client, cdm):
+    r = client.get(f"/api/search/?q=metformin&cdm_name={cdm}&limit=10")
+    assert r.status_code == 200
+    res = r.json()["results"]
+    assert any(c["concept_id"] == 1503297 for c in res["concepts"])
+    # source value 'METFORMINE 500MG' lives in drug_source_name
+    assert any("METFORMINE" in (s["source_name"] or "").upper() for s in res["source_values"])
+
+
+def test_global_search_by_concept_id(client, cdm):
+    r = client.get(f"/api/search/?q=320128&cdm_name={cdm}&limit=10")
+    assert r.status_code == 200
+    assert any(c["concept_id"] == 320128 for c in r.json()["results"]["concepts"])
+
+
 def test_concept_counts(client, cdm):
     # 320128 (hypertension) appears twice in condition_occurrence; 1503297 (metformin)
     # twice in drug_exposure. Exercises the IN-list/= ANY UNION across domain tables.

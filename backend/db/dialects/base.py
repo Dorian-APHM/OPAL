@@ -218,6 +218,9 @@ class Dialect:
         """Extract a calendar field (year/month/day) as a number."""
         raise NotImplementedError
 
+    def length(self, expr: str) -> str:
+        return f"LENGTH({expr})"
+
     def least(self, a: str, b: str) -> str:
         return f"LEAST({a}, {b})"
 
