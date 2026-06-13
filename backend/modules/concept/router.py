@@ -12,10 +12,9 @@ from utils.cdm_helper import check_cdm_access, get_domain_config, build_schema_m
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from psycopg2.extras import RealDictCursor
-from psycopg2 import sql as psysql
 
 from db.app_db import get_db
+from db.dialects import get_dialect
 from db.models import CdmConfig, AnalysisSettings, MappingDecision
 from db.omop_connector import get_omop_connection
 from utils.crypto import decrypt_password
@@ -116,17 +115,6 @@ def _get_conn(db: Session, cdm_name: str):
         logger.exception("Cannot connect to CDM '%s'", cdm_name)
         raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
     return conn, schema
-
-
-def _ident(name: str) -> psysql.Identifier:
-    """Return a psycopg2 sql.Identifier for safe SQL interpolation."""
-    return psysql.Identifier(safe_identifier(name))
-
-
-def _sident(schema, table: str) -> psysql.Identifier:
-    """Return a sql.Identifier for the schema that holds ``table`` (category-aware)."""
-    name = schema.schema_for(table) if hasattr(schema, "schema_for") else schema
-    return psysql.Identifier(safe_identifier(name))
 
 
 def _tbl(dialect, schema, table: str) -> str:
@@ -307,43 +295,42 @@ def get_concept_hierarchy(
 
     conn, schema = _get_conn(db, cdm_name)
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        dialect = conn.dialect
+        ca_tbl = _tbl(dialect, schema, 'concept_ancestor')
+        concept_tbl = _tbl(dialect, schema, 'concept')
+        with dialect.dict_cursor(conn) as cur:
             # Ancestors
-            cur.execute(
-                psysql.SQL("""
+            anc_sql = f"""
                 SELECT ca.ancestor_concept_id AS concept_id,
                        c.concept_name, c.concept_code,
                        c.vocabulary_id, c.concept_class_id,
                        c.standard_concept,
                        ca.min_levels_of_separation, ca.max_levels_of_separation
-                FROM {schema}.concept_ancestor ca
-                JOIN {schema}.concept c ON c.concept_id = ca.ancestor_concept_id
+                FROM {ca_tbl} ca
+                JOIN {concept_tbl} c ON c.concept_id = ca.ancestor_concept_id
                 WHERE ca.descendant_concept_id = %s
                   AND ca.ancestor_concept_id != %s
                 ORDER BY ca.min_levels_of_separation
-                LIMIT 100
-                """).format(schema=_sident(schema, 'concept')),
-                [concept_id, concept_id],
-            )
+                {dialect.limit_offset('100', '0')}
+            """
+            dialect.execute(cur, anc_sql, [concept_id, concept_id])
             ancestors = [dict(r) for r in cur.fetchall()]
 
             # Descendants
-            cur.execute(
-                psysql.SQL("""
+            desc_sql = f"""
                 SELECT ca.descendant_concept_id AS concept_id,
                        c.concept_name, c.concept_code,
                        c.vocabulary_id, c.concept_class_id,
                        c.standard_concept,
                        ca.min_levels_of_separation, ca.max_levels_of_separation
-                FROM {schema}.concept_ancestor ca
-                JOIN {schema}.concept c ON c.concept_id = ca.descendant_concept_id
+                FROM {ca_tbl} ca
+                JOIN {concept_tbl} c ON c.concept_id = ca.descendant_concept_id
                 WHERE ca.ancestor_concept_id = %s
                   AND ca.descendant_concept_id != %s
                 ORDER BY ca.min_levels_of_separation
-                LIMIT 200
-                """).format(schema=_sident(schema, 'concept')),
-                [concept_id, concept_id],
-            )
+                {dialect.limit_offset('200', '0')}
+            """
+            dialect.execute(cur, desc_sql, [concept_id, concept_id])
             descendants = [dict(r) for r in cur.fetchall()]
 
         result = {
@@ -370,47 +357,42 @@ def get_concept_source_values(
 
     results = []
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        dialect = conn.dialect
+        with dialect.dict_cursor(conn) as cur:
             for domain_name in DOMAIN_CONFIG:
                 cfg = get_domain_config(conn, schema, domain_name)
                 if not cfg or not cfg.get("source_value"):
                     continue
-                table = safe_identifier(cfg["table"])
-                concept_col = safe_identifier(cfg["concept_id"])
-                source_col = safe_identifier(cfg["source_value"])
-                source_concept_col = safe_identifier(cfg["source_concept_id"]) if cfg.get("source_concept_id") else None
+                table_ref = _tbl(dialect, schema, safe_identifier(cfg["table"]))
+                concept_col = dialect.quote_ident(safe_identifier(cfg["concept_id"]))
+                source_col = dialect.quote_ident(safe_identifier(cfg["source_value"]))
+                source_concept_col = (
+                    dialect.quote_ident(safe_identifier(cfg["source_concept_id"]))
+                    if cfg.get("source_concept_id") else None
+                )
 
                 # Build WHERE clause: match standard concept_id OR source_concept_id
-                where_parts = [psysql.SQL("{} = %s").format(_ident(concept_col))]
+                where_parts = [f"{concept_col} = %s"]
                 params: list = [domain_name, concept_id]
                 if source_concept_col:
-                    where_parts.append(psysql.SQL("{} = %s").format(_ident(source_concept_col)))
+                    where_parts.append(f"{source_concept_col} = %s")
                     params.append(concept_id)
-                where_clause = psysql.SQL(" OR ").join(where_parts)
+                where_clause = " OR ".join(where_parts)
 
                 try:
-                    cur.execute(
-                        psysql.SQL("""
+                    sql = f"""
                         SELECT %s AS domain,
                                {source_col} AS source_value,
                                COUNT(*) AS n_records,
                                COUNT(DISTINCT person_id) AS n_persons
-                        FROM {schema}.{table}
+                        FROM {table_ref}
                         WHERE ({where_clause})
-                          AND {source_col_2} IS NOT NULL
-                        GROUP BY {source_col_3}
+                          AND {source_col} IS NOT NULL
+                        GROUP BY {source_col}
                         ORDER BY COUNT(*) DESC
-                        LIMIT 50
-                        """).format(
-                            source_col=_ident(source_col),
-                            schema=_sident(schema, table),
-                            table=_ident(table),
-                            where_clause=where_clause,
-                            source_col_2=_ident(source_col),
-                            source_col_3=_ident(source_col),
-                        ),
-                        params,
-                    )
+                        {dialect.limit_offset('50', '0')}
+                    """
+                    dialect.execute(cur, sql, params)
                     rows = cur.fetchall()
                     for r in rows:
                         results.append(dict(r))
@@ -648,36 +630,32 @@ def get_concept_counts(
     ids = req.concept_ids[:200]
     counts: dict[int, dict] = {}
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        dialect = conn.dialect
+        with dialect.dict_cursor(conn) as cur:
             # Build a single UNION ALL query across all domain tables
             parts = []
+            params: list = []
             for cfg in DOMAIN_CONFIG.values():
-                table = safe_identifier(cfg["table"])
-                concept_col = safe_identifier(cfg["concept_id"])
+                table_ref = _tbl(dialect, schema, safe_identifier(cfg["table"]))
+                concept_col = dialect.quote_ident(safe_identifier(cfg["concept_id"]))
+                frag, frag_params = dialect.in_list(concept_col, ids)
                 parts.append(
-                    psysql.SQL(
-                        "SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
-                        "COUNT(DISTINCT person_id) AS n_persons "
-                        "FROM {schema}.{table} WHERE {concept_col} = ANY(%s) "
-                        "GROUP BY {concept_col}"
-                    ).format(
-                        concept_col=_ident(concept_col),
-                        schema=_sident(schema, table),
-                        table=_ident(table),
-                    )
+                    f"SELECT {concept_col} AS concept_id, COUNT(*) AS n_records, "
+                    f"COUNT(DISTINCT person_id) AS n_persons "
+                    f"FROM {table_ref} WHERE {frag} "
+                    f"GROUP BY {concept_col}"
                 )
+                params.extend(frag_params)
 
             if parts:
-                union_query = psysql.SQL(" UNION ALL ").join(parts)
-                full_query = psysql.SQL(
+                union_query = " UNION ALL ".join(parts)
+                full_query = (
                     "SELECT concept_id, SUM(n_records) AS n_records, "
                     "SUM(n_persons) AS n_persons "
-                    "FROM ({}) sub GROUP BY concept_id"
-                ).format(union_query)
-                # Each UNION part needs its own copy of the parameter
-                params = [ids] * len(parts)
+                    f"FROM ({union_query}) sub GROUP BY concept_id"
+                )
                 try:
-                    cur.execute(full_query, params)
+                    dialect.execute(cur, full_query, params)
                     for r in cur.fetchall():
                         counts[int(r["concept_id"])] = {
                             "n_records": int(r["n_records"]),
@@ -712,26 +690,25 @@ def get_concept_source_counts(
     # Filter to requested domains only (if provided)
     domains_to_search = {k: v for k, v in DOMAIN_CONFIG.items() if k in req.domains} if req.domains else DOMAIN_CONFIG
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        dialect = conn.dialect
+        with dialect.dict_cursor(conn) as cur:
             for cfg in domains_to_search.values():
-                table = safe_identifier(cfg["table"])
-                source_concept_col = safe_identifier(cfg["source_concept_id"]) if cfg.get("source_concept_id") else None
+                table_ref = _tbl(dialect, schema, safe_identifier(cfg["table"]))
+                source_concept_col = (
+                    dialect.quote_ident(safe_identifier(cfg["source_concept_id"]))
+                    if cfg.get("source_concept_id") else None
+                )
                 if not source_concept_col:
                     continue
                 try:
-                    cur.execute(
-                        psysql.SQL(
-                            "SELECT {col} AS concept_id, COUNT(*) AS n_records, "
-                            "COUNT(DISTINCT person_id) AS n_persons "
-                            "FROM {schema}.{table} WHERE {col} = ANY(%s) "
-                            "GROUP BY {col}"
-                        ).format(
-                            col=_ident(source_concept_col),
-                            schema=_sident(schema, table),
-                            table=_ident(table),
-                        ),
-                        [ids],
+                    frag, frag_params = dialect.in_list(source_concept_col, ids)
+                    sql = (
+                        f"SELECT {source_concept_col} AS concept_id, COUNT(*) AS n_records, "
+                        f"COUNT(DISTINCT person_id) AS n_persons "
+                        f"FROM {table_ref} WHERE {frag} "
+                        f"GROUP BY {source_concept_col}"
                     )
+                    dialect.execute(cur, sql, frag_params)
                     for r in cur.fetchall():
                         cid = r["concept_id"]
                         if cid not in counts:
@@ -905,8 +882,7 @@ def populate_source_value_cache(
             with _cache_populate_lock:
                 if cdm_name in _active_cache_populates:
                     _active_cache_populates[cdm_name]["conn"] = conn
-            with conn.cursor() as cur:
-                cur.execute("SET statement_timeout = 0")
+            (getattr(conn, "dialect", None) or get_dialect("postgresql")).disable_statement_timeout(conn)
         except Exception as e:
             logger.exception("Cache populate: cannot connect to CDM '%s'", cdm_name)
             with _cache_populate_lock:

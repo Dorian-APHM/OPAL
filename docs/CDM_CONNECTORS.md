@@ -106,11 +106,26 @@ Le **builder du cache** (`source_value_cache.py`) passe par le dialecte
 cache (§3), **un CDM non-PG est pleinement utilisable** pour la recherche de codes
 sources et l'explorateur de mapping dès que le cache est construit.
 
+### Explorateur de concepts (`concept/router.py`) — FAIT, agnostique
+Tous les endpoints de lecture du vocabulaire sont portés sur le dialecte (plus
+aucun `psycopg2.sql` ni `RealDictCursor` dans le module) : `/search`, `/domains`,
+`/vocabularies`, `/details`, `/hierarchy`, `/source-values/{id}`, `/counts`,
+`/counts/source`, et le worker de build du cache. Helpers utilisés : `_tbl()`
+(table qualifiée), `dialect.ilike/cast/limit_offset/in_list/quote_ident/execute`.
+
+### Harnais d'intégration sur vraie base — `tests/test_integration_omop.py`
+Exécute le **vrai SQL** des endpoints contre un PostgreSQL OMOP réel (seed
+`tests/fixtures/omop_mini_seed.sql`), activé par `OPAL_ITEST_OMOP_HOST`. C'est la
+preuve de non-régression : on lance la suite **avant et après** chaque port et on
+exige le même résultat. (Hôte = IP non-loopback car l'API bloque loopback/SSRF.)
+C'est le garde-fou à réutiliser pour porter les modules restants.
+
 ## 5. Reste à faire (port analytique) — méthode et garde-fous
 
-Modules générant encore du SQL PostgreSQL via `psycopg2.sql` : `concept/router.py`
-(recherche vocabulaire), `cohort/sql_builder.py` + `pathways.py` + `characterization.py`,
-`quality/*`, `incidence`, `estimation`, `search_router.py`, `mapping/suggest.py`.
+Modules générant encore du SQL PostgreSQL via `psycopg2.sql` : `cohort/sql_builder.py`
++ `pathways.py` + `characterization.py`, `quality/*`, `incidence`, `estimation`,
+`search_router.py`, `mapping/suggest.py`, et `mapping/router.py` (`/concept-lookup`,
+apply). *(`concept/router.py` et `source_value_cache.py` sont faits.)*
 
 ⚠️ **Garde-fou régression** : les tests de ces modules sont *mock-based* (curseur
 factice renvoyant des données canned) et **ne valident pas le texte SQL**. Réécrire

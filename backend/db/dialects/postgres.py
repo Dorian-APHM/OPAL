@@ -75,6 +75,10 @@ class PostgresDialect(Dialect):
         # byte-equivalent to the historical SQL on PostgreSQL.
         return f'"{name}"'
 
+    def in_list(self, col_sql: str, values):
+        # Single array bind — the historical, index-friendly PostgreSQL form.
+        return f"{col_sql} = ANY(%s)", [list(values)]
+
     # ── SQL fragments (native PostgreSQL) ───────────────────────────────────
     def unaccent(self, expr: str) -> str:
         return f"unaccent({expr})"

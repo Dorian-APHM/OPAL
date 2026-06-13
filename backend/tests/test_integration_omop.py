@@ -99,3 +99,33 @@ def test_details_and_synonyms(client, cdm):
 def test_details_not_found(client, cdm):
     r = client.get(f"/api/concepts/details/99999999?cdm_name={cdm}")
     assert r.status_code == 404
+
+
+def test_hierarchy_ancestors(client, cdm):
+    # Metformin (1503297) has ancestor 'BLOOD GLUCOSE LOWERING DRUGS' (21600744).
+    r = client.get(f"/api/concepts/hierarchy/1503297?cdm_name={cdm}")
+    assert r.status_code == 200
+    body = r.json()
+    assert any(a["concept_id"] == 21600744 for a in body["ancestors"])
+    # self is excluded
+    assert all(a["concept_id"] != 1503297 for a in body["ancestors"])
+
+
+def test_hierarchy_descendants(client, cdm):
+    r = client.get(f"/api/concepts/hierarchy/21600744?cdm_name={cdm}")
+    assert r.status_code == 200
+    body = r.json()
+    assert any(d["concept_id"] == 1503297 for d in body["descendants"])
+
+
+def test_concept_counts(client, cdm):
+    # 320128 (hypertension) appears twice in condition_occurrence; 1503297 (metformin)
+    # twice in drug_exposure. Exercises the IN-list/= ANY UNION across domain tables.
+    r = client.post(f"/api/concepts/counts?cdm_name={cdm}",
+                    json={"concept_ids": [320128, 1503297, 3004249]})
+    assert r.status_code == 200
+    counts = r.json()["counts"]
+    assert counts["320128"]["n_records"] == 2
+    assert counts["320128"]["n_persons"] == 2
+    assert counts["1503297"]["n_records"] == 2
+    assert counts["3004249"]["n_records"] == 2

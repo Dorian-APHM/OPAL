@@ -32,6 +32,13 @@ CREATE TABLE concept_ancestor (
   ancestor_concept_id BIGINT, descendant_concept_id BIGINT,
   min_levels_of_separation INT, max_levels_of_separation INT
 );
+-- A drug class above Metformin, for hierarchy navigation tests.
+INSERT INTO concept(concept_id, concept_name, concept_code, domain_id, vocabulary_id, concept_class_id, standard_concept) VALUES
+ (21600744,'BLOOD GLUCOSE LOWERING DRUGS','A10','Drug','ATC','ATC 2nd','C');
+INSERT INTO concept_ancestor VALUES
+ (21600744,1503297,1,1),
+ (1503297,1503297,0,0),
+ (21600744,21600744,0,0);
 CREATE TABLE concept_synonym (
   concept_id BIGINT, concept_synonym_name TEXT, language_concept_id BIGINT DEFAULT 4180186
 );
@@ -71,3 +78,28 @@ CREATE TABLE measurement (
 INSERT INTO measurement VALUES
  (1,1,3004249,'2020-01-05','SYS','Systolic BP',0,140.0),
  (2,2,3004249,'2020-02-10','SYS','Systolic BP',0,130.0);
+
+-- Remaining OMOP clinical domain tables (empty) so cross-domain UNION queries
+-- (e.g. /counts) reference existing relations on this mini-CDM.
+CREATE TABLE observation (observation_id BIGINT PRIMARY KEY, person_id BIGINT,
+  observation_concept_id BIGINT, observation_date DATE,
+  observation_source_value TEXT, observation_source_concept_id BIGINT);
+CREATE TABLE procedure_occurrence (procedure_occurrence_id BIGINT PRIMARY KEY, person_id BIGINT,
+  procedure_concept_id BIGINT, procedure_date DATE,
+  procedure_source_value TEXT, procedure_source_concept_id BIGINT);
+CREATE TABLE visit_occurrence (visit_occurrence_id BIGINT PRIMARY KEY, person_id BIGINT,
+  visit_concept_id BIGINT, visit_start_date DATE,
+  visit_source_value TEXT, visit_source_concept_id BIGINT);
+CREATE TABLE device_exposure (device_exposure_id BIGINT PRIMARY KEY, person_id BIGINT,
+  device_concept_id BIGINT, device_exposure_start_date DATE,
+  device_source_value TEXT, device_source_concept_id BIGINT);
+CREATE TABLE death (person_id BIGINT PRIMARY KEY, death_date DATE,
+  cause_concept_id BIGINT, cause_source_value TEXT, cause_source_concept_id BIGINT);
+CREATE TABLE specimen (specimen_id BIGINT PRIMARY KEY, person_id BIGINT,
+  specimen_concept_id BIGINT, specimen_date DATE,
+  specimen_source_value TEXT, specimen_source_concept_id BIGINT);
+CREATE TABLE note (note_id BIGINT PRIMARY KEY, person_id BIGINT,
+  note_type_concept_id BIGINT, note_date DATE);
+CREATE TABLE payer_plan_period (payer_plan_period_id BIGINT PRIMARY KEY, person_id BIGINT,
+  payer_concept_id BIGINT, payer_plan_period_start_date DATE,
+  payer_source_value TEXT, payer_source_concept_id BIGINT);

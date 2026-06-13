@@ -150,6 +150,15 @@ class Dialect:
         reference engine's SQL is unchanged."""
         return name
 
+    def in_list(self, col_sql: str, values) -> tuple[str, list]:
+        """Return ``(sql_fragment, params)`` for ``col IN (values)``.
+
+        Default expands to ``IN (%s, %s, ...)``. PostgreSQL overrides this with a
+        single ``= ANY(%s)`` array bind (its historical, index-friendly form).
+        ``values`` must be non-empty."""
+        placeholders = ", ".join(["%s"] * len(values))
+        return f"{col_sql} IN ({placeholders})", list(values)
+
     def execute(self, cursor, sql: str, params=None):
         """Execute SQL authored with psycopg2-style ``%s`` placeholders.
 

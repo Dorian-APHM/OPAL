@@ -94,6 +94,17 @@ def test_dialect_execute_translates_and_preserves_order():
     assert ms_cur.sql == "WHERE a=? AND b=?" and ms_cur.params == [1, 2]
 
 
+def test_in_list_per_engine():
+    # PostgreSQL: single array bind (= ANY).
+    frag, params = get_dialect("postgresql").in_list('"c"', [1, 2, 3])
+    assert frag == '"c" = ANY(%s)' and params == [[1, 2, 3]]
+    # Oracle / SQL Server: expanded IN (...).
+    frag, params = get_dialect("oracle").in_list('"c"', [1, 2, 3])
+    assert frag == '"c" IN (%s, %s, %s)' and params == [1, 2, 3]
+    frag, params = get_dialect("sqlserver").in_list("[c]", [9])
+    assert frag == "[c] IN (%s)" and params == [9]
+
+
 def test_quote_ident_per_engine():
     assert get_dialect("postgresql").quote_ident("concept") == '"concept"'
     assert get_dialect("oracle").quote_ident("concept") == '"concept"'
