@@ -373,12 +373,16 @@ def build_detailed_sample_sql(
                     f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
                     f"WHERE ancestor_concept_id IN ({concept_list})"
                 )
-                # Concept + descendants. Authored without PostgreSQL-only
-                # unnest(ARRAY[...]) so it runs on every engine: the literal ids
-                # OR'd with the descendant lookup (same set, no array type).
+                # Concept + descendants as a single index-friendly IN-subquery
+                # (NOT `IN (..) OR IN (subquery)`, which forces a full scan on PG).
+                # Literal-id rows produced by the dialect (unnest on PG,
+                # odcinumberlist on Oracle) — no PostgreSQL-only ARRAY type.
+                ids_subq = _dia(omop_schema).inline_values_subquery(
+                    [c["concept_id"] if isinstance(c, dict) else c for c in concepts]
+                )
                 concept_filter = (
-                    f"(t.{concept_col} IN ({concept_list}) "
-                    f"OR t.{concept_col} IN ({ancestor_subq}))"
+                    f"t.{concept_col} IN (SELECT v FROM "
+                    f"({ids_subq} UNION {ancestor_subq}) expset)"
                 )
             else:
                 concept_filter = f"t.{concept_col} IN ({concept_list})"
@@ -766,11 +770,14 @@ def _build_criterion_cte(
                 f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
                 f"WHERE ancestor_concept_id IN ({concept_list})"
             )
-            # Engine-neutral concept+descendants filter (no PostgreSQL-only
-            # unnest(ARRAY[...]); see build_sample_sql for the same rewrite).
+            # Single index-friendly IN-subquery (see _build_criteria_flat for the
+            # rationale: an OR of two INs forces a full scan on PostgreSQL).
+            ids_subq = _dia(omop_schema).inline_values_subquery(
+                [c["concept_id"] if isinstance(c, dict) else c for c in concepts]
+            )
             concept_filter = (
-                f"(t.{concept_col} IN ({concept_list}) "
-                f"OR t.{concept_col} IN ({ancestor_subq}))"
+                f"t.{concept_col} IN (SELECT v FROM "
+                f"({ids_subq} UNION {ancestor_subq}) expset)"
             )
         else:
             concept_list = ", ".join(

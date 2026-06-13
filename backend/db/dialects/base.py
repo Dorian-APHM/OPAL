@@ -312,6 +312,17 @@ class Dialect:
         ``BIGINT``; Oracle has no BIGINT and overrides with ``NUMBER(19)``."""
         return "BIGINT"
 
+    def inline_values_subquery(self, values) -> str:
+        """A single-column (alias ``v``) relation of literal integer ``values``,
+        for use inside ``col IN (SELECT v FROM ( <this> UNION ... ) x)``.
+
+        Kept as a *set-producing subquery* (not an ``OR`` of conditions) so the
+        outer ``IN`` stays a single, index-friendly semi-join on every engine —
+        an ``OR col IN (subquery)`` form defeats the index and forces a full scan
+        on PostgreSQL. PostgreSQL/Oracle override with their native list idiom."""
+        ids = [int(v) for v in values]
+        return " UNION ALL ".join(f"SELECT {v} AS v" for v in ids)
+
     def string_agg(self, expr: str, sep: str, order_by: str | None = None, distinct: bool = False) -> str:
         """Concatenate ``expr`` across a group, separated by ``sep``. PostgreSQL
         ``STRING_AGG``; Oracle overrides with ``LISTAGG``."""

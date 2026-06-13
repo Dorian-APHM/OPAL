@@ -184,6 +184,14 @@ connexion). Lancé sur un vrai PostgreSQL 16 **et** un vrai Oracle Free 23 :
 - **Oracle : 59/59** — toute la surface CDM s'exécute, y compris les
   « constructions dures » du tableau ci-dessus.
 
+> **Perf PG (benchmark 1M patients / 8M condition_occurrence, index réalistes).**
+> Le filtre concept+descendants doit rester un **`IN (SELECT … UNION …)`** unique
+> (semi-join indexable), pas un `IN (..) OR IN (sous-requête)` : ce dernier force
+> un *seq scan* (~1440 ms vs ~290 ms, ×5, et estimation de cardinalité fausse).
+> Les rows littérales sont produites par `dialect.inline_values_subquery()`
+> (`unnest(ARRAY)` sur PG = identique à l'historique, `sys.odcinumberlist` sur
+> Oracle), ce qui garde la forme indexable **et** agnostique.
+
 Couverture du harnais : les 45 endpoints CDM, plus `cohort/pathways.py` (tables
 temp, `STRING_AGG`), le **chemin d'écriture** `mapping/apply` + `apply/rollback`
 + `apply/batch`, la lecture CDM de `sapbert_build`, et un jeu de critères de

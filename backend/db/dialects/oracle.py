@@ -207,6 +207,12 @@ class OracleDialect(Dialect):
     def big_int_type(self) -> str:
         return "NUMBER(19)"
 
+    def inline_values_subquery(self, values) -> str:
+        # Turn a literal id list into rows via the built-in number collection —
+        # no unnest/ARRAY, and keeps the outer IN a single index-friendly subquery.
+        ids = ", ".join(str(int(v)) for v in values)
+        return f"SELECT column_value AS v FROM TABLE(sys.odcinumberlist({ids}))"
+
     def release_savepoint_sql(self, name: str) -> str | None:
         return None  # Oracle has no RELEASE SAVEPOINT; savepoints just go out of scope
 

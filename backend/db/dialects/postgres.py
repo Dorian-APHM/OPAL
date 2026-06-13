@@ -96,6 +96,11 @@ class PostgresDialect(Dialect):
         # byte-equivalent to the historical SQL on PostgreSQL.
         return f'"{name}"'
 
+    def inline_values_subquery(self, values) -> str:
+        # Native unnest(ARRAY[...]) — the historical, index-friendly form.
+        ids = ", ".join(str(int(v)) for v in values)
+        return f"SELECT unnest(ARRAY[{ids}]) AS v"
+
     def in_list(self, col_sql: str, values):
         # Single array bind — the historical, index-friendly PostgreSQL form.
         return f"{col_sql} = ANY(%s)", [list(values)]
