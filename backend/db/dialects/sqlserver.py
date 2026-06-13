@@ -60,15 +60,23 @@ class SqlServerDialect(Dialect):
     def quote_ident(self, name: str) -> str:
         return f"[{name}]"
 
-    def execute(self, cursor, sql: str, params=None):
+    def _prepare(self, sql: str, params=None):
         if isinstance(params, dict):
             # pyodbc supports only positional '?': reorder dict values to match.
-            translated, ordered = translate_named_to_positional(sql, params, lambda i: "?")
-            cursor.execute(translated, ordered)
-        else:
-            translated = translate_pyformat(sql, lambda i: "?")
-            cursor.execute(translated, list(params) if params is not None else [])
+            return translate_named_to_positional(sql, params, lambda i: "?")
+        return translate_pyformat(sql, lambda i: "?"), (list(params) if params is not None else [])
+
+    def execute(self, cursor, sql: str, params=None):
+        t_sql, t_params = self._prepare(sql, params)
+        cursor.execute(t_sql, t_params)
         return cursor
+
+    def stream_cursor(self, conn, sql, itersize, params=None):
+        cur = conn.cursor()
+        cur.arraysize = itersize
+        t_sql, t_params = self._prepare(sql, params)
+        cur.execute(t_sql, t_params)
+        return DictRowCursor(cur)
 
     def set_statement_timeout(self, conn, ms: int) -> None:
         try:
@@ -101,12 +109,6 @@ class SqlServerDialect(Dialect):
             conn.timeout = 0  # 0 == no query timeout
         except Exception:
             pass
-
-    def stream_cursor(self, conn, sql, itersize):
-        cur = conn.cursor()
-        cur.arraysize = itersize
-        cur.execute(sql)
-        return DictRowCursor(cur)
 
     # ── SQL fragments (best-effort) ─────────────────────────────────────────
     def ilike(self, col_sql: str, param_ph: str) -> str:

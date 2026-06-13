@@ -61,13 +61,16 @@ class PostgresDialect(Dialect):
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = 0")
 
-    def stream_cursor(self, conn, sql, itersize):
-        # Server-side (named) cursor: streams the GROUP-BY result in batches
-        # instead of materialising a whole clinical table in client memory.
+    def stream_cursor(self, conn, sql, itersize, params=None):
+        # Server-side (named) cursor: streams the result in batches instead of
+        # materialising a whole table in client memory.
         import uuid
         cur = conn.cursor(name=f"svcache_{uuid.uuid4().hex}", cursor_factory=RealDictCursor)
         cur.itersize = itersize
-        cur.execute(sql)
+        if params is not None:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
         return cur
 
     def quote_ident(self, name: str) -> str:

@@ -163,7 +163,7 @@ class Dialect:
         """Remove the per-statement timeout for a long full-table aggregation."""
         return None
 
-    def stream_cursor(self, conn, sql: str, itersize: int):
+    def stream_cursor(self, conn, sql: str, itersize: int, params=None):
         """Return a cursor that has executed ``sql`` and streams dict rows in
         batches via ``fetchmany(itersize)``. Caller must ``close()`` it."""
         raise NotImplementedError

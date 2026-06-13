@@ -14,10 +14,7 @@ A SapBERT failure never breaks the cache build — it is recorded as an error st
 for that domain and the cache build continues.
 """
 import logging
-import uuid
 from datetime import datetime, timezone
-
-from psycopg2.extras import RealDictCursor
 
 from db.app_db import SessionLocal
 from db.models import SapbertDomainState, SapbertMapping, SourceValueCache
@@ -74,20 +71,20 @@ def _fetch_standard_concepts(conn, schema, domain: str) -> list[dict]:
     (every standard vocabulary of the domain — SNOMED, CPT4, ICD10PCS, …)."""
     vocab_schema = schema.schema_for("concept") if hasattr(schema, "schema_for") else schema
     vocab_schema = safe_identifier(vocab_schema)
+    dialect = conn.dialect
+    concept_ref = f"{dialect.quote_ident(vocab_schema)}.{dialect.quote_ident('concept')}"
     sql = f"""
         SELECT concept_id, concept_code, concept_name, vocabulary_id
-        FROM {vocab_schema}.concept
+        FROM {concept_ref}
         WHERE domain_id = %s
           AND standard_concept = 'S'
           AND invalid_reason IS NULL
           AND concept_name IS NOT NULL
           AND concept_name <> ''
-          AND concept_name NOT ILIKE '%%(deprecated)%%'
+          AND NOT ({dialect.ilike('concept_name', "'%%(deprecated)%%'")})
     """
     out: list[dict] = []
-    cur = conn.cursor(name=f"sapbert_tgt_{uuid.uuid4().hex}", cursor_factory=RealDictCursor)
-    cur.itersize = _TARGET_FETCH_SIZE
-    cur.execute(sql, (domain,))
+    cur = dialect.stream_cursor(conn, sql, _TARGET_FETCH_SIZE, (domain,))
     try:
         while True:
             rows = cur.fetchmany(_TARGET_FETCH_SIZE)
