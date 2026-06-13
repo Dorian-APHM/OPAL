@@ -25,7 +25,7 @@ from modules.mapping.suggest import suggest_mappings, suggest_batch
 from utils.csv_safety import csv_safe
 from utils.sql_safety import safe_identifier
 from utils.rate_limit import limiter
-from utils.cdm_helper import check_cdm_access, get_domain_config, build_schema_map
+from utils.cdm_helper import check_cdm_access, get_domain_config, build_schema_map, raise_source_value_cache_missing
 
 logger = logging.getLogger(__name__)
 
@@ -629,104 +629,10 @@ def list_unmapped(
         _annotate_pending_decisions(db, cdm_name, domain, rows)
         return {"items": rows, "total": total, "page": page, "page_size": page_size, "cached": True}
 
-    # ── Fallback: direct CDM query ──
-    cdm, conn = _get_cdm_conn(db, cdm_name)
-    schema = _get_schema(db, cdm)
-    cfg = get_domain_config(conn, schema, domain)
-    table = safe_identifier(cfg["table"])
-    sv_col = safe_identifier(cfg["source_value"])
-    concept_col = safe_identifier(cfg["concept_id"])
-    sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-    atc_col = safe_identifier(cfg["source_atc"]) if cfg.get("source_atc") else None
-    full_table = f"{schema.t(table)}"
-
-    try:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            # Build query
-            select_cols = [f"t.{sv_col} AS source_value"]
-            if sn_col:
-                select_cols.append(f"MAX(t.{sn_col}) AS source_name")
-            else:
-                select_cols.append("'' AS source_name")
-            if atc_col:
-                select_cols.append(f"MAX(t.{atc_col}) AS source_atc")
-            else:
-                select_cols.append("'' AS source_atc")
-            select_cols.extend([
-                f"t.{concept_col} AS mapped_concept_id",
-                "c.concept_name AS mapped_concept_name",
-                "c.vocabulary_id AS mapped_vocabulary_id",
-                "c.standard_concept AS mapped_standard_concept",
-            ])
-
-            wheres: list[str] = []
-            if not include_mapped:
-                wheres.append(f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)")
-            params: dict = {}
-
-            if search:
-                search_parts = [f"unaccent(t.{sv_col}) ILIKE unaccent(%(search)s)"]
-                if sn_col:
-                    search_parts.append(f"unaccent(t.{sn_col}) ILIKE unaccent(%(search)s)")
-                if atc_col:
-                    search_parts.append(f"unaccent(t.{atc_col}) ILIKE unaccent(%(search)s)")
-                wheres.append(f"({' OR '.join(search_parts)})")
-                params["search"] = f"%{search}%"
-
-            where_clause = " AND ".join(wheres)
-            offset = (page - 1) * page_size
-            params["lim"] = page_size
-            params["off"] = offset
-
-            # Count total
-            count_sql = f"""
-                SELECT COUNT(DISTINCT t.{sv_col}) AS total
-                FROM {full_table} t
-                WHERE {where_clause}
-            """
-            cur.execute(count_sql, params)
-            total = cur.fetchone()["total"]
-
-            # Get page
-            data_sql = f"""
-                SELECT {', '.join(select_cols)},
-                       COUNT(*) AS n_records,
-                       COUNT(DISTINCT t.person_id) AS n_persons
-                FROM {full_table} t
-                LEFT JOIN {schema.t('concept')} c ON c.concept_id = t.{concept_col}
-                WHERE {where_clause}
-                GROUP BY t.{sv_col}, t.{concept_col}, c.concept_name, c.vocabulary_id, c.standard_concept
-                ORDER BY COUNT(*) DESC
-                LIMIT %(lim)s OFFSET %(off)s
-            """
-            cur.execute(data_sql, params)
-            rows = []
-            for r in cur.fetchall():
-                d = dict(r)
-                if not d.get("mapped_concept_id"):
-                    d["mapped_concept_id"] = None
-                    d["mapped_concept_name"] = None
-                    d["mapped_vocabulary_id"] = None
-                    d["mapped_standard_concept"] = None
-                rows.append(d)
-    except Exception as e:
-        logger.exception("Unmapped listing failed")
-        raise HTTPException(status_code=500, detail="An internal error occurred while listing unmapped terms")
-    finally:
-        conn.close()
-
-    _annotate_pending_decisions(db, cdm_name, domain, rows)
-
-    return {
-        "domain": domain,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
-        "items": rows,
-    }
-
+    # Source-value listing is backed exclusively by the app-DB SourceValueCache
+    # (engine-agnostic, no live-CDM fallback). If we reach here the cache for this
+    # (cdm, domain) has not been built yet.
+    raise_source_value_cache_missing(cdm_name, domain)
 
 
 # ──── 5.2b Concept Lookup (for manual mapping) ────

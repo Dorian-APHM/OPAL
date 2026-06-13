@@ -159,3 +159,43 @@ def test_source_values(mock_decrypt, mock_get_conn, client, cdm_name):
 
     resp = client.get(f"/api/concepts/source-values/201826?cdm_name={cdm_name}")
     assert resp.status_code == 200
+
+
+def test_search_source_value_requires_cache(client, cdm_name):
+    """search-source-value is cache-backed only: 409 when the cache is not built,
+    so no PostgreSQL-specific query is ever issued against the (possibly non-PG) CDM."""
+    resp = client.get(f"/api/concepts/search-source-value?cdm_name={cdm_name}&q=abc")
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "source_value_cache_missing"
+    assert detail["cdm_name"] == cdm_name
+
+
+def test_search_source_value_uses_cache(client, cdm_name):
+    """When the cache exists, search-source-value returns rows from the app DB
+    (no CDM connection needed)."""
+    from tests.conftest import TestSession
+    from db.models import SourceValueCache
+
+    db = TestSession()
+    try:
+        db.add(SourceValueCache(
+            cdm_name=cdm_name, domain="Condition", source_value="I10",
+            source_name="Hypertension", n_records=5, n_persons=5, mapped_concept_id=320128,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get(f"/api/concepts/search-source-value?cdm_name={cdm_name}&q=I10")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cached"] is True
+    assert any(r["source_value"] == "I10" for r in body["results"])
+
+
+def test_mapping_unmapped_requires_cache(client, cdm_name):
+    """list_unmapped is cache-backed only: 409 when the cache is missing."""
+    resp = client.get(f"/api/mapping/unmapped/{cdm_name}/Condition")
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "source_value_cache_missing"

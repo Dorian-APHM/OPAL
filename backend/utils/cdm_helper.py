@@ -171,6 +171,31 @@ def get_domain_config(conn, schema: str, domain: str) -> dict:
     return cfg
 
 
+def raise_source_value_cache_missing(cdm_name: str, domain: str | None = None):
+    """Raise HTTP 409 signalling the source-value cache has not been built yet.
+
+    The source-value search / explorer endpoints rely *exclusively* on the
+    pre-computed ``SourceValueCache`` (stored in the app DB, always PostgreSQL).
+    There is deliberately no live-CDM fallback: it keeps these features engine
+    agnostic (no PostgreSQL-specific ``unaccent``/``ILIKE`` ever runs against the
+    external CDM, which may be Oracle or SQL Server). When the cache is missing,
+    the client should prompt the user to build it rather than silently return an
+    empty result.
+    """
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "source_value_cache_missing",
+            "message": (
+                f"Le cache des valeurs source n'est pas encore construit pour le CDM "
+                f"« {cdm_name} ». Lancez la construction du cache avant de rechercher."
+            ),
+            "cdm_name": cdm_name,
+            "domain": domain,
+        },
+    )
+
+
 def check_cdm_access(request: Request, cdm_name: str) -> None:
     """
     Verify the current user has access to the given CDM.
