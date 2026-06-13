@@ -103,6 +103,44 @@ def test_list_engines(client):
     assert {"postgresql", "oracle", "sqlserver"} == values
 
 
+def test_create_cdm_persists_db_type_in_db(client):
+    """The chosen engine must be written to the cdm_configs row, not just echoed."""
+    from tests.conftest import TestSession
+    from db.models import CdmConfig
+
+    client.post("/api/cdm/", json={
+        "name": "persist_cdm", "db_type": "sqlserver",
+        "db_host": "db.example.com", "db_port": 1433,
+        "db_name": "test_db", "db_user": "u", "db_password": "p",
+    })
+    db = TestSession()
+    try:
+        row = db.query(CdmConfig).filter(CdmConfig.name == "persist_cdm").first()
+        assert row is not None
+        assert row.db_type == "sqlserver"
+    finally:
+        db.close()
+
+
+def test_cdm_without_db_type_persists_as_postgresql(client):
+    """A CDM registered with no engine is stored as postgresql (the default that
+    existing/legacy CDMs are also backfilled to)."""
+    from tests.conftest import TestSession
+    from db.models import CdmConfig
+
+    client.post("/api/cdm/", json={
+        "name": "legacy_like_cdm",
+        "db_host": "db.example.com", "db_port": 5432,
+        "db_name": "test_db", "db_user": "u", "db_password": "p",
+    })
+    db = TestSession()
+    try:
+        row = db.query(CdmConfig).filter(CdmConfig.name == "legacy_like_cdm").first()
+        assert row.db_type == "postgresql"
+    finally:
+        db.close()
+
+
 def test_create_duplicate_cdm(client):
     # First create
     client.post("/api/cdm/", json={

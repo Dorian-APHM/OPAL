@@ -7,6 +7,14 @@ ENV https_proxy=${HTTPS_PROXY}
 
 WORKDIR /app
 
+# System runtime libs. unixodbc is the ODBC driver manager pyodbc loads at runtime
+# for SQL Server CDM connections (the Microsoft msodbcsql18 driver must be added
+# separately to actually reach a SQL Server instance). Oracle uses python-oracledb
+# thin mode, which needs no Oracle client. PostgreSQL (psycopg2) needs nothing here.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unixodbc \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r requirements.txt
