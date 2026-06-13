@@ -173,6 +173,48 @@ Oracle/SQL Server *best-effort*, à valider sur vraie instance) :
 est généré ; il « suffit » de l'exécuter). Voir §6 : brancher le harnais avec
 `OPAL_ITEST_OMOP_DBTYPE=oracle|sqlserver`.
 
+### Validation exhaustive sur vraies bases PG + Oracle — `tests/test_integration_omop_full.py`
+
+Harnais couvrant **les 45 endpoints qui exécutent du SQL sur le CDM** (sync via
+HTTP ; async/workers — quality analyze/conformity, characterization,
+suggest-batch, cache build, extract — appelés directement contre une vraie
+connexion). Lancé sur un vrai PostgreSQL 16 **et** un vrai Oracle Free 23 :
+
+- **PostgreSQL : toute la surface passe** (35 tests + 2 *xfail* = bugs
+  pré-existants ci-dessous). C'est la preuve de non-régression sur 100 % des
+  endpoints CDM (et non plus le seul sous-ensemble de `test_integration_omop.py`).
+- **Oracle : 23/35 passent ; 12 restent en échec** — ce sont exactement les
+  « constructions dures » du tableau ci-dessus, *non encore finalisées* :
+  - `cohort/sql_builder.py` (clé de voûte → count, count/approx, sample,
+    sample/detailed, export, incidence, estimation, extract) : l'expansion de
+    concepts `unnest(ARRAY[...])` et les alias `FROM (...) AS x` → **ORA-00907**.
+  - `quality/domains/clinical.py` : `GROUP BY` non positionnel / `LATERAL` /
+    `STRING_AGG` → **ORA-03162**.
+  - `cohort/characterization.py` : tables temporaires nommées `_xxx` → **ORA-00911**.
+
+  Ces 12 endpoints sont marqués `xfail` *uniquement sur Oracle* dans le harnais :
+  la suite reste verte sur les deux moteurs et chaque lacune est tracée (un
+  *xpass* signalera quand le port est terminé). Le constat corrige le « TERMINÉ ✅ »
+  ci-dessus : 100 % du SQL **passe par le dialecte**, mais Oracle n'est pas encore
+  100 % **exécutable** pour ces constructions.
+
+### Bugs PRÉ-EXISTANTS découverts (identiques sur `main`, indépendants du moteur)
+
+Non causés par le port (vérifiés à l'identique sur `main`), mais ce sont des
+« surprises » potentielles sur un vrai CDM :
+
+1. **Domaine `Note` (quality)** — `quality/domains/clinical.py` lit
+   `cfg["source_value"]` sans garde, or `DOMAIN_CONFIG["Note"]` n'a pas de
+   `source_value` → `ValueError`. Crashe sur tout CDM (PG comme Oracle).
+2. **Fuite read-only de pool (PG)** — `/cohorts/sql/execute` met la connexion
+   psycopg2 en `set_session(readonly=True)` ; `close()` ne réinitialise que
+   `statement_timeout`, pas le flag read-only → le consommateur suivant du pool
+   (ex. characterization avec ses tables temp) hérite du read-only.
+3. **`concept-sets/{id}/resolve` et `/counts`** — font `json.loads(concepts_json)`
+   puis itèrent comme une liste, alors que le format stocké est
+   `{"concepts":[...], "source_codes":[...]}` (ils n'utilisent pas le helper
+   `_parse_payload`) → `TypeError`.
+
 ## 6. Harnais de validation
 
 Un vrai PostgreSQL + un mini-OMOP (`backend/tests/fixtures/omop_mini_seed.sql`)

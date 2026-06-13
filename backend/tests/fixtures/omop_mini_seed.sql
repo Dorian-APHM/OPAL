@@ -44,6 +44,11 @@ CREATE TABLE concept_synonym (
 );
 INSERT INTO concept_synonym VALUES (320128,'High blood pressure');
 
+CREATE TABLE vocabulary (vocabulary_id TEXT PRIMARY KEY, vocabulary_name TEXT,
+  vocabulary_reference TEXT, vocabulary_version TEXT, vocabulary_concept_id BIGINT);
+INSERT INTO vocabulary(vocabulary_id, vocabulary_name, vocabulary_concept_id)
+  SELECT DISTINCT vocabulary_id, vocabulary_id, 0 FROM concept WHERE vocabulary_id IS NOT NULL;
+
 CREATE TABLE person (person_id BIGINT PRIMARY KEY, gender_concept_id BIGINT,
   year_of_birth INT, month_of_birth INT, day_of_birth INT,
   race_concept_id BIGINT, ethnicity_concept_id BIGINT);

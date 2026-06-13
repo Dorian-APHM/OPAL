@@ -60,10 +60,17 @@ CREATE TABLE concept_synonym (
 );
 INSERT INTO concept_synonym(concept_id,concept_synonym_name) VALUES (320128,'High blood pressure');
 
-CREATE TABLE person (person_id NUMBER(19) PRIMARY KEY, gender_concept_id NUMBER(19), year_of_birth NUMBER(10));
-INSERT INTO person VALUES (1,8507,1970);
-INSERT INTO person VALUES (2,8532,1985);
-INSERT INTO person VALUES (3,8507,1990);
+CREATE TABLE vocabulary (vocabulary_id VARCHAR2(4000) PRIMARY KEY, vocabulary_name VARCHAR2(4000),
+  vocabulary_reference VARCHAR2(4000), vocabulary_version VARCHAR2(4000), vocabulary_concept_id NUMBER(19));
+INSERT INTO vocabulary(vocabulary_id, vocabulary_name, vocabulary_concept_id)
+  SELECT DISTINCT vocabulary_id, vocabulary_id, 0 FROM concept WHERE vocabulary_id IS NOT NULL;
+
+CREATE TABLE person (person_id NUMBER(19) PRIMARY KEY, gender_concept_id NUMBER(19),
+  year_of_birth NUMBER(10), month_of_birth NUMBER(10), day_of_birth NUMBER(10),
+  race_concept_id NUMBER(19), ethnicity_concept_id NUMBER(19));
+INSERT INTO person VALUES (1,8507,1970,3,15,0,0);
+INSERT INTO person VALUES (2,8532,1985,7,1,0,0);
+INSERT INTO person VALUES (3,8507,1990,11,20,0,0);
 
 CREATE TABLE observation_period (
   observation_period_id NUMBER(19) PRIMARY KEY, person_id NUMBER(19),
