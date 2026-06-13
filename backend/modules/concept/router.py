@@ -129,6 +129,16 @@ def _sident(schema, table: str) -> psysql.Identifier:
     return psysql.Identifier(safe_identifier(name))
 
 
+def _tbl(dialect, schema, table: str) -> str:
+    """Schema-qualified table reference for engine-neutral SQL strings.
+
+    Resolves the (category-aware) schema, validates+quotes it via the dialect, and
+    keeps the OMOP table name as a trusted literal. On PostgreSQL this renders
+    exactly like the historical psycopg2 ``_sident`` form (e.g. ``"omop_cdm".concept``)."""
+    name = schema.schema_for(table) if hasattr(schema, "schema_for") else schema
+    return f"{dialect.quote_ident(safe_identifier(name))}.{table}"
+
+
 @router.get("/search")
 def search_concepts(
     cdm_name: str,
@@ -143,7 +153,9 @@ def search_concepts(
     """Search concepts by name, code, or ID."""
     conn, schema = _get_conn(db, cdm_name)
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        dialect = conn.dialect
+        concept_tbl = _tbl(dialect, schema, 'concept')
+        with dialect.dict_cursor(conn) as cur:
             conditions = []
             params = []
 
@@ -152,12 +164,12 @@ def search_concepts(
                 # Support searching by concept_id (integer), concept_code, or text
                 if q.isdigit():
                     conditions.append(
-                        "(c.concept_id = %s OR c.concept_code = %s OR unaccent(c.concept_code) ILIKE unaccent(%s))"
+                        f"(c.concept_id = %s OR c.concept_code = %s OR {dialect.ilike('c.concept_code', '%s')})"
                     )
                     params.extend([int(q), q, f"%{q}%"])
                 else:
                     conditions.append(
-                        "(unaccent(c.concept_name) ILIKE unaccent(%s) OR unaccent(c.concept_code) ILIKE unaccent(%s))"
+                        f"({dialect.ilike('c.concept_name', '%s')} OR {dialect.ilike('c.concept_code', '%s')})"
                     )
                     params.extend([f"%{q}%", f"%{q}%"])
 
@@ -172,23 +184,27 @@ def search_concepts(
             if standard_only:
                 conditions.append("c.standard_concept = 'S'")
 
-            where = psysql.SQL("WHERE ") + psysql.SQL(" AND ").join(
-                [psysql.SQL(c) for c in conditions]
-            ) if conditions else psysql.SQL("")
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            # Pagination via the dialect, with the (validated) ints inlined so the
+            # OFFSET/limit textual order can vary per engine without breaking
+            # positional parameter binding.
+            pagination = dialect.limit_offset(str(int(limit)), str(int(offset)))
 
             # P22 fix: COUNT(*) OVER() in a single query instead of 2 separate scans
-            query = psysql.SQL("""
+            sql = f"""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.domain_id, c.vocabulary_id, c.concept_class_id,
-                       c.standard_concept, c.valid_start_date::text, c.valid_end_date::text,
+                       c.standard_concept,
+                       {dialect.cast('c.valid_start_date', 'text')} AS valid_start_date,
+                       {dialect.cast('c.valid_end_date', 'text')} AS valid_end_date,
                        c.invalid_reason,
                        COUNT(*) OVER() AS _total_count
-                FROM {schema}.concept c
+                FROM {concept_tbl} c
                 {where}
                 ORDER BY c.concept_name
-                LIMIT %s OFFSET %s
-            """).format(schema=_sident(schema, 'concept'), where=where)
-            cur.execute(query, params + [limit, offset])
+                {pagination}
+            """
+            dialect.execute(cur, sql, params)
             rows = cur.fetchall()
             total = rows[0]["_total_count"] if rows else 0
             concepts = [{k: v for k, v in dict(r).items() if k != "_total_count"} for r in rows]
@@ -212,55 +228,55 @@ def get_concept_details(
 
     conn, schema = _get_conn(db, cdm_name)
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        dialect = conn.dialect
+        concept_tbl = _tbl(dialect, schema, 'concept')
+        rel_tbl = _tbl(dialect, schema, 'concept_relationship')
+        syn_tbl = _tbl(dialect, schema, 'concept_synonym')
+        with dialect.dict_cursor(conn) as cur:
             # Main concept
-            cur.execute(
-                psysql.SQL("""
+            main_sql = f"""
                 SELECT c.concept_id, c.concept_name, c.concept_code,
                        c.domain_id, c.vocabulary_id, c.concept_class_id,
-                       c.standard_concept, c.valid_start_date::text, c.valid_end_date::text,
+                       c.standard_concept,
+                       {dialect.cast('c.valid_start_date', 'text')} AS valid_start_date,
+                       {dialect.cast('c.valid_end_date', 'text')} AS valid_end_date,
                        c.invalid_reason
-                FROM {schema}.concept c
+                FROM {concept_tbl} c
                 WHERE c.concept_id = %s
-                """).format(schema=_sident(schema, 'concept')),
-                [concept_id],
-            )
+            """
+            dialect.execute(cur, main_sql, [concept_id])
             concept = cur.fetchone()
             if not concept:
                 raise HTTPException(status_code=404, detail="Concept not found")
 
             # Relationships (outgoing)
-            cur.execute(
-                psysql.SQL("""
+            rel_sql = f"""
                 SELECT cr.relationship_id,
                        c2.concept_id AS related_concept_id,
                        c2.concept_name AS related_concept_name,
                        c2.vocabulary_id AS related_vocabulary_id,
                        c2.concept_class_id AS related_concept_class_id,
                        c2.standard_concept AS related_standard_concept
-                FROM {schema}.concept_relationship cr
-                JOIN {schema}.concept c2 ON c2.concept_id = cr.concept_id_2
+                FROM {rel_tbl} cr
+                JOIN {concept_tbl} c2 ON c2.concept_id = cr.concept_id_2
                 WHERE cr.concept_id_1 = %s
                   AND cr.invalid_reason IS NULL
                 ORDER BY cr.relationship_id, c2.concept_name
-                LIMIT 200
-                """).format(schema=_sident(schema, 'concept')),
-                [concept_id],
-            )
+                {dialect.limit_offset('200', '0')}
+            """
+            dialect.execute(cur, rel_sql, [concept_id])
             relationships = [dict(r) for r in cur.fetchall()]
 
             # Synonyms (if concept_synonym table exists)
             synonyms = []
             try:
-                cur.execute(
-                    psysql.SQL("""
+                syn_sql = f"""
                     SELECT concept_synonym_name, language_concept_id
-                    FROM {schema}.concept_synonym
+                    FROM {syn_tbl}
                     WHERE concept_id = %s
                     ORDER BY concept_synonym_name
-                    """).format(schema=_sident(schema, 'concept')),
-                    [concept_id],
-                )
+                """
+                dialect.execute(cur, syn_sql, [concept_id])
                 synonyms = [dict(r) for r in cur.fetchall()]
             except Exception:
                 logger.warning("Failed to fetch synonyms for concept %s", concept_id, exc_info=True)
@@ -739,16 +755,17 @@ def list_concept_domains(
     """List distinct domain_id values from the concept table."""
     conn, schema = _get_conn(db, cdm_name)
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                psysql.SQL("""
-                SELECT domain_id, COUNT(*) AS count
-                FROM {schema}.concept
-                WHERE domain_id IS NOT NULL
-                GROUP BY domain_id
-                ORDER BY count DESC
-                """).format(schema=_sident(schema, 'concept'))
-            )
+        dialect = conn.dialect
+        concept_tbl = _tbl(dialect, schema, 'concept')
+        sql = f"""
+            SELECT domain_id, COUNT(*) AS count
+            FROM {concept_tbl}
+            WHERE domain_id IS NOT NULL
+            GROUP BY domain_id
+            ORDER BY count DESC
+        """
+        with dialect.dict_cursor(conn) as cur:
+            dialect.execute(cur, sql)
             return {"domains": [dict(r) for r in cur.fetchall()]}
     finally:
         conn.close()
@@ -762,16 +779,17 @@ def list_vocabularies(
     """List distinct vocabulary_id values from the concept table."""
     conn, schema = _get_conn(db, cdm_name)
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                psysql.SQL("""
-                SELECT vocabulary_id, COUNT(*) AS count
-                FROM {schema}.concept
-                WHERE vocabulary_id IS NOT NULL
-                GROUP BY vocabulary_id
-                ORDER BY count DESC
-                """).format(schema=_sident(schema, 'concept'))
-            )
+        dialect = conn.dialect
+        concept_tbl = _tbl(dialect, schema, 'concept')
+        sql = f"""
+            SELECT vocabulary_id, COUNT(*) AS count
+            FROM {concept_tbl}
+            WHERE vocabulary_id IS NOT NULL
+            GROUP BY vocabulary_id
+            ORDER BY count DESC
+        """
+        with dialect.dict_cursor(conn) as cur:
+            dialect.execute(cur, sql)
             return {"vocabularies": [dict(r) for r in cur.fetchall()]}
     finally:
         conn.close()

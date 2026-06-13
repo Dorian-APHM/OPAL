@@ -95,7 +95,7 @@ def test_dialect_execute_translates_and_preserves_order():
 
 
 def test_quote_ident_per_engine():
-    assert get_dialect("postgresql").quote_ident("concept") == "concept"
+    assert get_dialect("postgresql").quote_ident("concept") == '"concept"'
     assert get_dialect("oracle").quote_ident("concept") == '"concept"'
     assert get_dialect("sqlserver").quote_ident("concept") == "[concept]"
 

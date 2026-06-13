@@ -29,8 +29,15 @@ def cdm_name(client):
 
 
 def _mock_concept_conn():
-    """Create a mock connection for concept queries."""
+    """Create a mock connection for concept queries.
+
+    The connection advertises the real PostgreSQL dialect so dialect.dict_cursor()
+    / dialect.execute() route back to this mock cursor (the dialect's PG path just
+    calls conn.cursor(...) and cur.execute(...)), keeping the mock meaningful after
+    the engine-agnostic refactor."""
+    from db.dialects import get_dialect
     conn = MagicMock()
+    conn.dialect = get_dialect("postgresql")
     cursor = MagicMock()
     conn.cursor.return_value = cursor
     conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)

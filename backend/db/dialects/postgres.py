@@ -70,6 +70,11 @@ class PostgresDialect(Dialect):
         cur.execute(sql)
         return cur
 
+    def quote_ident(self, name: str) -> str:
+        # Matches psycopg2.sql.Identifier output so ported builders stay
+        # byte-equivalent to the historical SQL on PostgreSQL.
+        return f'"{name}"'
+
     # ── SQL fragments (native PostgreSQL) ───────────────────────────────────
     def unaccent(self, expr: str) -> str:
         return f"unaccent({expr})"
