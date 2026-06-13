@@ -103,6 +103,11 @@ def test_in_list_per_engine():
     assert frag == '"c" IN (%s, %s, %s)' and params == [1, 2, 3]
     frag, params = get_dialect("sqlserver").in_list("[c]", [9])
     assert frag == "[c] IN (%s)" and params == [9]
+    # NOT IN
+    frag, params = get_dialect("postgresql").not_in_list('"c"', [1, 2])
+    assert frag == '"c" != ALL(%s)' and params == [[1, 2]]
+    frag, params = get_dialect("oracle").not_in_list('"c"', [1, 2])
+    assert frag == '"c" NOT IN (%s, %s)' and params == [1, 2]
 
 
 def test_named_param_execute_per_engine():

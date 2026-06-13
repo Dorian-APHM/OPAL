@@ -191,6 +191,12 @@ class Dialect:
         placeholders = ", ".join(["%s"] * len(values))
         return f"{col_sql} IN ({placeholders})", list(values)
 
+    def not_in_list(self, col_sql: str, values) -> tuple[str, list]:
+        """``(sql_fragment, params)`` for ``col NOT IN (values)``. PostgreSQL uses
+        ``!= ALL(%s)`` (array bind); others expand to ``NOT IN (...)``."""
+        placeholders = ", ".join(["%s"] * len(values))
+        return f"{col_sql} NOT IN ({placeholders})", list(values)
+
     def execute(self, cursor, sql: str, params=None):
         """Execute SQL authored with psycopg2-style ``%s`` placeholders.
 

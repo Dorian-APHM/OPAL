@@ -647,9 +647,9 @@ def concept_lookup(cdm_name: str, concept_id: int, db: Session = Depends(get_db)
     schema = _get_schema(db, cdm)
 
     try:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(f"""
+        dialect = conn.dialect
+        with dialect.dict_cursor(conn) as cur:
+            dialect.execute(cur, f"""
                 SELECT concept_id, concept_name, concept_code,
                        vocabulary_id, domain_id, standard_concept, concept_class_id
                 FROM {schema.t('concept')}
@@ -851,14 +851,14 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
 
     def _worker():
         try:
-            from psycopg2.extras import DictCursor
+            dialect = conn.dialect
             _table = safe_identifier(cfg["table"])
             full_table = f"{schema.t(_table)}"
             sv_col = safe_identifier(cfg["source_value"])
             concept_col = safe_identifier(cfg["concept_id"])
             sn_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
 
-            with conn.cursor(cursor_factory=DictCursor) as cur:
+            with dialect.dict_cursor(conn) as cur:
                 select_cols = [f"t.{sv_col} AS source_value"]
                 if sn_col:
                     select_cols.append(f"MAX(t.{sn_col}) AS source_name")
@@ -866,10 +866,11 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                     select_cols.append("'' AS source_name")
 
                 where_clauses = [f"(t.{concept_col} = 0 OR t.{concept_col} IS NULL)"]
-                params: dict = {"lim": limit}
+                params: list = []
                 if approved_svs:
-                    where_clauses.append(f"t.{sv_col} != ALL(%(approved)s)")
-                    params["approved"] = approved_svs
+                    frag, frag_params = dialect.not_in_list(f"t.{sv_col}", approved_svs)
+                    where_clauses.append(frag)
+                    params.extend(frag_params)
 
                 sql = f"""
                     SELECT {', '.join(select_cols)}, COUNT(*) AS n_records
@@ -877,9 +878,9 @@ def suggest_batch_endpoint(req: SuggestBatchRequest, request: Request, db: Sessi
                     WHERE {' AND '.join(where_clauses)}
                     GROUP BY t.{sv_col}
                     ORDER BY COUNT(*) DESC
-                    LIMIT %(lim)s
+                    {dialect.limit_offset(str(int(limit)), '0')}
                 """
-                cur.execute(sql, params)
+                dialect.execute(cur, sql, params)
                 terms = [dict(r) for r in cur.fetchall()]
 
             # Enrich with reference codebook
@@ -1157,15 +1158,17 @@ def _compute_mapping_warnings(conn, full_table: str, sv_col: str, concept_col: s
     # B / C: distinct non-zero concept_ids currently in the CDM, per source value (one query)
     cdm_concepts: dict[str, int] = {}
     if source_values:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(
+        dialect = conn.dialect
+        sv_frag, sv_params = dialect.in_list(sv_col, source_values)
+        with dialect.dict_cursor(conn) as cur:
+            dialect.execute(
+                cur,
                 f"SELECT {sv_col} AS sv, "
                 f"COUNT(DISTINCT CASE WHEN {concept_col} IS NOT NULL AND {concept_col} <> 0 "
                 f"THEN {concept_col} END) AS n_concepts "
-                f"FROM {full_table} WHERE {sv_col} = ANY(%(svs)s) "
+                f"FROM {full_table} WHERE {sv_frag} "
                 f"GROUP BY {sv_col}",
-                {"svs": source_values},
+                sv_params,
             )
             for row in cur.fetchall():
                 cdm_concepts[row["sv"]] = int(row["n_concepts"] or 0)
@@ -1214,13 +1217,15 @@ def _redundant_svs_live(conn, full_table: str, sv_col: str, concept_col: str, de
     svs = list(targets.keys())
     cdm_ids: dict[str, set] = {}
     if svs:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute(
+        dialect = conn.dialect
+        sv_frag, sv_params = dialect.in_list(sv_col, svs)
+        with dialect.dict_cursor(conn) as cur:
+            dialect.execute(
+                cur,
                 f"SELECT {sv_col} AS sv, {concept_col} AS cid FROM {full_table} "
-                f"WHERE {sv_col} = ANY(%(svs)s) AND {concept_col} IS NOT NULL AND {concept_col} <> 0 "
+                f"WHERE {sv_frag} AND {concept_col} IS NOT NULL AND {concept_col} <> 0 "
                 f"GROUP BY {sv_col}, {concept_col}",
-                {"svs": svs},
+                sv_params,
             )
             for row in cur.fetchall():
                 cdm_ids.setdefault(row["sv"], set()).add(row["cid"])
@@ -1298,13 +1303,15 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
                 flagged = warnings["flagged"]
                 pushed = 0
                 skipped = 0
+                dialect = conn.dialect
                 with conn.cursor() as cur:
                     for d in decisions:
                         if d.source_value in flagged:
                             skipped += 1
                             continue
                         # Snapshot previous values per (source_value, previous concept_id)
-                        cur.execute(
+                        dialect.execute(
+                            cur,
                             f"SELECT {concept_col} AS prev_id, COUNT(*) AS n "
                             f"FROM {full_table} WHERE {sv_col} = %(sv)s "
                             f"GROUP BY {concept_col}",
@@ -1328,7 +1335,8 @@ def apply_mapping(req: ApplyMappingRequest, request: Request, db: Session = Depe
                             db.add(log)
                         # UPDATE only unmapped rows (concept_id = 0/NULL) — defence in depth:
                         # a pushable code is fully unmapped, so this never overwrites a mapping.
-                        cur.execute(
+                        dialect.execute(
+                            cur,
                             f"UPDATE {full_table} SET {concept_col} = %(target)s "
                             f"WHERE {sv_col} = %(sv)s AND ({concept_col} = 0 OR {concept_col} IS NULL)",
                             {"target": d.target_concept_id, "sv": d.source_value},
@@ -1412,6 +1420,7 @@ def rollback_apply(batch_id: str, request: Request, db: Session = Depends(get_db
             cdm_obj, conn = _get_cdm_conn(db, tcdm)
             schema = _get_schema(db, cdm_obj)
             try:
+                dialect = conn.dialect
                 with conn.cursor() as cur:
                     restored = 0
                     for log in cdm_logs:
@@ -1423,7 +1432,8 @@ def rollback_apply(batch_id: str, request: Request, db: Session = Depends(get_db
                             continue
                         sv_col = safe_identifier(sv_col_name)
                         full_table = f"{schema.t(table)}"
-                        cur.execute(
+                        dialect.execute(
+                            cur,
                             f"UPDATE {full_table} SET {col} = %(prev)s "
                             f"WHERE {sv_col} = %(sv)s AND {col} = %(new)s",
                             {"prev": log.previous_concept_id, "sv": log.source_value, "new": log.new_concept_id},
@@ -1472,11 +1482,14 @@ def apply_batch_detail(batch_id: str, db: Session = Depends(get_db)):
             cdm_obj, conn = _get_cdm_conn(db, target_cdm)
             schema = _get_schema(db, cdm_obj)
             try:
+                dialect = conn.dialect
+                id_frag, id_params = dialect.in_list("concept_id", list(concept_ids))
                 with conn.cursor() as cur:
-                    cur.execute(
+                    dialect.execute(
+                        cur,
                         f"SELECT concept_id, concept_name FROM {schema.t('concept')} "
-                        f"WHERE concept_id = ANY(%(ids)s)",
-                        {"ids": list(concept_ids)},
+                        f"WHERE {id_frag}",
+                        id_params,
                     )
                     for cid, cname in cur.fetchall():
                         concept_names[cid] = cname
@@ -1573,7 +1586,7 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
     concept_col = safe_identifier(cfg["concept_id"])
 
     try:
-        from psycopg2.extras import DictCursor
+        dialect = conn.dialect
         # Drop codes already correctly in the CDM (synced / same target) — nothing to push or export
         redundant = _redundant_svs_live(conn, full_table, sv_col, concept_col, decisions)
         effective = [d for d in decisions if d.source_value not in redundant]
@@ -1582,12 +1595,13 @@ def apply_preview(req: ApplyMappingRequest, request: Request, db: Session = Depe
             row = None
             warnings = _compute_mapping_warnings(conn, full_table, sv_col, concept_col, [])
         else:
-            with conn.cursor(cursor_factory=DictCursor) as cur:
-                cur.execute(f"""
+            sv_frag, sv_params = dialect.in_list(sv_col, source_values)
+            with dialect.dict_cursor(conn) as cur:
+                dialect.execute(cur, f"""
                     SELECT COUNT(*) AS n_rows, COUNT(DISTINCT person_id) AS n_persons
                     FROM {full_table}
-                    WHERE {sv_col} = ANY(%(svs)s)
-                """, {"svs": source_values})
+                    WHERE {sv_frag}
+                """, sv_params)
                 row = cur.fetchone()
             # Warnings on the effective (non-redundant) set: already-mapped now means
             # "mapped to a DIFFERENT target" (the same-target ones were dropped as redundant).
@@ -1675,13 +1689,15 @@ def export_stcm(cdm_name: str, domain: str, request: Request, db: Session = Depe
             cdm_obj, conn = _get_cdm_conn(db, cdm_name)
             schema = _get_schema(db, cdm_obj)
             try:
-                from psycopg2.extras import DictCursor
+                dialect = conn.dialect
                 if target_ids:
-                    with conn.cursor(cursor_factory=DictCursor) as cur:
-                        cur.execute(
+                    id_frag, id_params = dialect.in_list("concept_id", target_ids)
+                    with dialect.dict_cursor(conn) as cur:
+                        dialect.execute(
+                            cur,
                             f"SELECT concept_id, concept_code, concept_class_id "
-                            f"FROM {schema.t('concept')} WHERE concept_id = ANY(%(ids)s)",
-                            {"ids": target_ids},
+                            f"FROM {schema.t('concept')} WHERE {id_frag}",
+                            id_params,
                         )
                         for row in cur.fetchall():
                             concept_info[row["concept_id"]] = {
