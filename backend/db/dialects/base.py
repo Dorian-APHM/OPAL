@@ -277,6 +277,24 @@ class Dialect:
         # Standard SQL — supported by PostgreSQL, Oracle and SQL Server 2012+.
         return f"PERCENTILE_CONT({fraction}) WITHIN GROUP (ORDER BY {order_expr})"
 
+    def make_date(self, year: str, month: str, day: str) -> str:
+        """Build a DATE from year/month/day expressions."""
+        raise NotImplementedError
+
+    def age_years(self, end_expr: str, start_expr: str) -> str:
+        """Whole years between two dates (calendar age)."""
+        raise NotImplementedError
+
+    def months_between(self, end_expr: str, start_expr: str) -> str:
+        """Whole months between two dates."""
+        raise NotImplementedError
+
+    def int_series_cte(self, name: str, start_expr: str, end_expr: str) -> str:
+        """A CTE body (for a ``WITH`` list) yielding column ``y`` over the integer
+        range [start, end]. PostgreSQL uses generate_series; other engines use a
+        recursive CTE."""
+        raise NotImplementedError
+
     def count_filter(self, condition: str) -> str:
         """``COUNT(*)`` restricted to rows matching ``condition``."""
         return f"SUM(CASE WHEN {condition} THEN 1 ELSE 0 END)"

@@ -180,6 +180,20 @@ class SqlServerDialect(Dialect):
     def length(self, expr: str) -> str:
         return f"LEN({expr})"
 
+    def make_date(self, year: str, month: str, day: str) -> str:
+        return f"DATEFROMPARTS({year}, {month}, {day})"
+
+    def age_years(self, end_expr: str, start_expr: str) -> str:
+        # Approximate (not birthday-aware); good enough for histogram bucketing.
+        return f"DATEDIFF(year, {start_expr}, {end_expr})"
+
+    def months_between(self, end_expr: str, start_expr: str) -> str:
+        return f"DATEDIFF(month, {start_expr}, {end_expr})"
+
+    def int_series_cte(self, name: str, start_expr: str, end_expr: str) -> str:
+        return (f"{name}(y) AS (SELECT ({start_expr}) AS y"
+                f" UNION ALL SELECT y + 1 FROM {name} WHERE y < ({end_expr}))")
+
     def least(self, a: str, b: str) -> str:
         # LEAST/GREATEST exist only in SQL Server 2022+; CASE is universal.
         return f"(CASE WHEN {a} <= {b} THEN {a} ELSE {b} END)"

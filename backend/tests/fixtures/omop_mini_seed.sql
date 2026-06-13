@@ -44,8 +44,13 @@ CREATE TABLE concept_synonym (
 );
 INSERT INTO concept_synonym VALUES (320128,'High blood pressure');
 
-CREATE TABLE person (person_id BIGINT PRIMARY KEY, gender_concept_id BIGINT, year_of_birth INT);
-INSERT INTO person VALUES (1,8507,1970),(2,8532,1985),(3,8507,1990);
+CREATE TABLE person (person_id BIGINT PRIMARY KEY, gender_concept_id BIGINT,
+  year_of_birth INT, month_of_birth INT, day_of_birth INT,
+  race_concept_id BIGINT, ethnicity_concept_id BIGINT);
+INSERT INTO person VALUES
+ (1,8507,1970,3,15,0,0),
+ (2,8532,1985,7,1,0,0),
+ (3,8507,1990,11,20,0,0);
 
 CREATE TABLE observation_period (
   observation_period_id BIGINT PRIMARY KEY, person_id BIGINT,

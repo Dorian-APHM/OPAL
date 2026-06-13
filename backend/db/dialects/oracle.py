@@ -171,3 +171,17 @@ class OracleDialect(Dialect):
 
     def extract(self, part: str, expr: str) -> str:
         return f"EXTRACT({part} FROM {expr})"
+
+    def make_date(self, year: str, month: str, day: str) -> str:
+        return (f"TO_DATE(TO_CHAR({year})||'-'||TO_CHAR({month})||'-'||TO_CHAR({day}),"
+                f" 'YYYY-MM-DD')")
+
+    def age_years(self, end_expr: str, start_expr: str) -> str:
+        return f"FLOOR(MONTHS_BETWEEN({end_expr}, {start_expr}) / 12)"
+
+    def months_between(self, end_expr: str, start_expr: str) -> str:
+        return f"FLOOR(MONTHS_BETWEEN({end_expr}, {start_expr}))"
+
+    def int_series_cte(self, name: str, start_expr: str, end_expr: str) -> str:
+        return (f"{name}(y) AS (SELECT ({start_expr}) AS y FROM dual"
+                f" UNION ALL SELECT y + 1 FROM {name} WHERE y < ({end_expr}))")

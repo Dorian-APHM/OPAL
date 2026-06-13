@@ -144,6 +144,19 @@ class PostgresDialect(Dialect):
     def extract(self, part: str, expr: str) -> str:
         return f"EXTRACT({part} FROM {expr})"
 
+    def make_date(self, year: str, month: str, day: str) -> str:
+        return f"MAKE_DATE({year}, {month}, {day})"
+
+    def age_years(self, end_expr: str, start_expr: str) -> str:
+        return f"EXTRACT(YEAR FROM AGE({end_expr}, {start_expr}))"
+
+    def months_between(self, end_expr: str, start_expr: str) -> str:
+        return (f"(DATE_PART('year', AGE({end_expr}, {start_expr})) * 12"
+                f" + DATE_PART('month', AGE({end_expr}, {start_expr})))")
+
+    def int_series_cte(self, name: str, start_expr: str, end_expr: str) -> str:
+        return f"{name} AS (SELECT generate_series(({start_expr}), ({end_expr})) AS y)"
+
     def count_filter(self, condition: str) -> str:
         return f"COUNT(*) FILTER (WHERE {condition})"
 
