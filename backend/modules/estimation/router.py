@@ -48,6 +48,8 @@ def _build_km_sql(
     strata: list[str] | None = None,
 ) -> str:
     """Build SQL to fetch individual-level survival data."""
+    from db.dialects import get_dialect
+    dia = getattr(omop_schema, "_dialect", None) or get_dialect("postgresql")
     target_sql = build_cohort_sql(target_criteria, omop_schema)
     outcome_sql = build_cohort_sql(outcome_criteria, omop_schema)
 
@@ -83,13 +85,13 @@ def _build_km_sql(
 
     # TAR end expression
     if time_at_risk_end is not None:
-        tar_limit = f"LEAST(op.observation_period_end_date, cohort_start + INTERVAL '{int(time_at_risk_end)} days')"
+        tar_limit = dia.least("op.observation_period_end_date", dia.date_add("cohort_start", int(time_at_risk_end)))
     else:
         tar_limit = "op.observation_period_end_date"
 
     if exit_type == "fixed_duration" and exit_criteria:
         duration = int(exit_criteria.get("duration_days", 365))
-        tar_limit = f"LEAST(op.observation_period_end_date, cohort_start + INTERVAL '{duration} days')"
+        tar_limit = dia.least("op.observation_period_end_date", dia.date_add("cohort_start", duration))
 
     # Build date extraction for target
     if date_col and domain_table:
@@ -116,7 +118,7 @@ def _build_km_sql(
         )
     else:
         outcome_dated = (
-            f"SELECT base.person_id, NULL::date AS outcome_date\n"
+            f"SELECT base.person_id, {dia.cast('NULL', 'date')} AS outcome_date\n"
             f"FROM ({outcome_sql}) base"
         )
 
@@ -129,15 +131,22 @@ def _build_km_sql(
             if s == "gender":
                 col_exprs.append("COALESCE(gc.concept_name, 'Unknown') AS gender_name")
             elif s == "age_group":
+                _age = f"{dia.extract('YEAR', dia.cast('te.cohort_start', 'date'))} - p.year_of_birth"
                 col_exprs.append(
                     "CASE "
-                    "WHEN EXTRACT(YEAR FROM te.cohort_start::date) - p.year_of_birth < 18 THEN '0-17' "
-                    "WHEN EXTRACT(YEAR FROM te.cohort_start::date) - p.year_of_birth < 40 THEN '18-39' "
-                    "WHEN EXTRACT(YEAR FROM te.cohort_start::date) - p.year_of_birth < 65 THEN '40-64' "
+                    f"WHEN {_age} < 18 THEN '0-17' "
+                    f"WHEN {_age} < 40 THEN '18-39' "
+                    f"WHEN {_age} < 65 THEN '40-64' "
                     "ELSE '65+' END AS age_group"
                 )
         if col_exprs:
             strata_select = ", " + ", ".join(col_exprs)
+
+    oc_date = dia.cast("oe.outcome_date", "date")
+    cs_date = dia.cast("te.cohort_start", "date")
+    tar_date = dia.cast(f"({tar_limit})", "date")
+    days_to_event = dia.cast(dia.date_diff_days(oc_date, cs_date), "float")
+    days_to_tar = dia.cast(dia.date_diff_days(tar_date, cs_date), "float")
 
     sql = f"""
 WITH target_entry AS (
@@ -154,16 +163,16 @@ survival_data AS (
         oe.outcome_date,
         CASE
             WHEN oe.outcome_date IS NOT NULL
-                 AND oe.outcome_date::date >= te.cohort_start::date
-                 AND oe.outcome_date::date <= ({tar_limit})::date
+                 AND {oc_date} >= {cs_date}
+                 AND {oc_date} <= {tar_date}
             THEN 1 ELSE 0
         END AS had_event,
         CASE
             WHEN oe.outcome_date IS NOT NULL
-                 AND oe.outcome_date::date >= te.cohort_start::date
-                 AND oe.outcome_date::date <= ({tar_limit})::date
-            THEN (oe.outcome_date::date - te.cohort_start::date)::float
-            ELSE (({tar_limit})::date - te.cohort_start::date)::float
+                 AND {oc_date} >= {cs_date}
+                 AND {oc_date} <= {tar_date}
+            THEN {days_to_event}
+            ELSE {days_to_tar}
         END AS time_days
         {strata_select}
     FROM target_entry te
@@ -173,7 +182,7 @@ survival_data AS (
     JOIN {omop_schema.t('person')} p ON te.person_id = p.person_id
     LEFT JOIN {omop_schema.t('concept')} gc ON p.gender_concept_id = gc.concept_id
     LEFT JOIN outcome_entry oe ON te.person_id = oe.person_id
-    WHERE te.cohort_start::date < ({tar_limit})::date
+    WHERE {cs_date} < {tar_date}
 )
 SELECT person_id, time_days, had_event
     {"".join(f", {s}_name" if s == "gender" else f", {s}" for s in (strata or []))}

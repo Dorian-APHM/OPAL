@@ -29,13 +29,18 @@ def build_incidence_sql(
     if not hasattr(omop_schema, "t"):
         from utils.cdm_helper import SchemaMap
         omop_schema = SchemaMap(omop_schema)
+    from db.dialects import get_dialect
+    dia = getattr(omop_schema, "_dialect", None) or get_dialect("postgresql")
     # Determine TAR end expression
     if time_at_risk_end == "observation_end" or time_at_risk_end is None:
         tar_end_expr = "op.observation_period_end_date"
     else:
-        tar_end_expr = f"LEAST(op.observation_period_end_date, ce.cohort_start + INTERVAL '{int(time_at_risk_end)} days')"
+        tar_end_expr = dia.least(
+            "op.observation_period_end_date",
+            dia.date_add("ce.cohort_start", int(time_at_risk_end)),
+        )
 
-    tar_start_expr = f"ce.cohort_start + INTERVAL '{int(time_at_risk_start)} days'"
+    tar_start_expr = dia.date_add("ce.cohort_start", int(time_at_risk_start))
 
     # Clean window filter: exclude patients with outcome before TAR start
     clean_filter = ""
@@ -45,7 +50,7 @@ def build_incidence_sql(
             f"    SELECT 1 FROM outcome_raw oex\n"
             f"    WHERE oex.person_id = ce.person_id\n"
             f"      AND oex.outcome_date < {tar_start_expr}\n"
-            f"      AND oex.outcome_date >= ce.cohort_start - INTERVAL '{int(clean_window)} days'\n"
+            f"      AND oex.outcome_date >= {dia.date_sub('ce.cohort_start', int(clean_window))}\n"
             f"  )\n"
         )
 
@@ -80,13 +85,13 @@ analysis AS (
             WHEN o.outcome_date IS NOT NULL
                  AND o.outcome_date >= {tar_start_expr}
                  AND o.outcome_date <= {tar_end_expr}
-            THEN (o.outcome_date::date - ({tar_start_expr})::date)::float
-            ELSE (({tar_end_expr})::date - ({tar_start_expr})::date)::float
+            THEN {dia.cast(dia.date_diff_days(dia.cast("o.outcome_date", "date"), dia.cast(f"({tar_start_expr})", "date")), "float")}
+            ELSE {dia.cast(dia.date_diff_days(dia.cast(f"({tar_end_expr})", "date"), dia.cast(f"({tar_start_expr})", "date")), "float")}
         END AS time_days,
-        EXTRACT(YEAR FROM ({tar_start_expr})) - p.year_of_birth AS age,
+        {dia.extract("YEAR", f"({tar_start_expr})")} - p.year_of_birth AS age,
         p.gender_concept_id,
         COALESCE(gc.concept_name, 'Unknown') AS gender_name,
-        EXTRACT(YEAR FROM ({tar_start_expr}))::int AS calendar_year
+        {dia.cast(dia.extract("YEAR", f"({tar_start_expr})"), "int")} AS calendar_year
     FROM cohort_entry ce
     JOIN {omop_schema.t('observation_period')} op
         ON ce.person_id = op.person_id
