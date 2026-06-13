@@ -234,7 +234,9 @@ def build_count_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
     """Build a SQL query that returns only the count of matching patients."""
     omop_schema = _smap(omop_schema)
     inner = build_cohort_sql(criteria, omop_schema)
-    return f"SELECT COUNT(DISTINCT person_id) AS patient_count FROM ({inner}) AS cohort"
+    # No `AS` before the derived-table alias: Oracle rejects it (ORA-00907);
+    # PostgreSQL accepts the alias either way.
+    return f"SELECT COUNT(DISTINCT person_id) AS patient_count FROM ({inner}) cohort"
 
 
 def build_attrition_sql(criteria: dict, omop_schema: str = "omop_cdm") -> list[dict]:
@@ -311,10 +313,10 @@ def build_sample_sql(
         f"  SELECT observation_period_start_date, observation_period_end_date\n"
         f"  FROM {omop_schema.t('observation_period')}\n"
         f"  WHERE person_id = c.person_id\n"
-        f"  ORDER BY observation_period_start_date DESC LIMIT 1\n"
-        f") op ON TRUE\n"
-        f"ORDER BY RANDOM()\n"
-        f"LIMIT {int(limit)}"
+        f"  ORDER BY observation_period_start_date DESC " + _dia(omop_schema).limit_offset("1", "0") + "\n"
+        f") op ON 1=1\n"
+        f"ORDER BY " + _dia(omop_schema).random_func() + "\n"
+        f"" + _dia(omop_schema).limit_offset(str(int(limit)), "0")
     )
 
 
@@ -371,7 +373,13 @@ def build_detailed_sample_sql(
                     f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
                     f"WHERE ancestor_concept_id IN ({concept_list})"
                 )
-                concept_filter = f"t.{concept_col} IN (SELECT v FROM (SELECT unnest(ARRAY[{concept_list}]) AS v UNION {ancestor_subq}) _exp)"
+                # Concept + descendants. Authored without PostgreSQL-only
+                # unnest(ARRAY[...]) so it runs on every engine: the literal ids
+                # OR'd with the descendant lookup (same set, no array type).
+                concept_filter = (
+                    f"(t.{concept_col} IN ({concept_list}) "
+                    f"OR t.{concept_col} IN ({ancestor_subq}))"
+                )
             else:
                 concept_filter = f"t.{concept_col} IN ({concept_list})"
 
@@ -418,8 +426,8 @@ def build_detailed_sample_sql(
             f"  FROM {full_table} t\n"
             f"  LEFT JOIN {omop_schema.t('concept')} con ON t.{concept_col} = con.concept_id\n"
             f"  WHERE t.{pid_col} = c.person_id AND {where_clause}\n"
-            f"  LIMIT 1\n"
-            f") {alias} ON TRUE"
+            f"  " + _dia(omop_schema).limit_offset("1", "0") + "\n"
+            f") {alias} ON 1=1"
         )
         laterals.append(lateral_sql)
 
@@ -476,8 +484,8 @@ def build_detailed_sample_sql(
         f"FROM (SELECT DISTINCT person_id FROM cohort) c\n"
         f"JOIN {omop_schema.t('person')} p ON c.person_id = p.person_id\n"
         f"{lateral_joins}\n"
-        f"ORDER BY RANDOM()\n"
-        f"LIMIT {int(limit)}"
+        f"ORDER BY " + _dia(omop_schema).random_func() + "\n"
+        f"" + _dia(omop_schema).limit_offset(str(int(limit)), "0")
     )
     return sql, columns_meta
 
@@ -501,8 +509,8 @@ def build_export_sql(criteria: dict, omop_schema: str = "omop_cdm") -> str:
         f"  SELECT observation_period_start_date, observation_period_end_date\n"
         f"  FROM {omop_schema.t('observation_period')}\n"
         f"  WHERE person_id = c.person_id\n"
-        f"  ORDER BY observation_period_start_date DESC LIMIT 1\n"
-        f") op ON TRUE\n"
+        f"  ORDER BY observation_period_start_date DESC " + _dia(omop_schema).limit_offset("1", "0") + "\n"
+        f") op ON 1=1\n"
         f"ORDER BY p.person_id"
     )
 
@@ -758,7 +766,12 @@ def _build_criterion_cte(
                 f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
                 f"WHERE ancestor_concept_id IN ({concept_list})"
             )
-            concept_filter = f"t.{concept_col} IN (SELECT v FROM (SELECT unnest(ARRAY[{concept_list}]) AS v UNION {ancestor_subq}) _exp)"
+            # Engine-neutral concept+descendants filter (no PostgreSQL-only
+            # unnest(ARRAY[...]); see build_sample_sql for the same rewrite).
+            concept_filter = (
+                f"(t.{concept_col} IN ({concept_list}) "
+                f"OR t.{concept_col} IN ({ancestor_subq}))"
+            )
         else:
             concept_list = ", ".join(
                 str(int(c["concept_id"] if isinstance(c, dict) else c)) for c in concepts

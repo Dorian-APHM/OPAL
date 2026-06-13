@@ -86,7 +86,7 @@ def run_observation_period_analysis(conn, omop_schema: str = "omop_cdm",
             WHERE per.obs_start IS NOT NULL
               AND p.year_of_birth IS NOT NULL
               AND {dialect.age_years("per.obs_start", birth_date)} BETWEEN 0 AND 120
-            GROUP BY 1
+            GROUP BY {age_int}
             ORDER BY age
         """)
         ages, counts = [], []

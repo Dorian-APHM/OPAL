@@ -31,19 +31,6 @@ DBTYPE = os.environ.get("OPAL_ITEST_OMOP_DBTYPE", "postgresql")
 SCHEMA = os.environ.get("OPAL_ITEST_OMOP_SCHEMA", "omop_cdm")
 CDM = "itest_full"
 
-# These endpoints rely on the analytical "hard constructs" the dialect port has
-# not finished for Oracle yet (cohort sql_builder's unnest(ARRAY[...]) concept
-# expansion + `FROM (...) AS alias` → ORA-00907; quality clinical GROUP BY /
-# LATERAL / STRING_AGG → ORA-03162; characterization scratch tables named "_x" →
-# ORA-00911). They pass on PostgreSQL. Marked xfail *only on Oracle* so the suite
-# is a clean gate on both engines while precisely recording the remaining gaps —
-# see docs/CDM_CONNECTORS.md §5. strict=False: an xpass (= port finished) won't
-# fail the run, it just signals the marker can be removed.
-ORACLE_HARD = pytest.mark.xfail(
-    DBTYPE == "oracle",
-    reason="Oracle analytical 'hard construct' port not finished (see CDM_CONNECTORS.md §5)",
-    strict=False,
-)
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -220,30 +207,24 @@ def test_cohort_concept_search(client, cdm):
 def test_cohort_vocabularies(client, cdm):
     _ok(client.get(f"/api/cohorts/concepts/vocabularies?cdm_name={cdm}"))
 
-@ORACLE_HARD
 def test_cohort_count(client, cdm):
     _ok(client.post("/api/cohorts/count", json={"cdm_name": cdm, "criteria": CRIT}))
 
-@ORACLE_HARD
 def test_cohort_count_approx(client, cdm):
     _ok(client.post("/api/cohorts/count/approximate", json={"cdm_name": cdm, "criteria": CRIT}))
 
 def test_cohort_attrition(client, cdm):
     _ok(client.post("/api/cohorts/attrition", json={"cdm_name": cdm, "criteria": CRIT}))
 
-@ORACLE_HARD
 def test_cohort_sample(client, cdm):
     _ok(client.post("/api/cohorts/sample", json={"cdm_name": cdm, "criteria": CRIT, "limit": 5}))
 
-@ORACLE_HARD
 def test_cohort_sample_detailed(client, cdm):
     _ok(client.post("/api/cohorts/sample/detailed", json={"cdm_name": cdm, "criteria": CRIT, "limit": 5}))
 
-@ORACLE_HARD
 def test_cohort_export_direct(client, cdm):
     _ok_status(client.post("/api/cohorts/export/direct", json={"cdm_name": cdm, "criteria": CRIT}))
 
-@ORACLE_HARD
 def test_cohort_sql_schema(client, cdm):
     _ok(client.get(f"/api/cohorts/sql/schema?cdm_name={cdm}"))
 
@@ -251,12 +232,10 @@ def test_cohort_sql_execute(client, cdm):
     _ok(client.post("/api/cohorts/sql/execute", json={
         "cdm_name": cdm, "sql": f"SELECT concept_id, concept_name FROM {SCHEMA}.concept", "limit": 10}))
 
-@ORACLE_HARD
 def test_cohort_sql_export(client, cdm):
     _ok_status(client.post("/api/cohorts/sql/export", json={
         "cdm_name": cdm, "sql": f"SELECT concept_id, concept_name FROM {SCHEMA}.concept", "limit": 10}))
 
-@ORACLE_HARD
 def test_cohort_characterize_worker(raw_conn):
     from modules.cohort.characterization import run_characterization
     conn, schema = raw_conn
@@ -268,7 +247,6 @@ def test_cohort_characterize_worker(raw_conn):
 def test_quality_domains(client, cdm):
     _ok(client.get(f"/api/quality/domains?cdm_name={cdm}"))
 
-@ORACLE_HARD
 def test_quality_analyze_all_domains_worker(raw_conn):
     # Drives the analyze / analyze-batch / stream SQL for every available domain.
     from modules.quality.engine import get_available_domains, run_domain_analysis
@@ -276,11 +254,6 @@ def test_quality_analyze_all_domains_worker(raw_conn):
     domains = get_available_domains(conn=conn, omop_schema=schema)
     assert domains
     for d in domains:
-        # 'Note' is skipped: clinical.py reads cfg["source_value"] unconditionally
-        # but DOMAIN_CONFIG['Note'] has no source_value → ValueError. Pre-existing
-        # and identical on main; engine-independent (not a dialect issue).
-        if d == "Note":
-            continue
         res = run_domain_analysis(conn, d, schema)
         assert isinstance(res, dict)
 
@@ -302,7 +275,6 @@ def test_dm_extract_schema(client, cdm):
     _ok(client.post(f"/api/datamanagement/extract/schema?cdm_name={cdm}", json={
         "table_selections": [{"table": "person", "columns": ["person_id", "year_of_birth"]}]}))
 
-@ORACLE_HARD
 def test_dm_extract_rows_worker(raw_conn):
     # Drives the extract/start row-extraction SQL directly.
     from modules.cohort.sql_builder import build_cohort_sql
@@ -317,13 +289,11 @@ def test_dm_extract_rows_worker(raw_conn):
 
 
 # ── ESTIMATION / INCIDENCE routers ──────────────────────────────────────────
-@ORACLE_HARD
 def test_incidence_compute(client, cdm, cohorts):
     target, outcome = cohorts
     _ok(client.post("/api/incidence/compute", json={
         "cdm_name": cdm, "target_cohort_id": target, "outcome_cohort_id": outcome}))
 
-@ORACLE_HARD
 def test_estimation_kaplan_meier(client, cdm, cohorts):
     target, outcome = cohorts
     _ok(client.post("/api/estimation/kaplan-meier", json={
@@ -331,16 +301,8 @@ def test_estimation_kaplan_meier(client, cdm, cohorts):
 
 
 # ── CONCEPT_SET router ──────────────────────────────────────────────────────
-# resolve/counts do `json.loads(cs.concepts_json)` then iterate it as a list of
-# dicts, but create_concept_set stores the dict form {"concepts":[...],
-# "source_codes":[...]} → iterating yields the dict KEYS → TypeError. Pre-existing
-# and identical on main (resolve/counts don't use the _parse_payload helper);
-# engine-independent. Marked xfail so the CDM SQL path is documented as currently
-# unreachable through these endpoints, not silently skipped.
-@pytest.mark.xfail(reason="pre-existing concepts_json shape bug (same on main); not a dialect issue", strict=False)
 def test_concept_set_resolve(client, cdm, concept_set):
     _ok(client.get(f"/api/concept-sets/{concept_set}/resolve?cdm_name={cdm}"))
 
-@pytest.mark.xfail(reason="pre-existing concepts_json shape bug (same on main); not a dialect issue", strict=False)
 def test_concept_set_counts(client, cdm, concept_set):
     _ok(client.post(f"/api/concept-sets/{concept_set}/counts", json={"cdm_name": cdm}))

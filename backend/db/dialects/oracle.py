@@ -201,6 +201,17 @@ class OracleDialect(Dialect):
     def extract(self, part: str, expr: str) -> str:
         return f"EXTRACT({part} FROM {expr})"
 
+    def random_func(self) -> str:
+        return "DBMS_RANDOM.VALUE"
+
+    def release_savepoint_sql(self, name: str) -> str | None:
+        return None  # Oracle has no RELEASE SAVEPOINT; savepoints just go out of scope
+
+    def string_agg(self, expr: str, sep: str, order_by: str | None = None, distinct: bool = False) -> str:
+        d = "DISTINCT " if distinct else ""
+        ob = order_by or expr
+        return f"LISTAGG({d}{expr}, '{sep}') WITHIN GROUP (ORDER BY {ob})"
+
     def make_date(self, year: str, month: str, day: str) -> str:
         return (f"TO_DATE(TO_CHAR({year})||'-'||TO_CHAR({month})||'-'||TO_CHAR({day}),"
                 f" 'YYYY-MM-DD')")

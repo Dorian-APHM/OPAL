@@ -164,6 +164,14 @@ class SqlServerDialect(Dialect):
     def extract_year(self, expr: str) -> str:
         return f"DATEPART(year, {expr})"
 
+    def random_func(self) -> str:
+        return "NEWID()"
+
+    def string_agg(self, expr: str, sep: str, order_by: str | None = None, distinct: bool = False) -> str:
+        # SQL Server STRING_AGG has no DISTINCT; callers dedupe upstream.
+        ob = f" WITHIN GROUP (ORDER BY {order_by})" if order_by else ""
+        return f"STRING_AGG({expr}, '{sep}'){ob}"
+
     def limit_offset(self, limit_ph: str, offset_ph: str) -> str:
         return f"OFFSET {offset_ph} ROWS FETCH NEXT {limit_ph} ROWS ONLY"
 

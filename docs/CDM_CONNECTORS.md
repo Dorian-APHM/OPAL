@@ -169,9 +169,9 @@ Oracle/SQL Server *best-effort*, à valider sur vraie instance) :
 | paramstyle | `%s` / `%(n)s` | `:1` / `:name` / `?` (traduit) |
 | `LATERAL`, `STRING_AGG`, `MODE`, `SAVEPOINT` | natif | best-effort (CROSS APPLY / LISTAGG / SAVE TRAN) — documenté |
 
-**Ce qu'il reste = validation Oracle/SQL Server sur une vraie instance** (le SQL
-est généré ; il « suffit » de l'exécuter). Voir §6 : brancher le harnais avec
-`OPAL_ITEST_OMOP_DBTYPE=oracle|sqlserver`.
+**Oracle est désormais validé de bout en bout sur une vraie instance** (voir la
+sous-section ci-dessous). **Il reste SQL Server** à valider de la même façon
+(le SQL est généré ; brancher le harnais avec `OPAL_ITEST_OMOP_DBTYPE=sqlserver`).
 
 ### Validation exhaustive sur vraies bases PG + Oracle — `tests/test_integration_omop_full.py`
 
@@ -180,40 +180,45 @@ HTTP ; async/workers — quality analyze/conformity, characterization,
 suggest-batch, cache build, extract — appelés directement contre une vraie
 connexion). Lancé sur un vrai PostgreSQL 16 **et** un vrai Oracle Free 23 :
 
-- **PostgreSQL : toute la surface passe** (35 tests + 2 *xfail* = bugs
-  pré-existants ci-dessous). C'est la preuve de non-régression sur 100 % des
-  endpoints CDM (et non plus le seul sous-ensemble de `test_integration_omop.py`).
-- **Oracle : 23/35 passent ; 12 restent en échec** — ce sont exactement les
-  « constructions dures » du tableau ci-dessus, *non encore finalisées* :
-  - `cohort/sql_builder.py` (clé de voûte → count, count/approx, sample,
-    sample/detailed, export, incidence, estimation, extract) : l'expansion de
-    concepts `unnest(ARRAY[...])` et les alias `FROM (...) AS x` → **ORA-00907**.
-  - `quality/domains/clinical.py` : `GROUP BY` non positionnel / `LATERAL` /
-    `STRING_AGG` → **ORA-03162**.
-  - `cohort/characterization.py` : tables temporaires nommées `_xxx` → **ORA-00911**.
+- **PostgreSQL : 54/54** (37 du harnais exhaustif + 17 de `test_integration_omop.py`).
+- **Oracle : 54/54** — toute la surface CDM s'exécute, y compris les
+  « constructions dures » du tableau ci-dessus.
 
-  Ces 12 endpoints sont marqués `xfail` *uniquement sur Oracle* dans le harnais :
-  la suite reste verte sur les deux moteurs et chaque lacune est tracée (un
-  *xpass* signalera quand le port est terminé). Le constat corrige le « TERMINÉ ✅ »
-  ci-dessus : 100 % du SQL **passe par le dialecte**, mais Oracle n'est pas encore
-  100 % **exécutable** pour ces constructions.
+Le port Oracle des constructions dures a nécessité, en plus de l'infrastructure
+de dialecte existante :
 
-### Bugs PRÉ-EXISTANTS découverts (identiques sur `main`, indépendants du moteur)
+- `cohort/sql_builder.py` (clé de voûte → count, sample, export, incidence,
+  estimation, extract) : expansion de concepts sans `unnest(ARRAY[...])` (forme
+  `col IN (ids) OR col IN (descendants)`), alias de tables dérivées sans `AS`,
+  `ORDER BY RANDOM()`/`LIMIT` portés via `dialect.random_func()`/`limit_offset()`,
+  `LEFT JOIN LATERAL (...) ON 1=1` (au lieu de `ON TRUE`).
+- `quality/domains/{clinical,dashboard,observation_period}.py` : `GROUP BY` par
+  expression explicite (Oracle désactive le `GROUP BY` positionnel, ORA-03162) ;
+  `STRING_AGG` → `dialect.string_agg()` (`LISTAGG` sur Oracle).
+- `cohort/characterization.py` : table de travail renommée sans underscore de
+  tête (ORA-00911), alias dérivés sans `AS`, `RELEASE SAVEPOINT` via
+  `dialect.release_savepoint_sql()` (no-op sur Oracle).
+- `utils/cdm_helper.build_schema_map()` attache désormais le dialecte issu de
+  `db_type` au `SchemaMap`, pour que les builders qui ne reçoivent que le schéma
+  émettent du SQL du bon moteur (au lieu de retomber sur PostgreSQL).
+- Lecture des résultats : lignes lues via `dict_cursor` (clés en minuscules) ou
+  `[d[0].lower() …]` (incidence/estimation/`/sql/*`), et `set_session(readonly=…)`
+  rendu best-effort (oracledb n'a pas cette API).
 
-Non causés par le port (vérifiés à l'identique sur `main`), mais ce sont des
-« surprises » potentielles sur un vrai CDM :
+### Bugs PRÉ-EXISTANTS corrigés (étaient identiques sur `main`, indépendants du moteur)
 
-1. **Domaine `Note` (quality)** — `quality/domains/clinical.py` lit
-   `cfg["source_value"]` sans garde, or `DOMAIN_CONFIG["Note"]` n'a pas de
-   `source_value` → `ValueError`. Crashe sur tout CDM (PG comme Oracle).
-2. **Fuite read-only de pool (PG)** — `/cohorts/sql/execute` met la connexion
-   psycopg2 en `set_session(readonly=True)` ; `close()` ne réinitialise que
-   `statement_timeout`, pas le flag read-only → le consommateur suivant du pool
-   (ex. characterization avec ses tables temp) hérite du read-only.
-3. **`concept-sets/{id}/resolve` et `/counts`** — font `json.loads(concepts_json)`
-   puis itèrent comme une liste, alors que le format stocké est
-   `{"concepts":[...], "source_codes":[...]}` (ils n'utilisent pas le helper
-   `_parse_payload`) → `TypeError`.
+Découverts en construisant le harnais (vérifiés à l'identique sur `main`, donc
+pas des régressions du port) et **corrigés** car ce sont de vraies « surprises » :
+
+1. **Domaine `Note` (quality)** — `clinical.py` lisait `cfg["source_value"]` sans
+   garde alors que `DOMAIN_CONFIG["Note"]` n'a pas de `source_value` → `ValueError`.
+   Désormais `source_value` est optionnel (top-concepts sans agrégat de valeur
+   source, mapping stats omis).
+2. **Fuite read-only de pool (PG)** — `close()` réinitialise maintenant
+   `set_session(readonly=False)` au retour au pool, en plus de `statement_timeout`.
+3. **`concept-sets/{id}/resolve` et `/counts`** — utilisent désormais le helper
+   `_parse_payload()` (gère les formats liste *et* dict) au lieu d'un `json.loads`
+   itéré comme une liste.
 
 ## 6. Harnais de validation
 

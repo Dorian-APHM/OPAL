@@ -113,7 +113,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                         SELECT {dialect.cast(dialect.date_trunc('month', _dc), 'date')} AS m, COUNT(*) AS n
                         FROM {_ref(cfg["table"])}
                         WHERE {_dc} >= {dialect.date_sub(dialect.current_date(), 12, 'month')}
-                        GROUP BY 1 ORDER BY 1
+                        GROUP BY {dialect.cast(dialect.date_trunc('month', _dc), 'date')} ORDER BY 1
                     """)
                     sparkline = [int(r["n"]) for r in cur.fetchall()]
                 except Exception:

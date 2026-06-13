@@ -78,7 +78,14 @@ def build_schema_map(cdm: CdmConfig, settings: AnalysisSettings | None = None) -
         cats.update(cdm.schema_categories)
     if settings is not None and getattr(settings, "schema_categories", None):
         cats.update(settings.schema_categories)
-    return SchemaMap(default, cats)
+    sm = SchemaMap(default, cats)
+    # Attach the engine dialect derived from the CDM's db_type so query builders
+    # (cohort sql_builder, characterization, …) that receive only the schema map
+    # still emit engine-correct SQL instead of defaulting to PostgreSQL.
+    from db.dialects import get_dialect
+    db_type = getattr(cdm, "db_type", None) if cdm is not None else None
+    sm._dialect = get_dialect(db_type if isinstance(db_type, str) else None)
+    return sm
 
 
 def get_cdm_connection(db: Session, cdm_name: str):

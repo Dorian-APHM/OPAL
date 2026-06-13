@@ -842,23 +842,11 @@ def get_sql_schema(cdm_name: str, db: Session = Depends(get_db)):
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
     try:
-        with conn.dialect.dict_cursor(conn) as cur:
-            cur.execute(
-                """
-                SELECT table_name, column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = %s
-                ORDER BY table_name, ordinal_position
-                """,
-                [schema],
-            )
-            rows = cur.fetchall()
+        # Use the dialect's metadata catalog (information_schema on PostgreSQL,
+        # ALL_*/USER_* views on Oracle) instead of a PostgreSQL-only query.
         tables: dict[str, list[str]] = {}
-        for r in rows:
-            tbl = r["table_name"]
-            if tbl not in tables:
-                tables[tbl] = []
-            tables[tbl].append(r["column_name"])
+        for tbl in sorted(conn.dialect.list_tables(conn, schema)):
+            tables[tbl] = [c["column_name"] for c in conn.dialect.list_columns(conn, schema, tbl)]
         return {"schema": schema, "tables": tables}
     finally:
         conn.close()
@@ -909,7 +897,7 @@ def execute_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(
             else:
                 final_sql = sql_stripped
             cur.execute(final_sql)
-            columns = [desc[0] for desc in cur.description] if cur.description else []
+            columns = [desc[0].lower() for desc in cur.description] if cur.description else []
             rows = [dict(r) for r in cur.fetchall()]
             # Convert non-serializable types
             for row in rows:
@@ -953,10 +941,15 @@ def export_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(g
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
 
     try:
-        conn.set_session(readonly=True, autocommit=False)
+        # Read-only transaction for safety (psycopg2-only API; best-effort —
+        # Oracle/ODBC connections have no set_session, so don't let it abort).
+        try:
+            conn.set_session(readonly=True, autocommit=False)
+        except Exception:
+            pass
         with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql_stripped)
-            columns = [desc[0] for desc in cur.description] if cur.description else []
+            columns = [desc[0].lower() for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
     except Exception as e:
         logger.exception("SQL query execution failed")

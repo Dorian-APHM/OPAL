@@ -16,6 +16,12 @@ from modules.cohort.sql_builder import build_cohort_sql
 
 logger = logging.getLogger(__name__)
 
+def _release_sp(cur, dialect, name):
+    """Release a savepoint where the engine supports it (no-op on Oracle)."""
+    sql = dialect.release_savepoint_sql(name)
+    if sql:
+        cur.execute(sql)
+
 # Domains to characterize (skip Visit/Death for top-concept prevalence — less useful)
 _CHAR_DOMAINS = ["Condition", "Drug", "Procedure", "Measurement", "Observation", "Device"]
 
@@ -71,26 +77,26 @@ def run_characterization(
 
     with dialect.dict_cursor(conn) as cur:
         # ── 0. Materialize cohort into a temp table (executed ONCE) ──
-        cur.execute(dialect.drop_table_if_exists("_coh_char"))
+        cur.execute(dialect.drop_table_if_exists("opal_coh_char"))
         if effective_visit_level:
-            cur.execute(dialect.create_temp_table_as("_coh_char", f"""
+            cur.execute(dialect.create_temp_table_as("opal_coh_char", f"""
                 SELECT DISTINCT person_id, visit_occurrence_id
-                FROM ({cohort_sql}) AS _coh_src
+                FROM ({cohort_sql}) coh_src
             """))
-            cur.execute(dialect.create_index("_coh_char", "person_id"))
-            cur.execute(dialect.create_index("_coh_char", "person_id, visit_occurrence_id"))
+            cur.execute(dialect.create_index("opal_coh_char", "person_id"))
+            cur.execute(dialect.create_index("opal_coh_char", "person_id, visit_occurrence_id"))
         else:
-            cur.execute(dialect.create_temp_table_as("_coh_char", f"""
-                SELECT DISTINCT person_id FROM ({cohort_sql}) AS _coh_src
+            cur.execute(dialect.create_temp_table_as("opal_coh_char", f"""
+                SELECT DISTINCT person_id FROM ({cohort_sql}) coh_src
             """))
-            cur.execute(dialect.create_index("_coh_char", "person_id"))
+            cur.execute(dialect.create_index("opal_coh_char", "person_id"))
         _report("Cohort materialized")
 
         # ── 1. Demographics ──
         results["demographics"] = _query_demographics(cur, omop_schema)
 
         # ── 2. Cohort size ──
-        cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM _coh_char")
+        cur.execute("SELECT COUNT(DISTINCT person_id) AS n FROM opal_coh_char")
         results["cohort_size"] = cur.fetchone()["n"]
         _report("Demographics")
 
@@ -108,7 +114,7 @@ def run_characterization(
                     results["cohort_size"],
                     visit_level=effective_visit_level,
                 )
-                cur.execute("RELEASE SAVEPOINT sp_domain")
+                _release_sp(cur, dialect, "sp_domain")
                 domain_prev.append(dp)
             except Exception as e:
                 logger.warning("Characterization: domain %s failed: %s", domain_name, e)
@@ -130,7 +136,7 @@ def run_characterization(
                 cur, omop_schema, top_n, results["cohort_size"],
                 visit_level=effective_visit_level, conn=conn,
             )
-            cur.execute("RELEASE SAVEPOINT sp_meas")
+            _release_sp(cur, dialect, "sp_meas")
         except Exception as e:
             logger.warning("Characterization: measurement stats failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_meas")
@@ -144,7 +150,7 @@ def run_characterization(
                 cur, omop_schema, results["cohort_size"],
                 visit_level=effective_visit_level, conn=conn,
             )
-            cur.execute("RELEASE SAVEPOINT sp_visit")
+            _release_sp(cur, dialect, "sp_visit")
         except Exception as e:
             logger.warning("Characterization: visit types failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_visit")
@@ -158,7 +164,7 @@ def run_characterization(
                 cur, omop_schema,
                 visit_level=effective_visit_level,
             )
-            cur.execute("RELEASE SAVEPOINT sp_vdur")
+            _release_sp(cur, dialect, "sp_vdur")
         except Exception as e:
             logger.warning("Characterization: visit duration failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_vdur")
@@ -171,7 +177,7 @@ def run_characterization(
             results["observation_period"] = _query_observation_period(
                 cur, omop_schema,
             )
-            cur.execute("RELEASE SAVEPOINT sp_obs")
+            _release_sp(cur, dialect, "sp_obs")
         except Exception as e:
             logger.warning("Characterization: obs period failed: %s", e)
             cur.execute("ROLLBACK TO SAVEPOINT sp_obs")
@@ -179,7 +185,7 @@ def run_characterization(
         _report("Observation period")
 
         # Cleanup temp table
-        cur.execute(dialect.drop_table_if_exists("_coh_char"))
+        cur.execute(dialect.drop_table_if_exists("opal_coh_char"))
 
     return results
 
@@ -202,7 +208,7 @@ def _query_demographics(cur, schema: str) -> dict:
     cur.execute(f"""
         WITH ages AS (
             SELECT {age_expr} AS age
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             JOIN {schema.t('person')} p ON coh.person_id = p.person_id
         )
         SELECT
@@ -221,27 +227,30 @@ def _query_demographics(cur, schema: str) -> dict:
         if v is not None and not isinstance(v, (int, float, str)):
             age_row[k] = float(v)
 
-    # Age brackets
+    # Age brackets. Group by the explicit CASE expression rather than `GROUP BY 1`:
+    # Oracle disables positional GROUP BY by default (ORA-03162).
+    age_group_case = (
+        "CASE"
+        " WHEN age < 18 THEN '0-17'"
+        " WHEN age < 30 THEN '18-29'"
+        " WHEN age < 40 THEN '30-39'"
+        " WHEN age < 50 THEN '40-49'"
+        " WHEN age < 60 THEN '50-59'"
+        " WHEN age < 70 THEN '60-69'"
+        " WHEN age < 80 THEN '70-79'"
+        " ELSE '80+' END"
+    )
     cur.execute(f"""
         WITH ages AS (
             SELECT {age_expr} AS age
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             JOIN {schema.t('person')} p ON coh.person_id = p.person_id
         )
         SELECT
-            CASE
-                WHEN age < 18 THEN '0-17'
-                WHEN age < 30 THEN '18-29'
-                WHEN age < 40 THEN '30-39'
-                WHEN age < 50 THEN '40-49'
-                WHEN age < 60 THEN '50-59'
-                WHEN age < 70 THEN '60-69'
-                WHEN age < 80 THEN '70-79'
-                ELSE '80+'
-            END AS age_group,
+            {age_group_case} AS age_group,
             COUNT(*) AS count
         FROM ages
-        GROUP BY 1
+        GROUP BY {age_group_case}
         ORDER BY MIN(age)
     """)
     age_groups = [dict(r) for r in cur.fetchall()]
@@ -256,7 +265,7 @@ def _query_demographics(cur, schema: str) -> dict:
             COALESCE(ce.concept_name, 'Unknown') AS ethnicity_label,
             p.ethnicity_concept_id,
             COUNT(*) AS count
-        FROM _coh_char coh
+        FROM opal_coh_char coh
         JOIN {schema.t('person')} p ON coh.person_id = p.person_id
         LEFT JOIN {schema.t('concept')} cg ON p.gender_concept_id = cg.concept_id
         LEFT JOIN {schema.t('concept')} cr ON p.race_concept_id = cr.concept_id
@@ -324,7 +333,7 @@ def _query_domain_prevalence(
             SELECT
                 t.{cid} AS concept_id,
                 t.{pid} AS person_id
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             {visit_join}
         ),
         total AS (
@@ -399,7 +408,7 @@ def _query_measurement_stats(
                 t.value_as_number,
                 t.unit_source_value,
                 t.{pid} AS person_id
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             {visit_join}
             WHERE t.value_as_number IS NOT NULL
         ),
@@ -468,7 +477,7 @@ def _query_visit_types(
             COALESCE(c.concept_name, 'Unknown') AS concept_name,
             COUNT(DISTINCT t.{pid}) AS n_persons,
             COUNT(*) AS n_records
-        FROM _coh_char coh
+        FROM opal_coh_char coh
         {visit_join}
         LEFT JOIN {schema.t('concept')} c ON t.{cid} = c.concept_id
         GROUP BY t.{cid}, c.concept_name
@@ -492,7 +501,7 @@ def _query_observation_period(cur, schema: str) -> dict:
                 op.observation_period_start_date,
                 op.observation_period_end_date,
                 {_dia(schema).date_diff_days('op.observation_period_end_date', 'op.observation_period_start_date')} AS days
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             JOIN {schema.t('observation_period')} op ON coh.person_id = op.person_id
         )
         SELECT
@@ -534,7 +543,7 @@ def _query_visit_duration(cur, schema: str, visit_level: bool = False) -> dict:
                 v.visit_concept_id,
                 COALESCE(c.concept_name, 'Unknown') AS visit_type,
                 {_dia(schema).greatest(_dia(schema).date_diff_days('v.visit_end_date', 'v.visit_start_date'), '0')} AS days
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             {visit_join}
             LEFT JOIN {schema.t('concept')} c ON v.visit_concept_id = c.concept_id
             WHERE v.visit_start_date IS NOT NULL AND v.visit_end_date IS NOT NULL
@@ -563,7 +572,7 @@ def _query_visit_duration(cur, schema: str, visit_level: bool = False) -> dict:
                 v.visit_concept_id,
                 COALESCE(c.concept_name, 'Unknown') AS visit_type,
                 {_dia(schema).greatest(_dia(schema).date_diff_days('v.visit_end_date', 'v.visit_start_date'), '0')} AS days
-            FROM _coh_char coh
+            FROM opal_coh_char coh
             {visit_join}
             LEFT JOIN {schema.t('concept')} c ON v.visit_concept_id = c.concept_id
             WHERE v.visit_start_date IS NOT NULL AND v.visit_end_date IS NOT NULL

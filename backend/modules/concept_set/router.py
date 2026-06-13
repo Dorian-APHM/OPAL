@@ -185,7 +185,7 @@ def resolve_concept_set(concept_set_id: int, request: Request, cdm_name: str | N
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
 
-    concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
+    concepts, _ = _parse_payload(cs.concepts_json)
     if not concepts:
         return {"concept_ids": [], "total": 0}
 
@@ -230,7 +230,7 @@ def concept_set_counts(concept_set_id: int, body: dict, request: Request, db=Dep
 
     target_cdm = body.get("cdm_name", cs.cdm_name)
     check_cdm_access(request, target_cdm)
-    concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
+    concepts, _ = _parse_payload(cs.concepts_json)
     if not concepts:
         return {"counts": {}}
 

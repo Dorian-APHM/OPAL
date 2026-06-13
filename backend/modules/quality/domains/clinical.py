@@ -36,7 +36,10 @@ def _get_monthly_counts(dialect, cur, schema: str, table: str, date_col: str) ->
         f"SELECT {dialect.cast(trunc, 'date')} AS month_start,"
         f" COUNT(*) AS n"
         f" FROM {_tref(dialect, schema, table)}"
-        f" GROUP BY {trunc}"
+        # Group by the *same* expression as the SELECT (cast included): Oracle
+        # requires an exact match between the grouped expression and the
+        # non-aggregated SELECT item (ORA-03162); PostgreSQL is equivalent.
+        f" GROUP BY {dialect.cast(trunc, 'date')}"
         f" ORDER BY month_start")
     months, counts = [], []
     for r in cur.fetchall():
@@ -87,9 +90,32 @@ def _get_top_concepts(dialect, cur, schema: str, table: str, concept_id: str,
     if concept_schema is None:
         concept_schema = schema
     cid = dialect.quote_ident(concept_id)
-    sv = dialect.quote_ident(source_value)
     tref = _tref(dialect, schema, table)
     cref = f"{dialect.quote_ident(concept_schema)}.{dialect.quote_ident('concept')}"
+    if source_value is None:
+        # Domains whose config has no source_value (e.g. Note): top concepts
+        # without the per-concept source-value aggregation.
+        dialect.execute(cur,
+            f"SELECT t.{cid} AS concept_id, c.concept_name, '' AS source_value,"
+            f" COUNT(*) AS n_records, COUNT(DISTINCT t.person_id) AS n_persons"
+            f" FROM {tref} t"
+            f" JOIN {cref} c ON t.{cid} = c.concept_id"
+            f" WHERE t.{cid} != 0"
+            f" GROUP BY t.{cid}, c.concept_name"
+            f" ORDER BY n_records DESC"
+            f" {dialect.limit_offset('%s', '0')}",
+            (limit,))
+        return [
+            {
+                "concept_id": str(r["concept_id"]) if r["concept_id"] is not None else "",
+                "concept_name": r["concept_name"],
+                "source_value": "",
+                "n_records": int(r["n_records"]),
+                "n_persons": int(r["n_persons"]),
+            }
+            for r in cur.fetchall()
+        ]
+    sv = dialect.quote_ident(source_value)
     # NOTE: LATERAL + STRING_AGG(DISTINCT … ORDER BY) are PostgreSQL/Oracle idioms;
     # on SQL Server this needs CROSS APPLY + STRING_AGG (no DISTINCT). Best-effort.
     dialect.execute(cur,
@@ -105,7 +131,7 @@ def _get_top_concepts(dialect, cur, schema: str, table: str, concept_id: str,
         f"  {dialect.limit_offset('%s', '0')}"
         f" ) top"
         f" LEFT JOIN LATERAL ("
-        f"  SELECT STRING_AGG(DISTINCT sub.{sv}, ', ' ORDER BY sub.{sv}) AS source_value"
+        f"  SELECT {dialect.string_agg(f'sub.{sv}', ', ', order_by=f'sub.{sv}')} AS source_value"
         f"  FROM ("
         f"    SELECT DISTINCT {sv}"
         f"    FROM {tref}"
@@ -218,7 +244,8 @@ def run_clinical_domain_analysis(
     person_id = safe_identifier(cfg["person_id"])
     date_col = safe_identifier(cfg["date_col"])
     concept_id = safe_identifier(cfg["concept_id"])
-    source_value = safe_identifier(cfg["source_value"])
+    # Optional: some domains (e.g. Note) have no source_value in DOMAIN_CONFIG.
+    source_value = safe_identifier(cfg["source_value"]) if cfg.get("source_value") else None
     source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
     # Resolve the schema that holds this domain's table and, separately, the
     # schema that holds the vocabulary `concept` table (they may differ).
@@ -245,9 +272,10 @@ def run_clinical_domain_analysis(
             dialect, cur, schema, table, concept_id, source_value, limit=top_concepts,
             concept_schema=concept_schema,
         )
+        # Mapping stats need a source_value column; skip for domains without one.
         res["mapping"] = _get_mapping_stats(
             dialect, cur, schema, table, source_value, concept_id,
             top_unmapped=top_unmapped, source_name_col=source_name_col
-        )
+        ) if source_value else {}
 
     return res

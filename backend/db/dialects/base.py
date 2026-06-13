@@ -296,6 +296,24 @@ class Dialect:
         """Extract a calendar field (year/month/day) as a number."""
         raise NotImplementedError
 
+    def release_savepoint_sql(self, name: str) -> str | None:
+        """SQL to release a savepoint, or None if the engine has no such
+        statement (Oracle). ``SAVEPOINT`` and ``ROLLBACK TO SAVEPOINT`` are
+        standard everywhere; only ``RELEASE SAVEPOINT`` is engine-specific."""
+        return f"RELEASE SAVEPOINT {name}"
+
+    def random_func(self) -> str:
+        """Expression usable in ``ORDER BY`` to shuffle rows. PostgreSQL/SQLite
+        ``RANDOM()``; Oracle overrides with ``DBMS_RANDOM.VALUE``."""
+        return "RANDOM()"
+
+    def string_agg(self, expr: str, sep: str, order_by: str | None = None, distinct: bool = False) -> str:
+        """Concatenate ``expr`` across a group, separated by ``sep``. PostgreSQL
+        ``STRING_AGG``; Oracle overrides with ``LISTAGG``."""
+        d = "DISTINCT " if distinct else ""
+        ob = f" ORDER BY {order_by}" if order_by else ""
+        return f"STRING_AGG({d}{expr}, '{sep}'{ob})"
+
     def length(self, expr: str) -> str:
         return f"LENGTH({expr})"
 

@@ -232,7 +232,9 @@ def compute_kaplan_meier(body: KaplanMeierRequest, request: Request, db=Depends(
 
         cur = conn.cursor()
         cur.execute(sql)
-        columns = [desc[0] for desc in cur.description]
+        # Lower-case column names so result keys match the SQL aliases on every
+        # engine (Oracle reports them upper-cased). No-op on PostgreSQL.
+        columns = [desc[0].lower() for desc in cur.description]
         rows = [dict(zip(columns, row)) for row in cur.fetchall()]
         cur.close()
 

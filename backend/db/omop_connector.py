@@ -181,6 +181,14 @@ class PooledConnection:
             return
         try:
             self._conn.rollback()           # clean session state
+            # A caller may have flipped the session to read-only (e.g. /sql/execute
+            # wraps raw SQL in a read-only transaction). Clear it after rollback so
+            # the next borrower of this pooled connection isn't stuck read-only
+            # (which would break write paths like characterization scratch tables).
+            try:
+                self._conn.set_session(readonly=False)
+            except Exception:
+                pass
             # A caller may have changed session GUCs for a long-running op (e.g.
             # `SET statement_timeout = 0` during cache / SapBERT builds). Restore
             # the configured default so the next borrower of this pooled
