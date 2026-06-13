@@ -29,7 +29,7 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
     schema = build_schema_map(cdm, settings)
     return conn, schema

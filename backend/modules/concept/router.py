@@ -111,7 +111,7 @@ def _get_conn(db: Session, cdm_name: str):
     password = decrypt_password(cdm.db_password_encrypted)
     schema = _get_omop_schema(db, cdm)
     try:
-        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     except Exception as e:
         logger.exception("Cannot connect to CDM '%s'", cdm_name)
         raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
@@ -883,7 +883,7 @@ def populate_source_value_cache(
 
     def _worker():
         try:
-            conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+            conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
             with _cache_populate_lock:
                 if cdm_name in _active_cache_populates:
                     _active_cache_populates[cdm_name]["conn"] = conn

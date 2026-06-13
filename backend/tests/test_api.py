@@ -62,6 +62,47 @@ def test_create_cdm(client):
     assert resp.json()["name"] == "test_cdm"
 
 
+def test_create_cdm_defaults_to_postgresql(client):
+    """A CDM created without db_type defaults to postgresql (backward compatible)."""
+    client.post("/api/cdm/", json={
+        "name": "pg_default_cdm",
+        "db_host": "db.example.com", "db_port": 5432,
+        "db_name": "test_db", "db_user": "u", "db_password": "p",
+    })
+    cdms = {c["name"]: c for c in client.get("/api/cdm/").json()["cdms"]}
+    assert cdms["pg_default_cdm"]["db_type"] == "postgresql"
+
+
+def test_create_cdm_with_oracle_db_type(client):
+    """db_type is accepted and round-tripped for non-PostgreSQL engines."""
+    resp = client.post("/api/cdm/", json={
+        "name": "oracle_cdm", "db_type": "oracle",
+        "db_host": "db.example.com", "db_port": 1521,
+        "db_name": "ORCLPDB1", "db_user": "u", "db_password": "p",
+    })
+    assert resp.status_code == 200
+    cdms = {c["name"]: c for c in client.get("/api/cdm/").json()["cdms"]}
+    assert cdms["oracle_cdm"]["db_type"] == "oracle"
+
+
+def test_create_cdm_rejects_unknown_db_type(client):
+    resp = client.post("/api/cdm/", json={
+        "name": "bad_cdm", "db_type": "mysql",
+        "db_host": "db.example.com", "db_port": 3306,
+        "db_name": "test_db", "db_user": "u", "db_password": "p",
+    })
+    assert resp.status_code == 422
+
+
+def test_list_engines(client):
+    resp = client.get("/api/cdm/engines")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["default"] == "postgresql"
+    values = {e["value"] for e in body["engines"]}
+    assert {"postgresql", "oracle", "sqlserver"} == values
+
+
 def test_create_duplicate_cdm(client):
     # First create
     client.post("/api/cdm/", json={

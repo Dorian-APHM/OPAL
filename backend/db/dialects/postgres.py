@@ -1,0 +1,61 @@
+"""PostgreSQL dialect — the reference engine.
+
+Keeps psycopg2 idioms identical to the historical code path. The connection
+pooling itself stays in ``db.omop_connector`` using psycopg2's native
+ThreadedConnectionPool; this dialect only provides connect/cursor/session and
+the SQL fragment helpers (which return PostgreSQL's native syntax).
+"""
+from __future__ import annotations
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+from .base import Dialect
+
+
+class PostgresDialect(Dialect):
+    name = "postgresql"
+    label = "PostgreSQL"
+    default_port = 5432
+    has_unaccent = True
+
+    def connect(self, host, port, dbname, user, password, *, connect_timeout=10,
+                statement_timeout_ms=None, sslmode=None, **opts):
+        kwargs = dict(
+            host=host, port=port, dbname=dbname, user=user, password=password,
+            connect_timeout=connect_timeout,
+        )
+        if statement_timeout_ms is not None:
+            kwargs["options"] = f"-c statement_timeout={statement_timeout_ms}"
+        if sslmode:
+            kwargs["sslmode"] = sslmode
+        return psycopg2.connect(**kwargs)
+
+    def dict_cursor(self, conn):
+        return conn.cursor(cursor_factory=RealDictCursor)
+
+    def set_statement_timeout(self, conn, ms: int) -> None:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = %s", (ms,))
+
+    # ── SQL fragments (native PostgreSQL) ───────────────────────────────────
+    def unaccent(self, expr: str) -> str:
+        return f"unaccent({expr})"
+
+    def ilike(self, col_sql: str, param_ph: str) -> str:
+        return f"unaccent({col_sql}) ILIKE unaccent({param_ph})"
+
+    def cast(self, expr: str, type_name: str) -> str:
+        return f"({expr})::{type_name}"
+
+    def current_date(self) -> str:
+        return "CURRENT_DATE"
+
+    def interval_days(self, days_expr: str) -> str:
+        return f"({days_expr}) * INTERVAL '1 day'"
+
+    def extract_year(self, expr: str) -> str:
+        return f"EXTRACT(YEAR FROM {expr})"
+
+    def limit_offset(self, limit_ph: str, offset_ph: str) -> str:
+        return f"LIMIT {limit_ph} OFFSET {offset_ph}"
