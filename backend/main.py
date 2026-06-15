@@ -280,6 +280,19 @@ for _tbl in ("cdm_configs", "analysis_settings"):
             with engine.begin() as _conn:
                 _conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN schema_categories JSON"))
 
+# Multi-engine connectors: db_type selects the CDM database engine
+# (postgresql / oracle / sqlserver). create_all() does not alter an existing
+# table, so add the column here for already-provisioned app DBs; existing rows
+# backfill to 'postgresql', the only engine OPAL supported historically.
+if _insp.has_table("cdm_configs"):
+    _cc_cols = {c["name"] for c in _insp.get_columns("cdm_configs")}
+    if "db_type" not in _cc_cols:
+        with engine.begin() as _conn:
+            _conn.execute(text(
+                "ALTER TABLE cdm_configs ADD COLUMN db_type VARCHAR(32) "
+                "NOT NULL DEFAULT 'postgresql'"
+            ))
+
 # In-app SapBERT: per-CDM keying on the existing sapbert_mappings table.
 # (sapbert_domain_state is a new table, so create_all() above already made it;
 # only this pre-existing table needs the additive column + lookup index.)
