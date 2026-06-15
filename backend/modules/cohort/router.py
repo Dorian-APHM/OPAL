@@ -660,7 +660,11 @@ def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = De
                 f"(SELECT * FROM step_{i}) AS count_{i}" for i in range(len(steps))
             )
             results = []
-            with conn.dialect.dict_cursor(conn) as cur:
+            # Plain (tuple) cursor: the attrition reader indexes positionally
+            # (row[i] / row[0]). A dict cursor (RealDictCursor on PG) is keyed by
+            # column name only, so positional access raises KeyError — this is the
+            # established Oracle-validated pattern used elsewhere (mapping, conformity).
+            with conn.cursor() as cur:
                 try:
                     cur.execute(cte_query)
                     row = cur.fetchone()
@@ -688,7 +692,7 @@ def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = De
                             results.append({"step": step["step"], "label": step["label"], "count": None, "error": "An internal error occurred"})
         else:
             results = []
-            with conn.dialect.dict_cursor(conn) as cur:
+            with conn.cursor() as cur:  # plain tuple cursor — positional row[0], see above
                 for step in steps:
                     try:
                         cur.execute(step["sql"])
