@@ -111,7 +111,14 @@ export default function ConceptSetPage({ selectedCdm }: { selectedCdm: string | 
       setSourceLoading(true);
       conceptApi.searchSourceValue(selectedCdm, { q: sourceQuery, domain: searchDomain, limit: 30 })
         .then(r => { if (!abort.signal.aborted) setSourceResults(r.data.results); })
-        .catch(() => { if (!abort.signal.aborted) setSourceResults([]); })
+        .catch((err: any) => {
+          if (abort.signal.aborted) return;
+          setSourceResults([]);
+          if (err?.response?.status === 409 && err?.response?.data?.detail?.code === 'source_value_cache_missing') {
+            toast.error(err.response.data.detail.message
+              || t('concepts.cache_missing', 'Source value cache not built for this CDM yet. Build it from Data Management.'));
+          }
+        })
         .finally(() => { if (!abort.signal.aborted) setSourceLoading(false); });
     }, 300);
     return () => { clearTimeout(timer); abort.abort(); };

@@ -741,7 +741,8 @@
   },
   "concepts": {
     "load_failed": "Failed to load domains",
-    "counts_failed": "Failed to load concept counts"
+    "counts_failed": "Failed to load concept counts",
+    "cache_missing": "Source value cache not built for this CDM yet. Build it from Data Management."
   },
   "admin": {
     "role_assigned": "Role assigned",

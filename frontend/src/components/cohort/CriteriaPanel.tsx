@@ -3,7 +3,7 @@ import {
   useFloating, autoUpdate, offset, flip, shift, size,
   useDismiss, useInteractions, FloatingPortal,
 } from '@floating-ui/react';
-import { Card, Input, Select, Tag, Empty, Spinner } from '../../components/ui';
+import { Card, Input, Select, Tag, Empty, Spinner, useToast } from '../../components/ui';
 import { Search, Plus, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cohortApi, conceptApi, conceptSetApi } from '../../api/client';
@@ -48,6 +48,7 @@ const RESULTS_PANEL_CLASS =
 
 export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchDomain, setSearchDomain] = useState<string | undefined>();
   const [standardOnly, setStandardOnly] = useState(false);
@@ -122,7 +123,14 @@ export default function CriteriaPanel({ cdmName, onAddCriterion }: Props) {
       setSourceSearchLoading(true);
       conceptApi.searchSourceValue(cdmName, { q: sourceSearchQuery, domain: sourceCodeDomain, limit: 20 })
         .then(r => { if (!abort.signal.aborted) setSourceSearchResults(r.data.results); })
-        .catch(() => { if (!abort.signal.aborted) setSourceSearchResults([]); })
+        .catch((err: any) => {
+          if (abort.signal.aborted) return;
+          setSourceSearchResults([]);
+          if (err?.response?.status === 409 && err?.response?.data?.detail?.code === 'source_value_cache_missing') {
+            toast.error(err.response.data.detail.message
+              || t('concepts.cache_missing', 'Source value cache not built for this CDM yet. Build it from Data Management.'));
+          }
+        })
         .finally(() => { if (!abort.signal.aborted) setSourceSearchLoading(false); });
     }, 300);
     return () => { clearTimeout(timer); abort.abort(); };

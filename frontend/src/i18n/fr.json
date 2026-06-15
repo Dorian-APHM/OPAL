@@ -741,7 +741,8 @@
   },
   "concepts": {
     "load_failed": "Échec du chargement des domaines",
-    "counts_failed": "Échec du chargement des effectifs de concepts"
+    "counts_failed": "Échec du chargement des effectifs de concepts",
+    "cache_missing": "Le cache des valeurs source n'est pas encore construit pour ce CDM. Construisez-le depuis Gestion des données."
   },
   "admin": {
     "role_assigned": "Rôle attribué",
