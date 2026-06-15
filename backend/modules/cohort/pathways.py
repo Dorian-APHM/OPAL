@@ -164,12 +164,19 @@ def run_pathways_analysis(
             if validated_ids:
                 ids_str = ",".join(str(cid) for cid in validated_ids)
                 if include_desc:
-                    # Explicit ids OR their descendants (engine-neutral; avoids unnest/ARRAY).
+                    # Concept + descendants as a single index-friendly IN-subquery
+                    # (NOT `IN (..) OR IN (subquery)`, which forces a full table
+                    # scan on PG — ~5x slower). Literal-id rows are produced by the
+                    # dialect (unnest on PG, odcinumberlist on Oracle); mirrors the
+                    # sql_builder hot path so pathways stays indexable + engine-neutral.
+                    ancestor_subq = (
+                        f"SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')} "
+                        f"WHERE ancestor_concept_id IN ({ids_str})"
+                    )
+                    ids_subq = dialect.inline_values_subquery(validated_ids)
                     concept_filter = (
-                        f"(t.{cid_col} IN ({ids_str})"
-                        f" OR t.{cid_col} IN ("
-                        f"   SELECT descendant_concept_id FROM {omop_schema.t('concept_ancestor')}"
-                        f"   WHERE ancestor_concept_id IN ({ids_str})))"
+                        f"t.{cid_col} IN (SELECT v FROM "
+                        f"({ids_subq} UNION {ancestor_subq}) expset)"
                     )
                 else:
                     concept_filter = f"t.{cid_col} IN ({ids_str})"
