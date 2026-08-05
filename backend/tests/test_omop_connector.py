@@ -28,7 +28,7 @@ def test_close_returns_connection_to_pool():
     raw = MagicMock()
     wrapper = PooledConnection(raw, _entry_with_pool(pool), "k")
     wrapper.close()
-    pool.putconn.assert_called_once_with(raw)
+    pool.putconn.assert_called_once_with(raw, close=False)
 
 
 def test_close_is_idempotent():
@@ -77,3 +77,42 @@ def test_retry_getconn_pool_exhaustion_raises_connectionerror(monkeypatch):
 
     with pytest.raises(ConnectionError):
         get_omop_connection(host, port, db_, user, pw)
+
+
+def test_checkout_increments_in_use_and_close_decrements(monkeypatch):
+    pool = MagicMock()
+    raw = MagicMock()
+    pool.getconn.return_value = raw
+
+    host, port, db_, user, pw = "h2", 5432, "d2", "u2", "pw"
+    key = _pool_key(host, port, db_, user)
+    entry = _entry_with_pool(pool)
+    monkeypatch.setitem(oc._pools, key, entry)
+
+    conn = get_omop_connection(host, port, db_, user, pw)
+    assert entry.in_use == 1
+    conn.close()
+    assert entry.in_use == 0
+
+
+def test_evict_skips_pool_with_checked_out_connection(monkeypatch):
+    """A pool whose connection is held by a long batch must never be evicted,
+    even when last_used is far past the idle timeout (regression: eviction
+    used to closeall() mid-query and kill the running analysis)."""
+    busy = _entry_with_pool(MagicMock())
+    busy.in_use = 1
+    busy.last_used = 0.0  # ancient — far past any idle timeout
+
+    idle = _entry_with_pool(MagicMock())
+    idle.in_use = 0
+    idle.last_used = 0.0
+
+    monkeypatch.setitem(oc._pools, "busy_cdm", busy)
+    monkeypatch.setitem(oc._pools, "idle_cdm", idle)
+
+    oc.evict_idle_pools()
+
+    assert "busy_cdm" in oc._pools
+    busy.pool.closeall.assert_not_called()
+    assert "idle_cdm" not in oc._pools
+    idle.pool.closeall.assert_called_once()

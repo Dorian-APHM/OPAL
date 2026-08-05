@@ -383,6 +383,7 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
                     progress_q.put({"type": "progress", "domain": domain, "status": "success",
                                     "completed": completed, "total": total})
                 except Exception as e:
+                    logger.exception("Stream batch analysis failed for %s/%s", cdm_name, domain)
                     completed += 1
                     with _active_analyses_lock:
                         if analysis_id in _active_analyses:

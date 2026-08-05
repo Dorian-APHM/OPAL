@@ -47,13 +47,18 @@ def _hash_password(password: str) -> str:
 class PoolEntry:
     """Holds a pool together with its creation metadata."""
 
-    __slots__ = ("pool", "password_hash", "last_used")
+    __slots__ = ("pool", "password_hash", "last_used", "in_use")
 
     def __init__(self, pool: ThreadedConnectionPool, password: str):
         self.pool = pool
         # Store only the SHA-256 hash — never the plaintext password (S11).
         self.password_hash = _hash_password(password)
         self.last_used = time.monotonic()
+        # Number of connections currently checked out (protected by _pools_lock).
+        # A pool with in_use > 0 must never be evicted as idle: a long batch
+        # (e.g. quality analysis) holds one connection for its whole run and
+        # closeall() would kill the in-flight query.
+        self.in_use = 0
 
     def touch(self):
         self.last_used = time.monotonic()
@@ -88,6 +93,7 @@ class PooledConnection:
         if self._closed:
             return
         self._closed = True
+        discard = False
         try:
             self._conn.rollback()           # clean session state
             # A caller may have changed session GUCs for a long-running op (e.g.
@@ -100,15 +106,14 @@ class PooledConnection:
             self._conn.commit()
         except Exception:
             # connection is broken – discard it
-            try:
-                self._pool_entry.pool.putconn(self._conn, close=True)
-            except Exception:
-                pass
-            return
+            discard = True
         try:
-            self._pool_entry.pool.putconn(self._conn)
+            self._pool_entry.pool.putconn(self._conn, close=discard)
         except Exception:
             pass
+        with _pools_lock:
+            self._pool_entry.in_use = max(0, self._pool_entry.in_use - 1)
+        self._pool_entry.touch()
 
     # -- context manager ---------------------------------------------------
     def __enter__(self):
@@ -222,6 +227,8 @@ def get_omop_connection(host: str, port: int, dbname: str, user: str, password: 
             )
 
     conn.autocommit = False
+    with _pools_lock:
+        entry.in_use += 1
     return PooledConnection(conn, entry, key)
 
 
@@ -276,6 +283,10 @@ def evict_idle_pools():
     to_evict = []
     with _pools_lock:
         for key, entry in list(_pools.items()):
+            if entry.in_use > 0:
+                # Connections checked out — the pool is active even if last_used
+                # is old (a long batch holds one connection for its whole run).
+                continue
             if now - entry.last_used > POOL_IDLE_TIMEOUT:
                 to_evict.append(_pools.pop(key))
     for entry in to_evict:
