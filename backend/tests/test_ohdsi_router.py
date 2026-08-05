@@ -96,9 +96,14 @@ def test_status_reduces_to_latest_per_service(client, enabled, monkeypatch):
     ]
     monkeypatch.setattr(ohdsi, "_runner", lambda m, p, **k: FakeResp(200, jobs))
     data = client.get("/api/ohdsi/status").json()
-    assert data["achilles"] == {"status": "done", "log_count": 0, "cdm_name": "cdmB"}
+    assert data["achilles"] == {
+        "status": "done", "log_count": 0, "cdm_name": "cdmB", "job_id": "2",
+    }
     assert data["dqd"]["status"] == "running"
     assert data["cdmonboarding"]["status"] == "idle"   # no job
+    # job_id lets the UI dismiss one specific finished run.
+    assert data["dqd"]["job_id"] == "3"
+    assert data["cdmonboarding"]["job_id"] == ""
 
 
 def test_files_relays_listing(client, enabled, monkeypatch):

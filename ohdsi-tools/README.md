@@ -1,6 +1,6 @@
 # OPAL — OHDSI Runner
 
-Self-contained image bundling the four OHDSI R quality tools **and** a small
+Self-contained image bundling the five OHDSI R quality tools **and** a small
 runner API that OPAL calls to launch them. The tools run as **subprocesses** of
 this service — there is **no Docker socket** and no container orchestration.
 
@@ -10,6 +10,7 @@ this service — there is **no Docker socket** and no container orchestration.
 | `achilles-export`| Achilles             | Export results to JSON for AresIndexer |
 | `dqd`            | DataQualityDashboard | Data quality checks (CDMv5.4 rules)    |
 | `cdmonboarding`  | CdmOnboarding        | Onboarding report (consumes DQD output)|
+| `dashboardexport`| DashboardExport      | Export Achilles results for the DARWIN Database Dashboard |
 
 The OHDSI packages are **vendored** as tarballs under `vendor/` (corporate
 proxies may block GitHub). The PostgreSQL JDBC driver is vendored under

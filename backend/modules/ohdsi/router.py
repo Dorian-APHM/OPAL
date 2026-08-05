@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ohdsi", tags=["ohdsi"])
 
-SERVICES = {"achilles", "achilles-export", "dqd", "cdmonboarding"}
+SERVICES = {"achilles", "achilles-export", "dqd", "cdmonboarding", "dashboardexport"}
 _RUNNER_TIMEOUT = httpx.Timeout(10.0)
 
 
@@ -178,7 +178,7 @@ def stop_service(service_name: str, request: Request):
 def get_status(request: Request) -> dict:
     """Latest accessible job status per service."""
     _require_enabled()
-    result = {svc: {"status": "idle", "log_count": 0, "cdm_name": ""} for svc in SERVICES}
+    result = {svc: {"status": "idle", "log_count": 0, "cdm_name": "", "job_id": ""} for svc in SERVICES}
     resp = _runner("GET", "/jobs")
     if resp.status_code != 200:
         return result
@@ -186,7 +186,13 @@ def get_status(request: Request) -> dict:
     for job in resp.json():  # newest first
         svc = job.get("service")
         if svc in result and svc not in seen and _can_access(request, job.get("cdm_name", "")):
-            result[svc] = {"status": job["status"], "log_count": 0, "cdm_name": job.get("cdm_name", "")}
+            # job_id lets the UI dismiss a specific finished job (see OhdsiPage).
+            result[svc] = {
+                "status": job["status"],
+                "log_count": 0,
+                "cdm_name": job.get("cdm_name", ""),
+                "job_id": job.get("job_id", ""),
+            }
             seen.add(svc)
     return result
 

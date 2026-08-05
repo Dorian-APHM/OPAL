@@ -57,6 +57,8 @@ def _job_payload(**over):
 def test_health_is_public(client):
     r = client.get("/health")
     assert r.status_code == 200 and r.json()["ok"] is True
+    assert r.json()["services"] == sorted(
+        ["achilles", "achilles-export", "dqd", "cdmonboarding", "dashboardexport"])
 
 
 def test_auth_required(client):

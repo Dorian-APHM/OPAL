@@ -630,6 +630,7 @@
     "status_running": "Running",
     "status_done": "Done",
     "status_error": "Error",
+    "status_cancelled": "Cancelled",
     "loading_files": "Loading files..."
   },
   "groups": {

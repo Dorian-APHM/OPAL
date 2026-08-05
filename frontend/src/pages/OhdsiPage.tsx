@@ -14,12 +14,32 @@ interface Props {
   selectedCdm: string | null;
 }
 
-type ServiceStatus = 'idle' | 'running' | 'done' | 'error';
+type ServiceStatus = 'idle' | 'running' | 'done' | 'error' | 'cancelled';
 
 interface ServiceState {
   status: ServiceStatus;
   logs: string[];
   cdm_name?: string;
+  job_id?: string;
+}
+
+/** A finished run stays the service's latest job forever, so its status would
+ *  show indefinitely. Acknowledging one hides it until the next run; the ack is
+ *  keyed by job id and persisted so a reload doesn't bring the banner back. */
+const ACK_STORAGE_KEY = 'opal:ohdsi:acked-jobs';
+
+function loadAcks(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(ACK_STORAGE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveAcks(acks: Record<string, string>): void {
+  try {
+    localStorage.setItem(ACK_STORAGE_KEY, JSON.stringify(acks));
+  } catch { /* private mode / quota — acks stay in memory */ }
 }
 
 interface FileEntry {
@@ -34,21 +54,31 @@ const SERVICES = [
   { key: 'dqd', label: 'Data Quality Dashboard' },
   { key: 'achilles-export', label: 'Achilles Export' },
   { key: 'cdmonboarding', label: 'CDM Onboarding' },
+  { key: 'dashboardexport', label: 'Dashboard Export' },
 ];
 
-const STATUS_BADGE: Record<ServiceStatus, 'default' | 'processing' | 'success' | 'error'> = {
+const STATUS_BADGE: Record<ServiceStatus, 'default' | 'processing' | 'success' | 'error' | 'warning'> = {
   idle: 'default',
   running: 'processing',
   done: 'success',
   error: 'error',
+  cancelled: 'warning',
 };
 
-const STATUS_TAG_COLOR: Record<ServiceStatus, 'orange' | 'green' | 'red' | 'default'> = {
+const STATUS_TAG_COLOR: Record<ServiceStatus, 'orange' | 'green' | 'red' | 'yellow' | 'default'> = {
   idle: 'default',
   running: 'orange',
   done: 'green',
   error: 'red',
+  cancelled: 'yellow',
 };
+
+const TERMINAL_STATUSES: ServiceStatus[] = ['done', 'error', 'cancelled'];
+
+/** Achilles CREATEs its result tables, so they can't land in the clinical
+ *  schema unless the CDM account owns it. Convention: a dedicated `results`
+ *  schema owned by the OPAL account. */
+const DEFAULT_RESULTS_SCHEMA = 'results';
 
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '';
@@ -62,7 +92,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   const toast = useToast();
 
   // Config form
-  const [resultsSchema, setResultsSchema] = useState('omop_cdm');
+  const [resultsSchema, setResultsSchema] = useState(DEFAULT_RESULTS_SCHEMA);
   const [vocabSchema, setVocabSchema] = useState('omop_cdm');
   const [cdmVersion, setCdmVersion] = useState('5.4');
   const [cdmSourceName, setCdmSourceName] = useState('');
@@ -94,14 +124,17 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     if (!selectedCdm) return;
     cdmApi.getSettings(selectedCdm).then((res) => {
       const cats = res.data.schema_categories || {};
+      // Results go to the dedicated schema; vocabulary uses its category schema when set.
+      setResultsSchema(DEFAULT_RESULTS_SCHEMA);
       if (res.data.omop_schema) {
-        // Results use the clinical schema; vocabulary uses its category schema when set.
-        setResultsSchema(cats.clinical || res.data.omop_schema);
         setVocabSchema(cats.vocabulary || res.data.omop_schema);
       }
     }).catch(() => toast.error('Failed to load CDM settings'));
     setCdmSourceName(selectedCdm);
   }, [selectedCdm]);
+
+  // Acknowledged (dismissed) finished jobs, by service.
+  const acksRef = useRef<Record<string, string>>(loadAcks());
 
   // Poll status
   useEffect(() => {
@@ -112,7 +145,17 @@ export default function OhdsiPage({ selectedCdm }: Props) {
           const next = { ...prev };
           for (const [svc, info] of Object.entries(res.data)) {
             if (!next[svc]) next[svc] = { status: 'idle', logs: [] };
-            next[svc] = { ...next[svc], status: info.status as ServiceStatus, cdm_name: (info as any).cdm_name || '' };
+            const jobId = (info as any).job_id || '';
+            if (jobId && acksRef.current[svc] === jobId) {
+              next[svc] = { ...next[svc], status: 'idle', logs: [], cdm_name: '', job_id: jobId };
+              continue;
+            }
+            next[svc] = {
+              ...next[svc],
+              status: info.status as ServiceStatus,
+              cdm_name: (info as any).cdm_name || '',
+              job_id: jobId,
+            };
           }
           return next;
         });
@@ -120,6 +163,19 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     }, 3000);
     return () => clearInterval(poll);
   }, [enabled]);
+
+  // Acknowledge a finished run: hide its outcome until the service runs again.
+  const handleDismiss = useCallback((service: string) => {
+    setServices((prev) => {
+      const jobId = prev[service]?.job_id;
+      if (jobId) {
+        acksRef.current = { ...acksRef.current, [service]: jobId };
+        saveAcks(acksRef.current);
+      }
+      return { ...prev, [service]: { status: 'idle', logs: [], cdm_name: '', job_id: jobId } };
+    });
+    logOffsetRef.current[service] = 0;
+  }, []);
 
   // Load files
   const loadFiles = useCallback((path: string) => {
@@ -177,7 +233,7 @@ export default function OhdsiPage({ selectedCdm }: Props) {
         if (data.offset !== undefined) {
           logOffsetRef.current[service] = data.offset;
         }
-        if (data.status === 'done' || data.status === 'error') {
+        if (TERMINAL_STATUSES.includes(data.status)) {
           es.close();
           delete eventSourcesRef.current[service];
           loadFiles(currentPath);
@@ -208,21 +264,27 @@ export default function OhdsiPage({ selectedCdm }: Props) {
   useEffect(() => {
     if (enabled !== true || recoveredRef.current) return;
     recoveredRef.current = true;
-    SERVICES.forEach(({ key }) => {
-      ohdsiApi.logsHistory(key).then((res) => {
-        const { status, logs, offset } = res.data;
-        if (status === 'idle' && logs.length === 0) return;
-        logOffsetRef.current[key] = offset;
-        setServices((prev) => ({
-          ...prev,
-          [key]: { status: status as ServiceStatus, logs },
-        }));
-        // If still running, reconnect SSE to stream new logs
-        if (status === 'running') {
-          startSSE(key);
-        }
-      }).catch(() => toast.error(`Failed to recover logs for ${key}`));
-    });
+    // Status first: it carries the job ids, so a run already acknowledged in a
+    // previous session isn't resurrected by the log recovery below.
+    ohdsiApi.status().then((res) => {
+      SERVICES.forEach(({ key }) => {
+        const jobId = (res.data[key] as any)?.job_id || '';
+        if (jobId && acksRef.current[key] === jobId) return;
+        ohdsiApi.logsHistory(key).then((hist) => {
+          const { status, logs, offset } = hist.data;
+          if (status === 'idle' && logs.length === 0) return;
+          logOffsetRef.current[key] = offset;
+          setServices((prev) => ({
+            ...prev,
+            [key]: { status: status as ServiceStatus, logs, job_id: jobId },
+          }));
+          // If still running, reconnect SSE to stream new logs
+          if (status === 'running') {
+            startSSE(key);
+          }
+        }).catch(() => toast.error(`Failed to recover logs for ${key}`));
+      });
+    }).catch(() => {});
     return () => {
       // Cleanup SSE connections + pending reconnect timers on unmount
       Object.values(eventSourcesRef.current).forEach((es) => es.close());
@@ -253,8 +315,11 @@ export default function OhdsiPage({ selectedCdm }: Props) {
     }
 
     try {
-      // Clear previous logs and reset offset
+      // Clear previous logs, reset offset and drop any acknowledged outcome
       logOffsetRef.current[service] = 0;
+      const { [service]: _acked, ...rest } = acksRef.current;
+      acksRef.current = rest;
+      saveAcks(acksRef.current);
       setServices((prev) => ({
         ...prev,
         [service]: { status: 'running', logs: [] },
@@ -386,7 +451,11 @@ export default function OhdsiPage({ selectedCdm }: Props) {
                       CDM: {svcCdm}
                     </div>
                   )}
-                  <Tag color={STATUS_TAG_COLOR[status]}>
+                  <Tag
+                    color={STATUS_TAG_COLOR[status]}
+                    closable={TERMINAL_STATUSES.includes(status)}
+                    onClose={() => handleDismiss(key)}
+                  >
                     {t(`ohdsi.status_${status}`)}
                   </Tag>
                   <div>

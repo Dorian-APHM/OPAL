@@ -43,11 +43,13 @@ RUN echo "options(repos = c(CRAN = \"${CRAN_REPO}\"))" >> /usr/local/lib/R/etc/R
 COPY vendor/Achilles.tar.gz /tmp/
 COPY vendor/DataQualityDashboard.tar.gz /tmp/
 COPY vendor/CdmOnboarding.tar.gz /tmp/
+COPY vendor/DashboardExport.tar.gz /tmp/
 
 # Achilles is pure R — extract directly into the library.
 RUN tar xzf /tmp/Achilles.tar.gz -C /usr/local/lib/R/site-library/ && \
     R -e "remotes::install_local('/tmp/DataQualityDashboard.tar.gz')" && \
     R -e "remotes::install_local('/tmp/CdmOnboarding.tar.gz')" && \
+    R -e "remotes::install_local('/tmp/DashboardExport.tar.gz')" && \
     rm -f /tmp/*.tar.gz
 
 # ---------------------------------------------------------------------------

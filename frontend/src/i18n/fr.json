@@ -630,6 +630,7 @@
     "status_running": "En cours",
     "status_done": "Terminé",
     "status_error": "Erreur",
+    "status_cancelled": "Annulé",
     "loading_files": "Chargement des fichiers…"
   },
   "groups": {

@@ -1,7 +1,8 @@
 """
 OPAL OHDSI Runner — minimal job API.
 
-Runs the OHDSI R tools (Achilles, Achilles Export, DQD, CDM Onboarding) as
+Runs the OHDSI R tools (Achilles, Achilles Export, DQD, CDM Onboarding,
+Dashboard Export) as
 *subprocesses* of this service. There is NO Docker socket and NO container
 orchestration: the OPAL backend calls this internal HTTP API, which spawns
 `Rscript scripts/run_<service>.R` with the per-job environment.
@@ -51,6 +52,7 @@ SERVICES: dict[str, tuple[str, str]] = {
     "achilles-export": ("scripts/run_achilles_export.R", "achilles"),
     "dqd": ("scripts/run_dqd.R", "dqd"),
     "cdmonboarding": ("scripts/run_cdmonboarding.R", "cdmonboarding"),
+    "dashboardexport": ("scripts/run_dashboardexport.R", "dashboardexport"),
 }
 
 _CDM_NAME_RE = re.compile(r"^[A-Za-z0-9_\-. ]+$")
