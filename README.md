@@ -27,7 +27,8 @@ Plateforme web de qualite des donnees, construction de cohortes, mapping de voca
 7. [Internationalisation](#internationalisation)
 8. [Developpement](#developpement)
 9. [Stack technique](#stack-technique)
-10. [Documentation](#documentation)
+10. [Mode standalone (Streamlit, sans Docker)](#mode-standalone-streamlit-sans-docker)
+11. [Documentation](#documentation)
 
 ---
 
@@ -1049,6 +1050,37 @@ npx vitest run
 ```
 
 Les tests backend utilisent une base SQLite en memoire et un mock psycopg2 (`omop_mock.py`). Aucune base externe requise.
+
+---
+
+
+## Mode standalone (Streamlit, sans Docker)
+
+Chaque brique fonctionnelle d'OPAL est egalement disponible en **application
+Streamlit autonome**, en Python pur : pas de Docker, pas de base applicative,
+pas de Keycloak, pas de gestion d'utilisateurs. Un seul fichier de
+configuration decrit la connexion OMOP, ouverte en lecture seule.
+
+```bash
+pip install -r standalone/requirements.txt
+cp standalone/config.example.toml standalone/config.toml   # renseignez la connexion OMOP
+streamlit run standalone/apps/quality.py                   # la brique Qualite, seule
+python standalone/run.py --list                            # lister toutes les briques
+python standalone/run.py                                   # les neuf briques dans une seule app
+```
+
+Briques disponibles : Qualite, Cohortes, Concepts, Concept sets, Mapping,
+Incidence, Estimation, Data management, Lineage ETL. Elles **reutilisent les
+moteurs d'analyse de `backend/modules/`** (memes requetes, memes calculs) ;
+seuls les trois modules lies au serveur (base applicative, referentiels,
+FastAPI) sont remplaces par des equivalents standalone. La persistance
+(snapshots, cohortes, concept sets, decisions de mapping) se fait dans un
+fichier SQLite local.
+
+Hors perimetre standalone : comptes et roles, partage, notifications,
+audit, outils OHDSI en R, assistant LLM et suggestions SapBERT.
+
+Details, configuration et tests : [`standalone/README.md`](standalone/README.md).
 
 ---
 

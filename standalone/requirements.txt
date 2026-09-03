@@ -1,0 +1,7 @@
+# OPAL standalone — dépendances complètes (aucun Docker, aucune base applicative).
+# Les moteurs d'analyse réutilisés depuis backend/ n'ont besoin que de psycopg2 :
+# ni FastAPI, ni SQLAlchemy, ni Keycloak, ni les services compagnons.
+streamlit>=1.40
+pandas>=2.0
+psycopg2-binary>=2.9
+plotly>=5.18          # diagramme sunburst des parcours de soins (facultatif)

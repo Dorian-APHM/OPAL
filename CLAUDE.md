@@ -121,6 +121,36 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 **Types**: `src/types/index.ts` — Shared TypeScript interfaces for all API responses.
 
+### Standalone bricks (`standalone/`)
+
+Every functional brick is also shipped as a **self-contained Streamlit app** —
+pure Python, no Docker, no application database, no Keycloak, no users. One TOML
+file (`standalone/config.toml`, modelled on `config.example.toml`) holds the
+read-only OMOP connection.
+
+- **Entry points**: `standalone/apps/<brick>.py` (`quality`, `cohort`, `concepts`,
+  `concept_sets`, `mapping`, `incidence`, `estimation`, `datamanagement`,
+  `lineage`) plus `apps/opal.py` bundling all nine. `standalone/run.py` is a thin
+  `streamlit run` launcher.
+- **Code reuse, not a fork**: the apps import the *same* analysis engines from
+  `backend/modules/**`. Those engines only need psycopg2; the three
+  server-bound modules are replaced at import time by
+  `standalone/opal_standalone/shims/` (`utils.cdm_helper`,
+  `utils.reference_labels`, `db.app_db`) via `opal_standalone/bootstrap.py`. So
+  **an engine must stay free of FastAPI/SQLAlchemy imports at module level** —
+  `standalone/tests/test_bootstrap.py` asserts this.
+- **Router-level glue** (dated cohort SQL, Kaplan-Meier SQL, concept/vocabulary
+  queries, unmapped terms, read-only SQL guard, criteria validation) is
+  reimplemented in `opal_standalone/glue.py`; keep it aligned with the routers.
+- **Persistence**: SQLite (`opal_standalone/store.py`) replaces the app DB —
+  snapshots, cohorts, concept sets, mapping decisions, incidence/estimation
+  analyses, lineage graphs. No ownership columns.
+- **Out of scope by design**: auth/roles, sharing, groups, notifications,
+  favorites, audit, OHDSI R tools, cohort-LLM, and SapBERT suggestions (mapping
+  keeps its three deterministic strategies).
+- **Tests**: `python -m pytest standalone/tests -q` (66 tests, no database —
+  includes Streamlit `AppTest` runs of every brick).
+
 ### Key Design Decisions
 
 - External CDMs are accessed **read-only** via raw `psycopg2` (not SQLAlchemy). The only write to CDM is optional `source_to_concept_map` updates during mapping apply.

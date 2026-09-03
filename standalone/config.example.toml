@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────────────────
+# OPAL standalone — configuration
+#
+# Copiez ce fichier vers standalone/config.toml et renseignez votre base OMOP.
+#   cp standalone/config.example.toml standalone/config.toml
+#
+# C'est le seul fichier à configurer : pas de base applicative, pas de
+# Keycloak, pas d'utilisateurs. La connexion OMOP est ouverte en lecture
+# seule.
+# ─────────────────────────────────────────────────────────────────────────
+
+[omop]
+name = "omop"                 # nom affiché de la base
+host = "localhost"
+port = 5432
+database = "omop"
+user = "opal_readonly"
+password = ""                 # laissez vide et exportez OPAL_OMOP_PASSWORD
+schema = "omop_cdm"           # schéma par défaut
+statement_timeout_ms = 1800000
+read_only = true              # force la session PostgreSQL en lecture seule
+
+# Schémas par catégorie de tables OMOP (facultatif). Les catégories non
+# renseignées retombent sur le schéma par défaut ci-dessus.
+# Catégories : clinical, health_system, health_economics, derived,
+#              metadata, vocabulary
+# [omop.schema_categories]
+# vocabulary = "omop_vocabulary"
+
+# Bases supplémentaires (facultatif) — un sélecteur apparaît alors dans la
+# barre latérale, ce qui permet notamment de comparer deux CDM dans la
+# brique Qualité.
+# [[cdm]]
+# name = "omop-2023"
+# host = "localhost"
+# port = 5432
+# database = "omop_2023"
+# user = "opal_readonly"
+# password = ""
+# schema = "omop_cdm"
+
+[analysis]
+top_unmapped_terms = 50       # termes non mappés remontés par domaine
+top_concepts = 50             # concepts les plus fréquents par domaine
+max_records_per_person = 100  # plafond de l'histogramme enregistrements/patient
+max_observation_months = 120  # plafond de la durée d'observation (mois)
+comparison_alert_threshold = 5.0  # écart (%) déclenchant une alerte
+
+[storage]
+# Fichier SQLite des snapshots, cohortes, concept sets et décisions de mapping.
+# Chemin relatif = relatif à ce fichier de configuration.
+path = "./data"
+
+[ui]
+lang = "fr"                   # langue des rapports HTML : "fr" ou "en"
