@@ -208,6 +208,7 @@ const DOMAIN_OPTIONS = ['Drug', 'Condition', 'Procedure', 'Measurement', 'Observ
 
 function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuilderProps) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchDomain, setSearchDomain] = useState('Drug');
   const [searchResults, setSearchResults] = useState<OmopConcept[]>([]);
@@ -236,7 +237,14 @@ function EventCohortBuilder({ cdmName, eventCohorts, onChange }: EventCohortBuil
       setSourceSearchLoading(true);
       conceptApi.searchSourceValue(cdmName, { q: sourceSearchQuery, domain: newDomain, limit: 20 })
         .then(r => { if (!abort.signal.aborted) setSourceSearchResults(r.data.results); })
-        .catch(() => { if (!abort.signal.aborted) setSourceSearchResults([]); })
+        .catch((err: any) => {
+          if (abort.signal.aborted) return;
+          setSourceSearchResults([]);
+          if (err?.response?.status === 409 && err?.response?.data?.detail?.code === 'source_value_cache_missing') {
+            toast.error(err.response.data.detail.message
+              || t('concepts.cache_missing', 'Source value cache not built for this CDM yet. Build it from Data Management.'));
+          }
+        })
         .finally(() => { if (!abort.signal.aborted) setSourceSearchLoading(false); });
     }, 300);
     return () => { clearTimeout(timer); abort.abort(); };

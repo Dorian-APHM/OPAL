@@ -1,10 +1,12 @@
 """
-Dynamic connection to external OMOP CDM PostgreSQL databases.
+Dynamic connection to external OMOP CDM databases.
 
-Uses a per-CDM ThreadedConnectionPool to reuse TCP connections and avoid
-the ~50-100ms handshake overhead on every API call.  Each pool is keyed
-by (host, port, dbname, user).  Connections are returned to the pool on
-close() — callers keep using the same try/finally: conn.close() pattern.
+PostgreSQL (the reference engine) uses a per-CDM psycopg2 ``ThreadedConnectionPool``
+to reuse TCP connections and avoid the ~50-100ms handshake on every API call — this
+path is unchanged from the single-engine era. Other engines (Oracle, SQL Server)
+go through their :class:`~db.dialects.base.Dialect` over a generic pool. Each pool
+is keyed by (db_type, host, port, dbname, user). Connections are returned to the
+pool on ``close()`` — callers keep the same try/finally: conn.close() pattern.
 """
 import hashlib
 import logging
@@ -14,6 +16,8 @@ import time
 import psycopg2
 from psycopg2.extras import DictCursor
 from psycopg2.pool import ThreadedConnectionPool
+
+from db.dialects import get_dialect, DEFAULT_DB_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +51,9 @@ def _hash_password(password: str) -> str:
 class PoolEntry:
     """Holds a pool together with its creation metadata."""
 
-    __slots__ = ("pool", "password_hash", "last_used", "in_use")
+    __slots__ = ("pool", "password_hash", "last_used", "in_use", "dialect")
 
-    def __init__(self, pool: ThreadedConnectionPool, password: str):
+    def __init__(self, pool, password: str, dialect):
         self.pool = pool
         # Store only the SHA-256 hash — never the plaintext password (S11).
         self.password_hash = _hash_password(password)
@@ -59,9 +63,73 @@ class PoolEntry:
         # (e.g. quality analysis) holds one connection for its whole run and
         # closeall() would kill the in-flight query.
         self.in_use = 0
+        self.dialect = dialect
 
     def touch(self):
         self.last_used = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Generic pool for non-PostgreSQL dialects
+# ---------------------------------------------------------------------------
+class _GenericPool:
+    """Minimal thread-safe connection pool over a Dialect's ``connect()``.
+
+    PostgreSQL keeps psycopg2's native ThreadedConnectionPool (unchanged); other
+    engines use this. Exposes the same ``getconn``/``putconn``/``closeall`` surface
+    and raises ``psycopg2.pool.PoolError`` on exhaustion so the borrowing logic in
+    :func:`get_omop_connection` is identical across engines.
+    """
+
+    def __init__(self, dialect, conn_kwargs: dict, minconn: int, maxconn: int):
+        self._dialect = dialect
+        self._kwargs = conn_kwargs
+        self._max = maxconn
+        self._idle: list = []
+        self._in_use = 0
+        self._lock = threading.Lock()
+        for _ in range(max(0, minconn)):
+            try:
+                self._idle.append(self._dialect.connect(**self._kwargs))
+            except Exception:
+                # Best-effort pre-warm; real failures surface on first getconn().
+                break
+
+    def getconn(self):
+        with self._lock:
+            if self._idle:
+                self._in_use += 1
+                return self._idle.pop()
+            if self._in_use >= self._max:
+                raise psycopg2.pool.PoolError("connection pool exhausted")
+            self._in_use += 1
+        try:
+            return self._dialect.connect(**self._kwargs)
+        except Exception:
+            with self._lock:
+                self._in_use -= 1
+            raise
+
+    def putconn(self, conn, close: bool = False):
+        with self._lock:
+            self._in_use -= 1
+            if not close:
+                self._idle.append(conn)
+        if close:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def closeall(self):
+        with self._lock:
+            conns = list(self._idle)
+            self._idle.clear()
+        for c in conns:
+            try:
+                c.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -69,51 +137,83 @@ class PoolEntry:
 # ---------------------------------------------------------------------------
 class PooledConnection:
     """
-    Thin proxy around a raw psycopg2 connection.
+    Thin proxy around a raw DBAPI connection.
 
     * ``close()`` returns the connection to the pool instead of closing it.
     * Every other attribute/method is forwarded transparently.
     * Works as a context manager (``with get_omop_connection(...) as conn:``).
     """
 
-    __slots__ = ("_conn", "_pool_entry", "_pool_key", "_closed")
+    __slots__ = ("_conn", "_pool_entry", "_pool_key", "_closed", "_dialect")
 
-    def __init__(self, conn, pool_entry: PoolEntry, pool_key: str):
+    def __init__(self, conn, pool_entry: PoolEntry, pool_key: str, dialect=None):
         self._conn = conn
         self._pool_entry = pool_entry
         self._pool_key = pool_key
         self._closed = False
+        self._dialect = dialect
 
     # -- proxy all attribute access to the real connection -----------------
     def __getattr__(self, name):
         return getattr(self._conn, name)
+
+    @property
+    def dialect(self):
+        """The Dialect backing this connection (PostgreSQL when unknown)."""
+        return self._dialect if self._dialect is not None else get_dialect(DEFAULT_DB_TYPE)
 
     # -- close → return to pool --------------------------------------------
     def close(self):
         if self._closed:
             return
         self._closed = True
-        discard = False
+        # Non-PostgreSQL engines reset the session via their dialect. PostgreSQL
+        # keeps the exact historical reset (rollback + restore statement_timeout)
+        # to guarantee no behavioural change on the reference engine. Either way
+        # the pool's in_use counter is decremented once, in the finally below, so
+        # an idle-eviction can never close a pool with connections checked out.
         try:
-            self._conn.rollback()           # clean session state
-            # A caller may have changed session GUCs for a long-running op (e.g.
-            # `SET statement_timeout = 0` during cache / SapBERT builds). Restore
-            # the configured default so the next borrower of this pooled
-            # connection doesn't inherit the leaked value. SET is transactional,
-            # so commit it (no-op under autocommit).
-            with self._conn.cursor() as cur:
-                cur.execute("SET statement_timeout = %s", (STATEMENT_TIMEOUT_MS,))
-            self._conn.commit()
-        except Exception:
-            # connection is broken – discard it
-            discard = True
-        try:
-            self._pool_entry.pool.putconn(self._conn, close=discard)
-        except Exception:
-            pass
-        with _pools_lock:
-            self._pool_entry.in_use = max(0, self._pool_entry.in_use - 1)
-        self._pool_entry.touch()
+            if self._dialect is not None and self._dialect.name != "postgresql":
+                try:
+                    self._dialect.reset_session(self._conn, STATEMENT_TIMEOUT_MS)
+                    discard = False
+                except Exception:
+                    discard = True
+                try:
+                    self._pool_entry.pool.putconn(self._conn, close=discard)
+                except Exception:
+                    pass
+                return
+            discard = False
+            try:
+                self._conn.rollback()           # clean session state
+                # A caller may have flipped the session to read-only (e.g. /sql/execute
+                # wraps raw SQL in a read-only transaction). Clear it after rollback so
+                # the next borrower of this pooled connection isn't stuck read-only
+                # (which would break write paths like characterization scratch tables).
+                try:
+                    self._conn.set_session(readonly=False)
+                except Exception:
+                    pass
+                # A caller may have changed session GUCs for a long-running op (e.g.
+                # `SET statement_timeout = 0` during cache / SapBERT builds). Restore
+                # the configured default so the next borrower of this pooled
+                # connection doesn't inherit the leaked value. SET is transactional,
+                # so commit it (no-op under autocommit).
+                with self._conn.cursor() as cur:
+                    cur.execute("SET statement_timeout = %s", (STATEMENT_TIMEOUT_MS,))
+                self._conn.commit()
+            except Exception:
+                # connection is broken – discard it
+                discard = True
+            try:
+                self._pool_entry.pool.putconn(self._conn, close=discard)
+            except Exception:
+                pass
+        finally:
+            with _pools_lock:
+                self._pool_entry.in_use = max(0, self._pool_entry.in_use - 1)
+            self._pool_entry.touch()
 
     # -- context manager ---------------------------------------------------
     def __enter__(self):
@@ -148,8 +248,8 @@ class PooledConnection:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-def _pool_key(host: str, port: int, dbname: str, user: str) -> str:
-    return f"{host}:{port}/{dbname}@{user}"
+def _pool_key(host: str, port: int, dbname: str, user: str, db_type: str = DEFAULT_DB_TYPE) -> str:
+    return f"{db_type}://{host}:{port}/{dbname}@{user}"
 
 
 def _create_pool(host, port, dbname, user, password, sslmode=None) -> ThreadedConnectionPool:
@@ -169,15 +269,27 @@ def _create_pool(host, port, dbname, user, password, sslmode=None) -> ThreadedCo
     return ThreadedConnectionPool(**kwargs)
 
 
-def get_omop_connection(host: str, port: int, dbname: str, user: str, password: str, sslmode: str | None = None):
+def _create_dialect_pool(dialect, host, port, dbname, user, password, sslmode=None) -> _GenericPool:
+    conn_kwargs = dict(
+        host=host, port=port, dbname=dbname, user=user, password=password,
+        connect_timeout=10, statement_timeout_ms=STATEMENT_TIMEOUT_MS,
+    )
+    if sslmode:
+        conn_kwargs["sslmode"] = sslmode
+    return _GenericPool(dialect, conn_kwargs, POOL_MIN_CONN, POOL_MAX_CONN)
+
+
+def get_omop_connection(host: str, port: int, dbname: str, user: str, password: str,
+                        sslmode: str | None = None, db_type: str = DEFAULT_DB_TYPE):
     """
     Obtain a connection from the per-CDM pool.
 
-    Returns a ``PooledConnection`` that behaves exactly like a psycopg2
-    connection.  Callers MUST call ``conn.close()`` in a ``finally`` block
-    (or use ``with``).  ``close()`` returns the connection to the pool.
+    Returns a ``PooledConnection`` that behaves exactly like a DBAPI connection.
+    Callers MUST call ``conn.close()`` in a ``finally`` block (or use ``with``).
+    ``close()`` returns the connection to the pool.
     """
-    key = _pool_key(host, port, dbname, user)
+    dialect = get_dialect(db_type)
+    key = _pool_key(host, port, dbname, user, dialect.name)
 
     with _pools_lock:
         entry = _pools.get(key)
@@ -191,8 +303,11 @@ def get_omop_connection(host: str, port: int, dbname: str, user: str, password: 
             entry = None
 
         if entry is None:
-            pool = _create_pool(host, port, dbname, user, password, sslmode=sslmode)
-            entry = PoolEntry(pool, password)
+            if dialect.name == "postgresql":
+                pool = _create_pool(host, port, dbname, user, password, sslmode=sslmode)
+            else:
+                pool = _create_dialect_pool(dialect, host, port, dbname, user, password, sslmode=sslmode)
+            entry = PoolEntry(pool, password, dialect)
             _pools[key] = entry
             logger.info("Created connection pool for CDM %s", key)
 
@@ -226,33 +341,44 @@ def get_omop_connection(host: str, port: int, dbname: str, user: str, password: 
                 f"(max {POOL_MAX_CONN} connections). Try again shortly."
             )
 
-    conn.autocommit = False
+    try:
+        conn.autocommit = False
+    except Exception:
+        pass
     with _pools_lock:
         entry.in_use += 1
-    return PooledConnection(conn, entry, key)
+    return PooledConnection(conn, entry, key, dialect)
 
 
-def test_omop_connection(host: str, port: int, dbname: str, user: str, password: str, sslmode: str | None = None) -> dict:
+def test_omop_connection(host: str, port: int, dbname: str, user: str, password: str,
+                         sslmode: str | None = None, db_type: str = DEFAULT_DB_TYPE) -> dict:
     """
     Test connectivity to an OMOP CDM database.
     Uses a direct (non-pooled) connection — we don't want to create a
     pool just for a one-off connectivity test.
     """
     try:
-        kwargs = dict(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=user,
-            password=password,
-            connect_timeout=10,
-        )
-        if sslmode:
-            kwargs["sslmode"] = sslmode
-        conn = psycopg2.connect(**kwargs)
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("SELECT 1")
-        conn.close()
+        dialect = get_dialect(db_type)
+    except ValueError as e:
+        return {"success": False, "message": str(e)}
+    try:
+        if dialect.name == "postgresql":
+            kwargs = dict(
+                host=host, port=port, dbname=dbname, user=user, password=password,
+                connect_timeout=10,
+            )
+            if sslmode:
+                kwargs["sslmode"] = sslmode
+            conn = psycopg2.connect(**kwargs)
+        else:
+            conn = dialect.connect(host=host, port=port, dbname=dbname, user=user,
+                                   password=password, connect_timeout=10)
+        try:
+            with dialect.dict_cursor(conn) as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        finally:
+            conn.close()
         return {"success": True, "message": "Connection successful"}
     except Exception as e:
         return {"success": False, "message": str(e)}
@@ -261,12 +387,12 @@ def test_omop_connection(host: str, port: int, dbname: str, user: str, password:
 # ---------------------------------------------------------------------------
 # Pool lifecycle management
 # ---------------------------------------------------------------------------
-def invalidate_pool(host: str, port: int, dbname: str, user: str):
+def invalidate_pool(host: str, port: int, dbname: str, user: str, db_type: str = DEFAULT_DB_TYPE):
     """
     Close and remove the pool for a specific CDM.
     Call this when CDM credentials are updated or a CDM is deleted.
     """
-    key = _pool_key(host, port, dbname, user)
+    key = _pool_key(host, port, dbname, user, db_type)
     with _pools_lock:
         entry = _pools.pop(key, None)
     if entry:

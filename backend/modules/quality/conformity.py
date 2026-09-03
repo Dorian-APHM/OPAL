@@ -7,7 +7,6 @@ with scores and detailed findings. Integrated into the quality analysis.
 import logging
 import re
 
-from psycopg2 import sql as psysql
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +70,11 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
     # All data-level conformity queries below touch clinical tables, which share
     # the same category schema.
     clinical_schema = _schema_for("person")
+    dialect = conn.dialect
+
+    def _ref(table: str, schema: str = None) -> str:
+        return f"{dialect.quote_ident(schema or clinical_schema)}.{dialect.quote_ident(table)}"
+
     checks = []
     total_steps = len(_CONFORMITY_STEPS)
     completed = 0
@@ -93,11 +97,7 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
         # check each table against the schema that holds its category.
         present_by_schema: dict[str, set] = {}
         for sch in {_schema_for(t) for t in required_tables}:
-            cur.execute("""
-                SELECT table_name FROM information_schema.tables
-                WHERE table_schema = %s AND table_type = 'BASE TABLE'
-            """, (sch,))
-            present_by_schema[sch] = {r[0] for r in cur.fetchall()}
+            present_by_schema[sch] = dialect.list_tables(conn, sch)
         existing_tables = {
             t for t in required_tables
             if t in present_by_schema.get(_schema_for(t), set())
@@ -119,13 +119,13 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
         # ── 2. Person table checks ──
         if "person" in existing_tables:
             # Merge person checks into fewer queries (P14 fix)
-            cur.execute(psysql.SQL("""
+            cur.execute(f"""
                 SELECT
                     COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE gender_concept_id = 0 OR gender_concept_id IS NULL) AS unmapped_gender,
-                    COUNT(*) FILTER (WHERE year_of_birth > EXTRACT(YEAR FROM CURRENT_DATE)) AS future_births
-                FROM {}.{}
-            """).format(psysql.Identifier(clinical_schema), psysql.Identifier("person")))
+                    {dialect.count_filter("gender_concept_id = 0 OR gender_concept_id IS NULL")} AS unmapped_gender,
+                    {dialect.count_filter(f"year_of_birth > {dialect.extract('YEAR', dialect.current_date())}")} AS future_births
+                FROM {_ref("person")}
+            """)
             row = cur.fetchone()
             total_persons = row[0]
             unmapped_gender = row[1]
@@ -133,14 +133,11 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
 
             # Persons with no observation period (requires join, separate query)
             if "observation_period" in existing_tables:
-                cur.execute(psysql.SQL("""
-                    SELECT COUNT(*) FROM {}.{} p
-                    LEFT JOIN {}.{} op ON op.person_id = p.person_id
+                cur.execute(f"""
+                    SELECT COUNT(*) FROM {_ref("person")} p
+                    LEFT JOIN {_ref("observation_period")} op ON op.person_id = p.person_id
                     WHERE op.person_id IS NULL
-                """).format(
-                    psysql.Identifier(clinical_schema), psysql.Identifier("person"),
-                    psysql.Identifier(clinical_schema), psysql.Identifier("observation_period"),
-                ))
+                """)
                 orphan_persons = cur.fetchone()[0]
             else:
                 orphan_persons = total_persons
@@ -181,18 +178,15 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
         # ── 3. Observation period checks ──
         if "observation_period" in existing_tables:
             # Merge both obs period checks into one query (P14 fix)
-            cur.execute(psysql.SQL("""
+            cur.execute(f"""
                 SELECT
                     (SELECT COUNT(*) FROM (
-                        SELECT person_id FROM {}.{}
+                        SELECT person_id FROM {_ref("observation_period")}
                         GROUP BY person_id HAVING COUNT(*) > 1
                     ) t) AS multi_obs,
-                    (SELECT COUNT(*) FROM {}.{}
-                     WHERE observation_period_end_date > CURRENT_DATE + INTERVAL '1 day') AS future_obs
-            """).format(
-                psysql.Identifier(clinical_schema), psysql.Identifier("observation_period"),
-                psysql.Identifier(clinical_schema), psysql.Identifier("observation_period"),
-            ))
+                    (SELECT COUNT(*) FROM {_ref("observation_period")}
+                     WHERE observation_period_end_date > {dialect.date_add(dialect.current_date(), 1)}) AS future_obs
+            """)
             row = cur.fetchone()
             multi_obs = row[0]
             future_obs = row[1]
@@ -258,40 +252,24 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
 
             try:
                 # Build a single query with FILTER clauses for all checks on this table
-                filter_parts = [psysql.SQL("COUNT(*) AS total")]
-                filter_parts.append(
-                    psysql.SQL("COUNT(*) FILTER (WHERE {} = 0) AS unmapped").format(
-                        psysql.Identifier(concept_col)
-                    )
-                )
+                concept_id_q = dialect.quote_ident(concept_col)
+                filter_parts = ["COUNT(*) AS total"]
+                filter_parts.append(f"{dialect.count_filter(f'{concept_id_q} = 0')} AS unmapped")
 
                 if date_col:
+                    date_q = dialect.quote_ident(date_col)
                     filter_parts.append(
-                        psysql.SQL("COUNT(*) FILTER (WHERE {} > CURRENT_DATE + INTERVAL '1 day') AS future_dates").format(
-                            psysql.Identifier(date_col)
-                        )
+                        f"{dialect.count_filter(f'{date_q} > {dialect.date_add(dialect.current_date(), 1)}')} AS future_dates"
                     )
 
                 if visit_fk_col and has_visits:
-                    filter_parts.append(
-                        psysql.SQL(
-                            "COUNT(*) FILTER (WHERE {} IS NOT NULL"
-                            " AND NOT EXISTS (SELECT 1 FROM {}.{} v"
-                            " WHERE v.visit_occurrence_id = t.{})) AS orphans"
-                        ).format(
-                            psysql.Identifier(visit_fk_col),
-                            psysql.Identifier(clinical_schema),
-                            psysql.Identifier("visit_occurrence"),
-                            psysql.Identifier(visit_fk_col),
-                        )
-                    )
+                    vfk = dialect.quote_ident(visit_fk_col)
+                    cond = (f"{vfk} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM {_ref('visit_occurrence')} v"
+                            f" WHERE v.visit_occurrence_id = t.{vfk})")
+                    filter_parts.append(f"{dialect.count_filter(cond)} AS orphans")
 
-                select_clause = psysql.SQL(",\n                       ").join(filter_parts)
-                cur.execute(psysql.SQL("SELECT {} FROM {}.{} t").format(
-                    select_clause,
-                    psysql.Identifier(clinical_schema),
-                    psysql.Identifier(table),
-                ))
+                select_clause = ",\n                       ".join(filter_parts)
+                cur.execute(f"SELECT {select_clause} FROM {_ref(table)} t")
                 row = cur.fetchone()
 
                 total = row[0]
@@ -355,10 +333,10 @@ def run_conformity_checks(conn, omop_schema: str = "omop_cdm", on_progress=None)
         # ── Visit occurrence future dates (standalone, no concept/FK checks) ──
         if "visit_occurrence" in existing_tables:
             try:
-                cur.execute(psysql.SQL("""
-                    SELECT COUNT(*) FROM {}.{}
-                    WHERE visit_start_date > CURRENT_DATE + INTERVAL '1 day'
-                """).format(psysql.Identifier(clinical_schema), psysql.Identifier("visit_occurrence")))
+                cur.execute(f"""
+                    SELECT COUNT(*) FROM {_ref("visit_occurrence")}
+                    WHERE visit_start_date > {dialect.date_add(dialect.current_date(), 1)}
+                """)
                 future = cur.fetchone()[0]
                 checks.append({
                     "id": "future_dates_visit_occurrence",

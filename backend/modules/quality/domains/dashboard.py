@@ -3,8 +3,6 @@ Dashboard domain analysis — ported from achilles_like/analysis.py.
 Aggregated overview across all clinical domains.
 """
 import logging
-from psycopg2 import sql as psysql
-from psycopg2.extras import DictCursor
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,10 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
         name = schema.schema_for(table) if hasattr(schema, "schema_for") else schema
         return safe_identifier(name)
 
-    _person = psysql.Identifier("person")
+    dialect = conn.dialect
+
+    def _ref(table: str) -> str:
+        return f"{dialect.quote_ident(_schema_name(table))}.{dialect.quote_ident(safe_identifier(table))}"
 
     res = {
         "domain": "Dashboard",
@@ -35,10 +36,9 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
         "summary": {},
     }
 
-    with conn.cursor(cursor_factory=DictCursor) as cur:
+    with dialect.dict_cursor(conn) as cur:
         # Total persons
-        cur.execute(psysql.SQL("SELECT COUNT(*) AS total FROM {}.{}").format(
-            psysql.Identifier(_schema_name("person")), _person))
+        dialect.execute(cur, f"SELECT COUNT(*) AS total FROM {_ref('person')}")
         total_persons = int(cur.fetchone()["total"] or 0)
 
         # Build a single UNION ALL query — only for domains whose table exists in the CDM
@@ -53,32 +53,20 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
                 continue
             # Check table exists before including in UNION ALL
             table_name = cfg["table"]
-            cur.execute(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s LIMIT 1",
-                (_schema_name(table_name), table_name),
-            )
-            if not cur.fetchone():
+            if not dialect.table_exists(conn, _schema_name(table_name), table_name):
                 continue
-            table = safe_identifier(cfg["table"])
-            person_id = safe_identifier(cfg["person_id"])
-            concept_id = safe_identifier(cfg["concept_id"])
-            source_value = safe_identifier(cfg["source_value"])
-            part = psysql.SQL("""
+            pid = dialect.quote_ident(safe_identifier(cfg["person_id"]))
+            cid = dialect.quote_ident(safe_identifier(cfg["concept_id"]))
+            sv = dialect.quote_ident(safe_identifier(cfg["source_value"]))
+            part = f"""
                 SELECT
-                    {domain} AS domain,
+                    '{domain_name}' AS domain,
                     COUNT(*) AS total_records,
                     COUNT(DISTINCT {pid}) AS distinct_persons,
                     COUNT(DISTINCT {sv}) AS total_terms,
                     COUNT(DISTINCT CASE WHEN {cid} != 0 THEN {sv} END) AS mapped_terms
-                FROM {schema}.{table}
-            """).format(
-                domain=psysql.Literal(domain_name),
-                pid=psysql.Identifier(person_id),
-                sv=psysql.Identifier(source_value),
-                cid=psysql.Identifier(concept_id),
-                schema=psysql.Identifier(_schema_name(table_name)),
-                table=psysql.Identifier(table),
-            )
+                FROM {_ref(table_name)}
+            """
             union_parts.append(part)
             domain_order.append(domain_name)
 
@@ -86,10 +74,7 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
         stats_by_domain: dict[str, dict] = {}
         if union_parts:
             try:
-                full_query = union_parts[0]
-                for part in union_parts[1:]:
-                    full_query = psysql.SQL("{} UNION ALL {}").format(full_query, part)
-                cur.execute(full_query)
+                dialect.execute(cur, " UNION ALL ".join(union_parts))
                 for row in cur.fetchall():
                     stats_by_domain[row["domain"]] = dict(row)
             except Exception:
@@ -122,16 +107,14 @@ def run_dashboard_analysis(conn, omop_schema: str = "omop_cdm") -> dict:
             date_col_name = cfg.get("date_col")
             sparkline = []
             if date_col_name:
-                table = safe_identifier(cfg["table"])
-                date_col_name = safe_identifier(date_col_name)
-                _dc = psysql.Identifier(date_col_name)
+                _dc = dialect.quote_ident(safe_identifier(date_col_name))
                 try:
-                    cur.execute(psysql.SQL("""
-                        SELECT date_trunc('month', {dc})::date AS m, COUNT(*) AS n
-                        FROM {schema}.{table}
-                        WHERE {dc} >= (CURRENT_DATE - INTERVAL '12 months')
-                        GROUP BY 1 ORDER BY 1
-                    """).format(dc=_dc, schema=psysql.Identifier(_schema_name(cfg["table"])), table=psysql.Identifier(table)))
+                    dialect.execute(cur, f"""
+                        SELECT {dialect.cast(dialect.date_trunc('month', _dc), 'date')} AS m, COUNT(*) AS n
+                        FROM {_ref(cfg["table"])}
+                        WHERE {_dc} >= {dialect.date_sub(dialect.current_date(), 12, 'month')}
+                        GROUP BY {dialect.cast(dialect.date_trunc('month', _dc), 'date')} ORDER BY 1
+                    """)
                     sparkline = [int(r["n"]) for r in cur.fetchall()]
                 except Exception:
                     logger.warning("Failed to fetch sparkline for %s", domain_name, exc_info=True)

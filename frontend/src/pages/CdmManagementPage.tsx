@@ -6,7 +6,7 @@ import { Card, Button, Input, NumberInput, Table, Confirm, Select, Tabs, Tag, Al
 import SchemaCategoriesEditor from '../components/SchemaCategoriesEditor';
 import type { Column } from '../components/ui';
 import type { TabItem } from '../components/ui';
-import type { CdmConfig, GroupSummary } from '../types';
+import type { CdmConfig, CdmEngine, CdmEngineChoice, GroupSummary } from '../types';
 
 interface AccessGrant {
   cdm_name: string;
@@ -33,6 +33,8 @@ export default function CdmManagementPage() {
 
   // Form state
   const [name, setName] = useState('');
+  const [dbType, setDbType] = useState<CdmEngine>('postgresql');
+  const [engines, setEngines] = useState<CdmEngineChoice[]>([]);
   const [dbHost, setDbHost] = useState('');
   const [dbPort, setDbPort] = useState<number | null>(5432);
   const [dbName, setDbName] = useState('');
@@ -100,10 +102,24 @@ export default function CdmManagementPage() {
     loadAccessGrants();
     loadOpalUsers();
     loadGroups();
+    cdmApi.engines().then((res) => setEngines(res.data.engines)).catch(() => {});
   }, []);
+
+  /** Switching engine retargets the port to that engine's default — but only when
+   *  the current port still matches another engine's default (i.e. the user hasn't
+   *  typed a custom port), so we never clobber a deliberate value. */
+  const handleEngineChange = (value: CdmEngine) => {
+    setDbType(value);
+    const next = engines.find((e) => e.value === value);
+    const isDefaultPort = engines.some((e) => e.default_port === dbPort);
+    if (next && (dbPort == null || isDefaultPort)) {
+      setDbPort(next.default_port);
+    }
+  };
 
   const getFormValues = () => ({
     name,
+    db_type: dbType,
     db_host: dbHost,
     db_port: dbPort ?? 5432,
     db_name: dbName,
@@ -115,6 +131,7 @@ export default function CdmManagementPage() {
 
   const resetForm = () => {
     setName('');
+    setDbType('postgresql');
     setDbHost('');
     setDbPort(5432);
     setDbName('');
@@ -230,8 +247,20 @@ export default function CdmManagementPage() {
     }
   };
 
+  const engineLabel = (v?: CdmEngine) =>
+    engines.find((e) => e.value === v)?.label || v || 'PostgreSQL';
+
   const columns: Column<CdmConfig>[] = [
     { title: t('cdm.name'), dataIndex: 'name', key: 'name' },
+    {
+      title: t('cdm.engine'),
+      key: 'db_type',
+      render: (_: unknown, r: CdmConfig) => (
+        <Tag color={(r.db_type || 'postgresql') === 'postgresql' ? 'blue' : 'orange'}>
+          {engineLabel(r.db_type)}
+        </Tag>
+      ),
+    },
     {
       title: t('cdm.host'),
       key: 'host',
@@ -388,6 +417,18 @@ export default function CdmManagementPage() {
           <div>
             <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.name')} <span className="text-red-400">*</span></label>
             <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1.5">{t('cdm.engine')}</label>
+            <Select
+              options={engines.map((e) => ({ value: e.value, label: e.label }))}
+              value={dbType}
+              onChange={(v) => handleEngineChange((v || 'postgresql') as CdmEngine)}
+              placeholder="PostgreSQL"
+            />
+            {dbType !== 'postgresql' && (
+              <p className="mt-1.5 text-xs text-amber-500">{t('cdm.engine_experimental')}</p>
+            )}
           </div>
           <div className="flex items-start gap-4">
             <div className="flex-1">

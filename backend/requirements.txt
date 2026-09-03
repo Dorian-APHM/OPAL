@@ -2,6 +2,12 @@ fastapi==0.135.1
 uvicorn[standard]==0.42.0
 sqlalchemy==2.0.48
 psycopg2-binary==2.9.11
+# Optional CDM engine drivers (reference engine stays PostgreSQL/psycopg2). These
+# are imported lazily by db/dialects/{oracle,sqlserver}.py, so a missing system
+# ODBC driver only fails when a SQL Server CDM is actually used.
+oracledb==3.4.0
+pyodbc==5.2.0
+# Kept at the Dependabot-patched version from main (security fixes).
 cryptography==50.0.0
 pydantic==2.12.5
 httpx==0.28.1

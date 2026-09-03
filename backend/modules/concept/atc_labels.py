@@ -49,17 +49,20 @@ def populate_atc_labels(cdm_name: str, conn, omop_schema) -> int:
     vocab_schema = omop_schema.schema_for("concept") if hasattr(omop_schema, "schema_for") else omop_schema
     vocab_schema = safe_identifier(vocab_schema)
 
-    from psycopg2.extras import RealDictCursor
+    dialect = conn.dialect
+    concept_ref = f"{dialect.quote_ident(vocab_schema)}.{dialect.quote_ident('concept')}"
+    code_frag, code_params = dialect.in_list("concept_code", codes)
 
     rows: list[dict] = []
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
+    with dialect.dict_cursor(conn) as cur:
+        dialect.execute(
+            cur,
             f"""
             SELECT concept_code, concept_name
-            FROM {vocab_schema}.concept
-            WHERE vocabulary_id = 'ATC' AND concept_code = ANY(%s)
+            FROM {concept_ref}
+            WHERE vocabulary_id = 'ATC' AND {code_frag}
             """,
-            (codes,),
+            code_params,
         )
         for r in cur.fetchall():
             code = (r["concept_code"] or "").strip().upper()

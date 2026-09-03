@@ -19,7 +19,9 @@
     "title": "CDM Management",
     "register": "Register a CDM",
     "name": "CDM Name",
-    "host": "PostgreSQL Host",
+    "engine": "Database engine",
+    "engine_experimental": "Oracle and SQL Server support is experimental — validate carefully before production use.",
+    "host": "Host",
     "port": "Port",
     "database": "Database",
     "user": "User",
@@ -740,7 +742,8 @@
   },
   "concepts": {
     "load_failed": "Failed to load domains",
-    "counts_failed": "Failed to load concept counts"
+    "counts_failed": "Failed to load concept counts",
+    "cache_missing": "Source value cache not built for this CDM yet. Build it from Data Management."
   },
   "admin": {
     "role_assigned": "Role assigned",

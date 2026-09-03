@@ -20,6 +20,7 @@ from db.omop_connector import test_omop_connection, invalidate_pool
 from utils.crypto import encrypt_password, decrypt_password
 from utils.notifications import notify
 from config import DEFAULT_OMOP_SCHEMA, OMOP_SCHEMA_CATEGORIES, OMOP_TABLE_CATEGORIES
+from db.dialects import SUPPORTED_DB_TYPES, DEFAULT_DB_TYPE, engine_choices
 from utils.rate_limit import limiter
 
 router = APIRouter(prefix="/api/cdm", tags=["cdm"])
@@ -100,8 +101,15 @@ def _validate_schema_categories(v):
     return cleaned or None
 
 
+def _validate_db_type(v):
+    if v not in SUPPORTED_DB_TYPES:
+        raise ValueError(f"Unsupported db_type '{v}'. Supported: {', '.join(SUPPORTED_DB_TYPES)}")
+    return v
+
+
 class CdmCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    db_type: str = Field(default=DEFAULT_DB_TYPE, max_length=32)
     db_host: str = Field(..., min_length=1, max_length=255)
     db_port: int = Field(default=5432, ge=1, le=65535)
     db_name: str = Field(..., min_length=1, max_length=255)
@@ -114,12 +122,17 @@ class CdmCreateRequest(BaseModel):
     def validate_host(cls, v):
         return _validate_db_host(v)
 
+    @validator("db_type")
+    def validate_db_type(cls, v):
+        return _validate_db_type(v)
+
     @validator("schema_categories")
     def validate_schema_categories(cls, v):
         return _validate_schema_categories(v)
 
 
 class CdmTestRequest(BaseModel):
+    db_type: str = Field(default=DEFAULT_DB_TYPE, max_length=32)
     db_host: str = Field(..., min_length=1, max_length=255)
     db_port: int = Field(default=5432, ge=1, le=65535)
     db_name: str = Field(..., min_length=1, max_length=255)
@@ -130,8 +143,13 @@ class CdmTestRequest(BaseModel):
     def validate_host(cls, v):
         return _validate_db_host(v)
 
+    @validator("db_type")
+    def validate_db_type(cls, v):
+        return _validate_db_type(v)
+
 
 class CdmUpdateRequest(BaseModel):
+    db_type: str | None = Field(default=None, max_length=32)
     db_host: str | None = Field(default=None, max_length=255)
     db_port: int | None = Field(default=None, ge=1, le=65535)
     db_name: str | None = Field(default=None, max_length=255)
@@ -144,6 +162,12 @@ class CdmUpdateRequest(BaseModel):
     def validate_host(cls, v):
         if v is not None:
             return _validate_db_host(v)
+        return v
+
+    @validator("db_type")
+    def validate_db_type(cls, v):
+        if v is not None:
+            return _validate_db_type(v)
         return v
 
     @validator("schema_categories")
@@ -174,6 +198,7 @@ def list_cdms(db: Session = Depends(get_db)):
             {
                 "id": c.id,
                 "name": c.name,
+                "db_type": getattr(c, "db_type", None) or DEFAULT_DB_TYPE,
                 "db_host": c.db_host,
                 "db_port": c.db_port,
                 "db_name": c.db_name,
@@ -198,6 +223,15 @@ def list_schema_categories():
     }
 
 
+@router.get("/engines")
+def list_engines():
+    """Return the supported CDM database engines for the connection config UI.
+
+    Each entry: {value, label, default_port}. PostgreSQL is the reference engine;
+    Oracle and SQL Server are best-effort."""
+    return {"engines": engine_choices(), "default": DEFAULT_DB_TYPE}
+
+
 @router.post("/")
 def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(get_db)):
     """Register a new CDM connection."""
@@ -210,6 +244,7 @@ def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(ge
 
     cdm = CdmConfig(
         name=req.name,
+        db_type=req.db_type,
         db_host=req.db_host,
         db_port=req.db_port,
         db_name=req.db_name,
@@ -251,7 +286,7 @@ def create_cdm(req: CdmCreateRequest, request: Request, db: Session = Depends(ge
 @limiter.limit("5/minute")
 def test_connection(req: CdmTestRequest, request: Request):
     """Test a CDM database connection without saving it."""
-    result = test_omop_connection(req.db_host, req.db_port, req.db_name, req.db_user, req.db_password)
+    result = test_omop_connection(req.db_host, req.db_port, req.db_name, req.db_user, req.db_password, db_type=req.db_type)
     if not result["success"]:
         raise HTTPException(status_code=502, detail=result["message"])
     return result
@@ -266,7 +301,10 @@ def test_saved_connection(cdm_name: str, request: Request, db: Session = Depends
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
 
     password = decrypt_password(cdm.db_password_encrypted)
-    result = test_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+    result = test_omop_connection(
+        cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password,
+        db_type=getattr(cdm, "db_type", None) or DEFAULT_DB_TYPE,
+    )
     return result
 
 
@@ -282,7 +320,10 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, request: Request, db: Sessi
 
     # Snapshot old connection params before update (for pool invalidation)
     old_host, old_port, old_dbname, old_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
+    old_db_type = getattr(cdm, "db_type", None) or DEFAULT_DB_TYPE
 
+    if req.db_type is not None:
+        cdm.db_type = req.db_type
     if req.db_host is not None:
         cdm.db_host = req.db_host
     if req.db_port is not None:
@@ -310,7 +351,7 @@ def update_cdm(cdm_name: str, req: CdmUpdateRequest, request: Request, db: Sessi
     db.commit()
 
     # Invalidate the old pool so next request creates a fresh one
-    invalidate_pool(old_host, old_port, old_dbname, old_user)
+    invalidate_pool(old_host, old_port, old_dbname, old_user, old_db_type)
 
     return {"message": f"CDM '{cdm_name}' updated successfully"}
 
@@ -341,7 +382,8 @@ def delete_cdm(cdm_name: str, request: Request, db: Session = Depends(get_db)):
     )
 
     # Invalidate pool before deleting config
-    invalidate_pool(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user)
+    invalidate_pool(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user,
+                    getattr(cdm, "db_type", None) or DEFAULT_DB_TYPE)
 
     # Cascade delete all dependent records in a single transaction
     try:

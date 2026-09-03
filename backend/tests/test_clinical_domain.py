@@ -3,6 +3,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from datetime import date
 from tests.omop_mock import make_omop_conn, MockCursor, DictRow
+from db.dialects import get_dialect as _gd
+_PG_DIALECT = _gd('postgresql')
 
 
 # ── Helper function tests ──
@@ -13,7 +15,7 @@ class TestGetGlobalStats:
         cursor = MockCursor([
             {"total_rows": 5000, "distinct_persons": 200},
         ])
-        result = _get_global_stats(cursor, "omop_cdm", "condition_occurrence", "person_id")
+        result = _get_global_stats(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "person_id")
         assert result["total_rows"] == 5000
         assert result["distinct_persons"] == 200
 
@@ -22,7 +24,7 @@ class TestGetGlobalStats:
         cursor = MockCursor([
             {"total_rows": 0, "distinct_persons": 0},
         ])
-        result = _get_global_stats(cursor, "omop_cdm", "condition_occurrence", "person_id")
+        result = _get_global_stats(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "person_id")
         assert result["total_rows"] == 0
         assert result["distinct_persons"] == 0
 
@@ -31,7 +33,7 @@ class TestGetGlobalStats:
         cursor = MockCursor([
             {"total_rows": None, "distinct_persons": None},
         ])
-        result = _get_global_stats(cursor, "omop_cdm", "condition_occurrence", "person_id")
+        result = _get_global_stats(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "person_id")
         assert result["total_rows"] == 0
         assert result["distinct_persons"] == 0
 
@@ -46,14 +48,14 @@ class TestGetMonthlyCountsm:
                 {"month_start": date(2025, 3, 1), "n": 200},
             ],
         ])
-        result = _get_monthly_counts(cursor, "omop_cdm", "condition_occurrence", "condition_start_date")
+        result = _get_monthly_counts(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "condition_start_date")
         assert result["month_start"] == ["2025-01-01", "2025-02-01", "2025-03-01"]
         assert result["count"] == [100, 150, 200]
 
     def test_empty(self):
         from modules.quality.domains.clinical import _get_monthly_counts
         cursor = MockCursor([[]])
-        result = _get_monthly_counts(cursor, "omop_cdm", "condition_occurrence", "condition_start_date")
+        result = _get_monthly_counts(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "condition_start_date")
         assert result["month_start"] == []
         assert result["count"] == []
 
@@ -68,7 +70,7 @@ class TestGetRecordsPerPerson:
                 {"records_per_person": 5, "n_persons": 20},
             ],
         ])
-        result = _get_records_per_person(cursor, "omop_cdm", "condition_occurrence", "person_id", max_bin=10)
+        result = _get_records_per_person(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "person_id", max_bin=10)
         assert result["records_per_person"] == [1, 2, 5]
         assert result["n_persons"] == [100, 50, 20]
         assert result["max_bin"] == 10
@@ -84,7 +86,7 @@ class TestGetRecordsPerPerson:
                 {"records_per_person": 50, "n_persons": 10},
             ],
         ])
-        result = _get_records_per_person(cursor, "omop_cdm", "condition_occurrence", "person_id", max_bin=10)
+        result = _get_records_per_person(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "person_id", max_bin=10)
         assert 10 in result["records_per_person"]
         # 15 and 50 should be bucketed into max_bin=10
         idx = result["records_per_person"].index(10)
@@ -93,7 +95,7 @@ class TestGetRecordsPerPerson:
     def test_empty(self):
         from modules.quality.domains.clinical import _get_records_per_person
         cursor = MockCursor([[]])
-        result = _get_records_per_person(cursor, "omop_cdm", "condition_occurrence", "person_id", max_bin=10)
+        result = _get_records_per_person(_PG_DIALECT, cursor, "omop_cdm", "condition_occurrence", "person_id", max_bin=10)
         assert result["records_per_person"] == []
 
 
@@ -109,7 +111,7 @@ class TestGetTopConcepts:
             ],
         ])
         result = _get_top_concepts(
-            cursor, "omop_cdm", "condition_occurrence",
+            _PG_DIALECT, cursor, "omop_cdm", "condition_occurrence",
             "condition_concept_id", "condition_source_value", limit=10
         )
         assert len(result) == 2
@@ -124,7 +126,7 @@ class TestGetTopConcepts:
               "n_records": 10, "n_persons": 5}],
         ])
         result = _get_top_concepts(
-            cursor, "omop_cdm", "condition_occurrence",
+            _PG_DIALECT, cursor, "omop_cdm", "condition_occurrence",
             "condition_concept_id", "condition_source_value", limit=5
         )
         assert result[0]["source_value"] == ""
@@ -141,7 +143,7 @@ class TestGetMappingStats:
             ],
         ])
         result = _get_mapping_stats(
-            cursor, "omop_cdm", "condition_occurrence",
+            _PG_DIALECT, cursor, "omop_cdm", "condition_occurrence",
             "condition_source_value", "condition_concept_id", top_unmapped=10
         )
         assert result["terms"]["total_terms"] == 100
@@ -159,7 +161,7 @@ class TestGetMappingStats:
             [{"source_val": "X01", "source_name": "Unknown Disease X", "n": 20}],
         ])
         result = _get_mapping_stats(
-            cursor, "omop_cdm", "condition_occurrence",
+            _PG_DIALECT, cursor, "omop_cdm", "condition_occurrence",
             "condition_source_value", "condition_concept_id",
             top_unmapped=5, source_name_col="condition_source_concept_name"
         )
@@ -172,7 +174,7 @@ class TestGetMappingStats:
             [],
         ])
         result = _get_mapping_stats(
-            cursor, "omop_cdm", "condition_occurrence",
+            _PG_DIALECT, cursor, "omop_cdm", "condition_occurrence",
             "condition_source_value", "condition_concept_id", top_unmapped=10
         )
         assert result["terms"]["pct_terms_mapped"] is None

@@ -119,24 +119,21 @@ class TestColumnExistsCache:
     disable a column that actually exists)."""
 
     def _make_conn(self, behaviors):
-        """behaviors: list of callables run on each execute() call."""
-        import itertools
+        """behaviors: list of callables run on each dialect.column_exists() call.
+
+        ``_column_exists`` now delegates to the connection's dialect (so the right
+        metadata catalog is used per engine), so we drive the behaviour through
+        the dialect rather than a raw cursor."""
         from unittest.mock import MagicMock
         calls = iter(behaviors)
 
-        class _Cur:
-            def execute(self, *a, **k):
-                next(calls)()  # may raise
-
-            def fetchone(self):
-                return (1,)
-
-            def close(self):
-                pass
+        def column_exists(conn, schema, table, column):
+            next(calls)()  # may raise → caught by _column_exists → False
+            return True
 
         conn = MagicMock()
         conn.dsn = "host=h port=5432 dbname=d user=u"
-        conn.cursor = lambda *a, **k: _Cur()
+        conn.dialect.column_exists = column_exists
         return conn
 
     def test_transient_error_is_not_cached(self):

@@ -152,7 +152,7 @@ def _get_cdm_conn(db: Session, cdm_name: str):
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
     try:
-        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     except Exception as e:
         logger.exception("Cannot connect to CDM '%s'", cdm.name)
         raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
@@ -172,23 +172,16 @@ def search_concepts(req: ConceptSearchRequest, request: Request, db: Session = D
     schema = _get_omop_schema(db, cdm)
 
     try:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        dialect = conn.dialect
+        with dialect.dict_cursor(conn) as cur:
             if req.query.strip().isdigit():
                 wheres = ["c.concept_id = %(cid)s"]
-                params: dict = {
-                    "cid": int(req.query.strip()),
-                    "lim": min(req.limit, 100),
-                }
+                params: dict = {"cid": int(req.query.strip())}
             else:
                 wheres = [
-                    "(unaccent(c.concept_name) ILIKE unaccent(%(q)s) OR unaccent(c.concept_code) ILIKE unaccent(%(code_q)s))"
+                    f"({dialect.ilike('c.concept_name', '%(q)s')} OR {dialect.ilike('c.concept_code', '%(code_q)s')})"
                 ]
-                params: dict = {
-                    "q": f"%{req.query}%",
-                    "code_q": f"%{req.query}%",
-                    "lim": min(req.limit, 100),
-                }
+                params: dict = {"q": f"%{req.query}%", "code_q": f"%{req.query}%"}
 
             if req.domain:
                 wheres.append("c.domain_id = %(domain)s")
@@ -211,11 +204,11 @@ def search_concepts(req: ConceptSearchRequest, request: Request, db: Session = D
                   AND c.invalid_reason IS NULL
                 ORDER BY
                   CASE WHEN c.standard_concept = 'S' THEN 0 ELSE 1 END,
-                  LENGTH(c.concept_name),
+                  {dialect.length('c.concept_name')},
                   c.concept_name
-                LIMIT %(lim)s
+                {dialect.limit_offset(str(min(req.limit, 100)), '0')}
             """
-            cur.execute(sql, params)
+            dialect.execute(cur, sql, params)
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as e:
         logger.exception("Concept search failed")
@@ -233,8 +226,7 @@ def list_vocabularies(cdm_name: str, db: Session = Depends(get_db)):
     schema = _get_omop_schema(db, cdm)
 
     try:
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(f"""
                 SELECT vocabulary_id, vocabulary_name, vocabulary_version
                 FROM {schema.t('vocabulary')}
@@ -597,8 +589,7 @@ def cohort_count(req: CohortCountRequest, request: Request, db: Session = Depend
             logger.info("Criterion %d: domain=%s, operatorWithNext=%s", i, c.get("domain"), c.get("operatorWithNext"))
         sql = build_count_sql(req.criteria, schema)
         logger.info("Cohort count SQL: %s", sql[:500])
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql)
             row = cur.fetchone()
             count = row["patient_count"] if row else 0
@@ -623,8 +614,7 @@ def cohort_count_approximate(req: CohortCountRequest, request: Request, db: Sess
 
     try:
         # Get total persons for scaling
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(f"SELECT COUNT(*) AS n FROM {schema.t('person')}")
             total_persons = cur.fetchone()["n"]
 
@@ -660,7 +650,6 @@ def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = De
 
     try:
         steps = build_attrition_sql(req.criteria, schema)
-        from psycopg2.extras import DictCursor
 
         # Build a single CTE-based query for all steps to reduce round-trips
         if len(steps) > 1:
@@ -671,7 +660,11 @@ def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = De
                 f"(SELECT * FROM step_{i}) AS count_{i}" for i in range(len(steps))
             )
             results = []
-            with conn.cursor(cursor_factory=DictCursor) as cur:
+            # Plain (tuple) cursor: the attrition reader indexes positionally
+            # (row[i] / row[0]). A dict cursor (RealDictCursor on PG) is keyed by
+            # column name only, so positional access raises KeyError — this is the
+            # established Oracle-validated pattern used elsewhere (mapping, conformity).
+            with conn.cursor() as cur:
                 try:
                     cur.execute(cte_query)
                     row = cur.fetchone()
@@ -699,7 +692,7 @@ def cohort_attrition(req: CohortCountRequest, request: Request, db: Session = De
                             results.append({"step": step["step"], "label": step["label"], "count": None, "error": "An internal error occurred"})
         else:
             results = []
-            with conn.cursor(cursor_factory=DictCursor) as cur:
+            with conn.cursor() as cur:  # plain tuple cursor — positional row[0], see above
                 for step in steps:
                     try:
                         cur.execute(step["sql"])
@@ -728,8 +721,7 @@ def cohort_sample(req: CohortSampleRequest, request: Request, db: Session = Depe
 
     try:
         sql = build_sample_sql(req.criteria, schema, limit=req.limit)
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql)
             patients = [dict(r) for r in cur.fetchall()]
             # Convert dates to strings
@@ -755,8 +747,7 @@ def cohort_sample_detailed(req: CohortSampleRequest, request: Request, db: Sessi
 
     try:
         sql, columns_meta = build_detailed_sample_sql(req.criteria, schema, limit=req.limit)
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql)
             patients = [dict(r) for r in cur.fetchall()]
             for p in patients:
@@ -812,8 +803,7 @@ def export_direct(req: CohortCountRequest, request: Request, db: Session = Depen
 
     try:
         sql = build_export_sql(req.criteria, schema)
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql)
             rows = cur.fetchall()
 
@@ -856,24 +846,11 @@ def get_sql_schema(cdm_name: str, db: Session = Depends(get_db)):
     cdm, conn = _get_cdm_conn(db, cdm_name)
     schema = cdm.omop_schema or DEFAULT_OMOP_SCHEMA
     try:
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT table_name, column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = %s
-                ORDER BY table_name, ordinal_position
-                """,
-                [schema],
-            )
-            rows = cur.fetchall()
+        # Use the dialect's metadata catalog (information_schema on PostgreSQL,
+        # ALL_*/USER_* views on Oracle) instead of a PostgreSQL-only query.
         tables: dict[str, list[str]] = {}
-        for r in rows:
-            tbl = r["table_name"]
-            if tbl not in tables:
-                tables[tbl] = []
-            tables[tbl].append(r["column_name"])
+        for tbl in sorted(conn.dialect.list_tables(conn, schema)):
+            tables[tbl] = [c["column_name"] for c in conn.dialect.list_columns(conn, schema, tbl)]
         return {"schema": schema, "tables": tables}
     finally:
         conn.close()
@@ -911,18 +888,20 @@ def execute_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(
 
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
 
-    # Wrap in a read-only transaction for safety
+    # Wrap in a read-only transaction for safety (psycopg2-only API; best-effort)
     try:
-        conn.set_session(readonly=True, autocommit=False)
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Apply LIMIT if not already present
-            if "LIMIT" not in sql_upper:
-                final_sql = f"{sql_stripped}\nLIMIT {req.limit}"
+        try:
+            conn.set_session(readonly=True, autocommit=False)
+        except Exception:
+            pass
+        with conn.dialect.dict_cursor(conn) as cur:
+            # Apply a row cap if the user's SQL doesn't already have one
+            if "LIMIT" not in sql_upper and "FETCH" not in sql_upper:
+                final_sql = f"{sql_stripped}\n{conn.dialect.limit_offset(str(int(req.limit)), '0')}"
             else:
                 final_sql = sql_stripped
             cur.execute(final_sql)
-            columns = [desc[0] for desc in cur.description] if cur.description else []
+            columns = [desc[0].lower() for desc in cur.description] if cur.description else []
             rows = [dict(r) for r in cur.fetchall()]
             # Convert non-serializable types
             for row in rows:
@@ -966,11 +945,15 @@ def export_raw_sql(req: RawSqlRequest, request: Request, db: Session = Depends(g
     cdm, conn = _get_cdm_conn(db, req.cdm_name)
 
     try:
-        conn.set_session(readonly=True, autocommit=False)
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # Read-only transaction for safety (psycopg2-only API; best-effort —
+        # Oracle/ODBC connections have no set_session, so don't let it abort).
+        try:
+            conn.set_session(readonly=True, autocommit=False)
+        except Exception:
+            pass
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql_stripped)
-            columns = [desc[0] for desc in cur.description] if cur.description else []
+            columns = [desc[0].lower() for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
     except Exception as e:
         logger.exception("SQL query execution failed")
@@ -1440,8 +1423,7 @@ def execute_cohort(cohort_id: int, request: Request, db: Session = Depends(get_d
 
     try:
         sql = build_count_sql(latest.criteria_json, schema)
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql)
             row = cur.fetchone()
             count = row["patient_count"] if row else 0
@@ -1498,8 +1480,7 @@ def export_cohort(
 
     try:
         sql = build_cohort_sql(latest.criteria_json, schema, include_visit_id=has_same_visit)
-        from psycopg2.extras import DictCursor
-        with conn.cursor(cursor_factory=DictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             cur.execute(sql)
             rows = cur.fetchall()
 
@@ -1560,10 +1541,10 @@ def patient_journey(
 
     events: list[dict] = []
     try:
-        from psycopg2.extras import RealDictCursor
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with conn.dialect.dict_cursor(conn) as cur:
             # Person demographics
-            cur.execute(
+            conn.dialect.execute(
+                cur,
                 f"""
                 SELECT p.person_id, p.year_of_birth,
                        g.concept_name AS gender,
@@ -1575,7 +1556,7 @@ def patient_journey(
                 LEFT JOIN {schema.t('observation_period')} op
                     ON op.person_id = p.person_id
                 WHERE p.person_id = %s
-                LIMIT 1
+                {conn.dialect.limit_offset('1', '0')}
                 """,
                 (person_id,),
             )
@@ -1626,10 +1607,10 @@ def patient_journey(
                     {join_clause}
                     WHERE t.person_id = %s
                     ORDER BY t.{date_col} NULLS LAST
-                    LIMIT 500
+                    {conn.dialect.limit_offset('500', '0')}
                 """
                 try:
-                    cur.execute(sql, (person_id,))
+                    conn.dialect.execute(cur, sql, (person_id,))
                     rows = cur.fetchall()
                 except Exception:
                     logger.warning("Failed to fetch patient events for domain %s", domain_name, exc_info=True)

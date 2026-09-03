@@ -16,10 +16,11 @@ import pytest
 
 import db.omop_connector as oc
 from db.omop_connector import PooledConnection, PoolEntry, get_omop_connection, _pool_key
+from db.dialects import get_dialect
 
 
 def _entry_with_pool(pool):
-    e = PoolEntry(pool, "pw")
+    e = PoolEntry(pool, "pw", get_dialect("postgresql"))
     return e
 
 

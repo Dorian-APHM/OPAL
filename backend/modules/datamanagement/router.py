@@ -22,7 +22,6 @@ from utils.rate_limit import limiter
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from psycopg2.extras import DictCursor
 
 from db.app_db import get_db, SessionLocal
 from db.models import CdmConfig, Cohort, CohortVersion, AnalysisSettings
@@ -73,7 +72,7 @@ def _get_cdm_conn(db: Session, cdm_name: str):
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
     try:
-        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     except Exception as e:
         logger.exception("Cannot connect to CDM '%s'", cdm.name)
         raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
@@ -86,7 +85,7 @@ def _get_cdm_conn_raw(db: Session, cdm_name: str):
     if not cdm:
         raise ValueError(f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     return cdm, conn
 
 
@@ -356,12 +355,7 @@ def extract_start(req: ExtractRequest, request: Request, db: Session = Depends(g
                         writer = csv.writer(csv_buf)
                         row_count = 0
 
-                        with conn.cursor(
-                            name=f"extract_{tbl_name}",
-                            cursor_factory=DictCursor,
-                        ) as cur:
-                            cur.itersize = 2000
-                            cur.execute(table_sql)
+                        with conn.dialect.stream_cursor(conn, table_sql, 2000) as cur:
                             first_row = cur.fetchone()
                             csv_columns = (
                                 [desc[0] for desc in cur.description]

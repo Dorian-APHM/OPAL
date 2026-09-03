@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from psycopg2 import sql as psysql
 
 from db.app_db import get_db
 from db.models import ConceptSet, CdmConfig, AnalysisSettings
@@ -29,7 +28,7 @@ def _get_cdm_conn(db: Session, cdm_name: str):
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
     schema = build_schema_map(cdm, settings)
     return conn, schema
@@ -186,7 +185,7 @@ def resolve_concept_set(concept_set_id: int, request: Request, cdm_name: str | N
     if not cs:
         return JSONResponse(status_code=404, content={"detail": "Concept set not found"})
 
-    concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
+    concepts, _ = _parse_payload(cs.concepts_json)
     if not concepts:
         return {"concept_ids": [], "total": 0}
 
@@ -204,12 +203,15 @@ def resolve_concept_set(concept_set_id: int, request: Request, cdm_name: str | N
                 expand_ids.append(cid)
 
         if expand_ids:
+            dialect = conn.dialect
             cur = conn.cursor()
-            sql = psysql.SQL(
-                "SELECT DISTINCT descendant_concept_id FROM {}.{} "
-                "WHERE ancestor_concept_id = ANY(%s)"
-            ).format(psysql.Identifier(omop_schema.schema_for('concept_ancestor')), psysql.Identifier('concept_ancestor'))
-            cur.execute(sql, (list(expand_ids),))
+            ca_ref = f"{dialect.quote_ident(omop_schema.schema_for('concept_ancestor'))}.{dialect.quote_ident('concept_ancestor')}"
+            anc_frag, anc_params = dialect.in_list("ancestor_concept_id", list(expand_ids))
+            dialect.execute(
+                cur,
+                f"SELECT DISTINCT descendant_concept_id FROM {ca_ref} WHERE {anc_frag}",
+                anc_params,
+            )
             for row in cur.fetchall():
                 all_ids.add(row[0])
             cur.close()
@@ -228,7 +230,7 @@ def concept_set_counts(concept_set_id: int, body: dict, request: Request, db=Dep
 
     target_cdm = body.get("cdm_name", cs.cdm_name)
     check_cdm_access(request, target_cdm)
-    concepts = json.loads(cs.concepts_json) if cs.concepts_json else []
+    concepts, _ = _parse_payload(cs.concepts_json)
     if not concepts:
         return {"counts": {}}
 
@@ -236,26 +238,21 @@ def concept_set_counts(concept_set_id: int, body: dict, request: Request, db=Dep
     conn, omop_schema = _get_cdm_conn(db, target_cdm)
     try:
         counts = {}
+        dialect = conn.dialect
         cur = conn.cursor()
         for cfg in DOMAIN_CONFIG.values():
             table = safe_identifier(cfg["table"])
-            concept_col = safe_identifier(cfg["concept_id"])
-            pid_col = safe_identifier(cfg["person_id"])
+            table_ref = f"{dialect.quote_ident(omop_schema.schema_for(table))}.{dialect.quote_ident(table)}"
+            concept_col = dialect.quote_ident(safe_identifier(cfg["concept_id"]))
+            pid_col = dialect.quote_ident(safe_identifier(cfg["person_id"]))
             try:
-                sql = psysql.SQL(
-                    "SELECT {concept_col}, COUNT(*) AS n_records, COUNT(DISTINCT {pid_col}) AS n_persons "
-                    "FROM {schema}.{table} "
-                    "WHERE {concept_col2} = ANY(%s) "
-                    "GROUP BY {concept_col3}"
-                ).format(
-                    concept_col=psysql.Identifier(concept_col),
-                    pid_col=psysql.Identifier(pid_col),
-                    schema=psysql.Identifier(omop_schema.schema_for(table)),
-                    table=psysql.Identifier(table),
-                    concept_col2=psysql.Identifier(concept_col),
-                    concept_col3=psysql.Identifier(concept_col),
+                cnt_frag, cnt_params = dialect.in_list(concept_col, concept_ids)
+                dialect.execute(
+                    cur,
+                    f"SELECT {concept_col}, COUNT(*) AS n_records, COUNT(DISTINCT {pid_col}) AS n_persons "
+                    f"FROM {table_ref} WHERE {cnt_frag} GROUP BY {concept_col}",
+                    cnt_params,
                 )
-                cur.execute(sql, (concept_ids,))
                 for row in cur.fetchall():
                     cid = row[0]
                     if cid not in counts:

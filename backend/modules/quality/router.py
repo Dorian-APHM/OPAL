@@ -130,6 +130,7 @@ def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends
 
     # Copy values before the thread starts (db session may close).
     cdm_host, cdm_port, cdm_dbname, cdm_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
+    cdm_db_type = getattr(cdm, "db_type", None) or "postgresql"
     cdm_name = req.cdm_name
     domain = req.domain
     user = getattr(request.state, "user", {})
@@ -146,7 +147,7 @@ def analyze_domain(req: AnalysisRequest, request: Request, db: Session = Depends
 
     def _worker():
         try:
-            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
+            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password, db_type=cdm_db_type)
         except Exception:
             logger.exception("Cannot connect to CDM '%s'", cdm_name)
             with _active_analyses_lock:
@@ -226,7 +227,7 @@ def analyze_batch(req: BatchAnalysisRequest, request: Request, db: Session = Dep
     params = _get_cdm_analysis_params(db, cdm)
     password = decrypt_password(cdm.db_password_encrypted)
     try:
-        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+        conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
     except Exception as e:
         logger.exception("Cannot connect to CDM '%s'", req.cdm_name)
         raise HTTPException(status_code=502, detail="Cannot connect to CDM database")
@@ -304,6 +305,7 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
     cdm_port = cdm.db_port
     cdm_dbname = cdm.db_name
     cdm_user = cdm.db_user
+    cdm_db_type = getattr(cdm, "db_type", None) or "postgresql"
     cdm_name = req.cdm_name
     domains = list(req.domains)
     user = getattr(request.state, "user", {})
@@ -333,7 +335,7 @@ def analyze_batch_stream(req: BatchAnalysisRequest, request: Request, db: Sessio
             _active_analyses[analysis_id] = {"cancelled": False, "conn": None, "cdm_name": cdm_name, "domains": domains, "completed": 0, "total": len(domains), "domain_status": [], "username": trigger_username}
 
         try:
-            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
+            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password, db_type=cdm_db_type)
         except Exception as e:
             logger.exception("Stream analysis: cannot connect to CDM '%s'", cdm_name)
             progress_q.put({"type": "error", "message": "Cannot connect to CDM database"})
@@ -527,6 +529,7 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
 
     # Copy values before the thread starts (db session may close).
     cdm_host, cdm_port, cdm_dbname, cdm_user = cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user
+    cdm_db_type = getattr(cdm, "db_type", None) or "postgresql"
     cdm_name = req.cdm_name
     omop_schema = params["omop_schema"]
     user = getattr(request.state, "user", {})
@@ -544,7 +547,7 @@ def run_conformity(req: AnalysisRequest, request: Request, db: Session = Depends
         from modules.quality.conformity import run_conformity_checks
 
         try:
-            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password)
+            conn = get_omop_connection(cdm_host, cdm_port, cdm_dbname, cdm_user, password, db_type=cdm_db_type)
         except Exception as e:
             logger.error("Conformity: cannot connect to CDM %s: %s", cdm_name, e)
             with _active_analyses_lock:

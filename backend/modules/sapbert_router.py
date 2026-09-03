@@ -196,7 +196,7 @@ def build_sapbert(
         from modules.mapping.sapbert_build import build_domain_sapbert
         from modules.sapbert_client import SapbertCancelled
         try:
-            conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+            conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password, db_type=getattr(cdm, "db_type", None) or "postgresql")
             with _build_lock:
                 if cdm_name in _active_builds:
                     _active_builds[cdm_name]["conn"] = conn

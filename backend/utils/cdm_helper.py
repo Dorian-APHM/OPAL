@@ -78,7 +78,14 @@ def build_schema_map(cdm: CdmConfig, settings: AnalysisSettings | None = None) -
         cats.update(cdm.schema_categories)
     if settings is not None and getattr(settings, "schema_categories", None):
         cats.update(settings.schema_categories)
-    return SchemaMap(default, cats)
+    sm = SchemaMap(default, cats)
+    # Attach the engine dialect derived from the CDM's db_type so query builders
+    # (cohort sql_builder, characterization, …) that receive only the schema map
+    # still emit engine-correct SQL instead of defaulting to PostgreSQL.
+    from db.dialects import get_dialect
+    db_type = getattr(cdm, "db_type", None) if cdm is not None else None
+    sm._dialect = get_dialect(db_type if isinstance(db_type, str) else None)
+    return sm
 
 
 def get_cdm_connection(db: Session, cdm_name: str):
@@ -96,9 +103,19 @@ def get_cdm_connection(db: Session, cdm_name: str):
     if not cdm:
         raise HTTPException(status_code=404, detail=f"CDM '{cdm_name}' not found")
     password = decrypt_password(cdm.db_password_encrypted)
-    conn = get_omop_connection(cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password)
+    conn = get_omop_connection(
+        cdm.db_host, cdm.db_port, cdm.db_name, cdm.db_user, password,
+        db_type=getattr(cdm, "db_type", None) or "postgresql",
+    )
     settings = db.query(AnalysisSettings).filter(AnalysisSettings.cdm_name == cdm_name).first()
     schema = build_schema_map(cdm, settings)
+    # Carry the engine dialect on the schema map so SQL builders that only receive
+    # ``schema`` (e.g. cohort/sql_builder) can produce engine-correct SQL without an
+    # extra parameter threaded through every helper.
+    try:
+        schema._dialect = conn.dialect
+    except Exception:
+        pass
     return conn, schema
 
 
@@ -122,14 +139,11 @@ def _column_exists(conn, schema: str, table: str, column: str) -> bool:
     if cached is not None:
         return cached
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
-            (schema, table, column),
-        )
-        exists = cur.fetchone() is not None
-        cur.close()
+        # Route through the connection's dialect so non-PostgreSQL engines use
+        # their own metadata catalog (e.g. Oracle ALL_TAB_COLUMNS) instead of the
+        # PostgreSQL-only information_schema/LIMIT query. The PostgreSQL dialect
+        # runs the exact same information_schema query as before.
+        exists = conn.dialect.column_exists(conn, schema, table, column)
     except Exception:
         # Do NOT cache failures: a transient error must not permanently disable
         # a column that actually exists. Return False for this call only.
@@ -169,6 +183,31 @@ def get_domain_config(conn, schema: str, domain: str) -> dict:
             del cfg[opt]
 
     return cfg
+
+
+def raise_source_value_cache_missing(cdm_name: str, domain: str | None = None):
+    """Raise HTTP 409 signalling the source-value cache has not been built yet.
+
+    The source-value search / explorer endpoints rely *exclusively* on the
+    pre-computed ``SourceValueCache`` (stored in the app DB, always PostgreSQL).
+    There is deliberately no live-CDM fallback: it keeps these features engine
+    agnostic (no PostgreSQL-specific ``unaccent``/``ILIKE`` ever runs against the
+    external CDM, which may be Oracle or SQL Server). When the cache is missing,
+    the client should prompt the user to build it rather than silently return an
+    empty result.
+    """
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "source_value_cache_missing",
+            "message": (
+                f"Le cache des valeurs source n'est pas encore construit pour le CDM "
+                f"« {cdm_name} ». Lancez la construction du cache avant de rechercher."
+            ),
+            "cdm_name": cdm_name,
+            "domain": domain,
+        },
+    )
 
 
 def check_cdm_access(request: Request, cdm_name: str) -> None:

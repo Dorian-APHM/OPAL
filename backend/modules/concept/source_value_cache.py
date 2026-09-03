@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from config import DOMAIN_CONFIG
 from db.app_db import SessionLocal
+from db.dialects import get_dialect
 from db.models import SourceValueCache, SourceValueCacheStatus
 from utils.cdm_helper import get_domain_config
 from utils.reference_labels import get_reference_label_map
@@ -33,6 +34,11 @@ def populate_domain(
 
     Returns the number of cached rows.
     """
+    # Engine dialect backing this CDM (PostgreSQL by default). Owns the
+    # non-portable bits below: metadata existence checks, statement-timeout
+    # disabling and the batched streaming cursor.
+    dialect = getattr(conn, "dialect", None) or get_dialect("postgresql")
+
     cfg = get_domain_config(conn, omop_schema, domain_name)
     if not cfg or not cfg.get("source_value"):
         return 0
@@ -45,29 +51,17 @@ def populate_domain(
     vocab_schema = omop_schema.schema_for("concept") if hasattr(omop_schema, "schema_for") else omop_schema
     clinical_schema = safe_identifier(clinical_schema)
     vocab_schema = safe_identifier(vocab_schema)
-    with conn.cursor() as chk:
-        chk.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = %s AND table_name = %s LIMIT 1",
-            (clinical_schema, table_name),
-        )
-        if not chk.fetchone():
-            logger.info("Table %s.%s not found — skipping domain %s", clinical_schema, table_name, domain_name)
-            return 0
+    if not dialect.table_exists(conn, clinical_schema, table_name):
+        logger.info("Table %s.%s not found — skipping domain %s", clinical_schema, table_name, domain_name)
+        return 0
 
     table = safe_identifier(table_name)
     source_col_name = cfg["source_value"]
 
     # Verify source_value column exists
-    with conn.cursor() as chk:
-        chk.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
-            (clinical_schema, table_name, source_col_name),
-        )
-        if not chk.fetchone():
-            logger.info("Column %s.%s.%s not found — skipping domain %s", clinical_schema, table_name, source_col_name, domain_name)
-            return 0
+    if not dialect.column_exists(conn, clinical_schema, table_name, source_col_name):
+        logger.info("Column %s.%s.%s not found — skipping domain %s", clinical_schema, table_name, source_col_name, domain_name)
+        return 0
 
     source_col = safe_identifier(source_col_name)
     concept_col = safe_identifier(cfg["concept_id"])
@@ -97,24 +91,18 @@ def populate_domain(
                  t.{concept_col}, c.concept_name, c.vocabulary_id, c.standard_concept
     """
 
-    from psycopg2.extras import RealDictCursor
-    import uuid
-
     # Big domains (Measurement especially) GROUP-BY-scan the whole clinical table
     # before the first row is returned, which routinely exceeds the default
     # statement_timeout (OMOP_STATEMENT_TIMEOUT_MS, 30 min) and kills the build right
-    # on Measurement. Disable the timeout for THIS query's transaction. Done per-domain
-    # (not once on the connection in the worker) so it cannot be lost to a transaction
-    # boundary between domains and is robust regardless of the connection's state.
-    with conn.cursor() as _t:
-        _t.execute("SET statement_timeout = 0")
+    # on Measurement. Disable the timeout for THIS query. Done per-domain (not once on
+    # the connection in the worker) so it cannot be lost to a transaction boundary
+    # between domains and is robust regardless of the connection's state.
+    dialect.disable_statement_timeout(conn)
 
-    # Server-side (named) cursor: streams rows from PostgreSQL in batches instead
-    # of materialising the entire GROUP-BY result of a whole clinical table in
-    # client memory before the first fetchmany().
-    cur = conn.cursor(name=f"svcache_{uuid.uuid4().hex}", cursor_factory=RealDictCursor)
-    cur.itersize = _BATCH_SIZE
-    cur.execute(sql)
+    # Streaming cursor: batches rows from the engine instead of materialising the
+    # entire GROUP-BY result of a whole clinical table in client memory before the
+    # first fetchmany(). On PostgreSQL this is a server-side named cursor.
+    cur = dialect.stream_cursor(conn, sql, _BATCH_SIZE)
 
     app_db = SessionLocal()
     row_count = 0

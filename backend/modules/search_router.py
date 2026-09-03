@@ -7,8 +7,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from psycopg2 import sql as psysql
-
 from db.app_db import get_db
 from db.models import Cohort, MappingDecision, SavedQuery
 from utils.sql_safety import safe_identifier
@@ -72,30 +70,32 @@ def global_search(
             conn, schema = get_cdm_connection(db, cdm_name)
             if conn:
                 try:
-                    from psycopg2.extras import DictCursor
-                    with conn.cursor(cursor_factory=DictCursor) as cur:
+                    dialect = conn.dialect
+                    concept_ref = f"{dialect.quote_ident(safe_identifier(schema.schema_for('concept')))}.concept"
+                    lim = dialect.limit_offset(str(int(limit)), '0')
+                    with dialect.dict_cursor(conn) as cur:
                         if search_term.isdigit():
-                            sql = psysql.SQL("""
+                            sql = f"""
                                 SELECT concept_id, concept_name, concept_code,
                                        vocabulary_id, domain_id, standard_concept
-                                FROM {}.{}
+                                FROM {concept_ref}
                                 WHERE concept_id = %s
-                                LIMIT %s
-                            """).format(psysql.Identifier(schema.schema_for('concept')), psysql.Identifier('concept'))
-                            cur.execute(sql, (int(search_term), limit))
+                                {lim}
+                            """
+                            dialect.execute(cur, sql, (int(search_term),))
                         else:
-                            sql = psysql.SQL("""
+                            sql = f"""
                                 SELECT concept_id, concept_name, concept_code,
                                        vocabulary_id, domain_id, standard_concept
-                                FROM {}.{}
-                                WHERE unaccent(concept_name) ILIKE unaccent(%s)
-                                   OR unaccent(concept_code) ILIKE unaccent(%s)
+                                FROM {concept_ref}
+                                WHERE {dialect.ilike('concept_name', '%s')}
+                                   OR {dialect.ilike('concept_code', '%s')}
                                 ORDER BY
                                     CASE WHEN standard_concept = 'S' THEN 0 ELSE 1 END,
-                                    LENGTH(concept_name)
-                                LIMIT %s
-                            """).format(psysql.Identifier(schema.schema_for('concept')), psysql.Identifier('concept'))
-                            cur.execute(sql, (f"%{escaped_term}%", f"%{escaped_term}%", limit))
+                                    {dialect.length('concept_name')}
+                                {lim}
+                            """
+                            dialect.execute(cur, sql, (f"%{escaped_term}%", f"%{escaped_term}%"))
                         results["concepts"] = [
                             {
                                 "concept_id": r["concept_id"],
@@ -115,44 +115,34 @@ def global_search(
                             sv_params = []
                             for domain_name in DOMAIN_CONFIG:
                                 cfg = get_domain_config(conn, schema, domain_name)
-                                if not cfg:
+                                if not cfg or not cfg.get("source_value"):
                                     continue
                                 table = safe_identifier(cfg["table"])
-                                source_col = safe_identifier(cfg["source_value"])
-                                source_name_col = safe_identifier(cfg["source_name"]) if cfg.get("source_name") else None
-                                where_clause = psysql.SQL("unaccent(t.{}) ILIKE unaccent(%s)").format(psysql.Identifier(source_col))
+                                table_ref = f"{dialect.quote_ident(safe_identifier(schema.schema_for(table)))}.{dialect.quote_ident(table)}"
+                                source_col = dialect.quote_ident(safe_identifier(cfg["source_value"]))
+                                source_name_col = dialect.quote_ident(safe_identifier(cfg["source_name"])) if cfg.get("source_name") else None
+                                where_clause = dialect.ilike(f"t.{source_col}", "%s")
                                 query_params = [domain_name, f"%{escaped_term}%"]
                                 if source_name_col:
-                                    where_clause = psysql.SQL("unaccent(t.{}) ILIKE unaccent(%s) OR unaccent(t.{}) ILIKE unaccent(%s)").format(
-                                        psysql.Identifier(source_col), psysql.Identifier(source_name_col)
-                                    )
+                                    where_clause = f"{dialect.ilike(f't.{source_col}', '%s')} OR {dialect.ilike(f't.{source_name_col}', '%s')}"
                                     query_params.append(f"%{escaped_term}%")
-                                source_name_select = psysql.SQL("t.{}").format(psysql.Identifier(source_name_col)) if source_name_col else psysql.SQL("NULL")
-                                source_name_group = psysql.SQL(", t.{}").format(psysql.Identifier(source_name_col)) if source_name_col else psysql.SQL("")
-                                union_parts.append(psysql.SQL("""
+                                source_name_select = f"t.{source_name_col}" if source_name_col else "NULL"
+                                source_name_group = f", t.{source_name_col}" if source_name_col else ""
+                                union_parts.append(f"""
                                     SELECT %s AS domain,
                                            t.{source_col} AS source_value,
                                            {source_name_select} AS source_name,
                                            COUNT(*) AS n_records
-                                    FROM {schema}.{table} t
+                                    FROM {table_ref} t
                                     WHERE {where_clause}
-                                    GROUP BY t.{source_col_group}{source_name_group}
-                                """).format(
-                                    source_col=psysql.Identifier(source_col),
-                                    source_name_select=source_name_select,
-                                    schema=psysql.Identifier(schema.schema_for(table)),
-                                    table=psysql.Identifier(table),
-                                    where_clause=where_clause,
-                                    source_col_group=psysql.Identifier(source_col),
-                                    source_name_group=source_name_group,
-                                ))
+                                    GROUP BY t.{source_col}{source_name_group}
+                                """)
                                 sv_params.extend(query_params)
 
                             if union_parts:
-                                sv_composed = psysql.SQL(" UNION ALL ").join(union_parts)
-                                sv_sql = psysql.SQL("SELECT * FROM ({}) sub ORDER BY n_records DESC LIMIT %s").format(sv_composed)
-                                sv_params.append(limit)
-                                cur.execute(sv_sql, sv_params)
+                                sv_composed = " UNION ALL ".join(union_parts)
+                                sv_sql = f"SELECT * FROM ({sv_composed}) sub ORDER BY n_records DESC {dialect.limit_offset(str(int(limit)), '0')}"
+                                dialect.execute(cur, sv_sql, sv_params)
                                 sv_results = [
                                     {
                                         "source_value": r["source_value"],

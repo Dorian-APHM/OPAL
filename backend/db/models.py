@@ -19,6 +19,10 @@ class CdmConfig(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), unique=True, nullable=False, index=True)
+    # Database engine driving this CDM connection: one of db.dialects.DIALECTS
+    # ("postgresql", "oracle", "sqlserver"). Defaults to postgresql for backward
+    # compatibility — all historical CDMs are PostgreSQL.
+    db_type = Column(String(32), nullable=False, default="postgresql", server_default="postgresql")
     db_host = Column(String(255), nullable=False)
     db_port = Column(Integer, nullable=False, default=5432)
     db_name = Column(String(255), nullable=False)
