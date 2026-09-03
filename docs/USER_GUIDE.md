@@ -22,6 +22,12 @@ Bienvenue dans OPAL (OMOP Platform for Analytics & Lineage). Ce guide vous accom
 
 ## 1. Premiers pas
 
+> **Sans installation serveur ?** Chaque brique d'OPAL existe aussi en
+> application Streamlit autonome, sans Docker ni comptes utilisateurs : voir
+> [STANDALONE.md](STANDALONE.md). Les analyses y sont les memes ; seule
+> l'enveloppe change. Ce guide decrit l'application complete.
+
+
 ### Connexion
 
 #### Avec authentification (Keycloak active)

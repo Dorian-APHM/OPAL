@@ -31,6 +31,29 @@ BRICKS = {
 }
 
 
+def _self_check(config_path: str | None) -> int:
+    """Run the install self-check and print its report (0 = tout est prêt)."""
+    import os
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    if config_path:
+        os.environ["OPAL_STANDALONE_CONFIG"] = str(Path(config_path).expanduser())
+
+    from opal_standalone.config import ConfigError, load_config
+    from opal_standalone.diagnostics import format_report, run_diagnostics
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(f"Configuration invalide :\n{exc}", file=_sys.stderr)
+        return 1
+
+    checks = run_diagnostics(config)
+    print(format_report(config, checks))
+    return 0 if all(check.ok for check in checks) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("brick", nargs="?", default="opal", choices=sorted(BRICKS),
@@ -39,7 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=None,
                         help="chemin du fichier de configuration TOML")
     parser.add_argument("--list", action="store_true", help="lister les briques et quitter")
+    parser.add_argument("--check", action="store_true",
+                        help="vérifier la configuration, le pilote et l'accès au CDM, puis quitter")
     args = parser.parse_args(argv)
+
+    if args.check:
+        return _self_check(args.config)
 
     if args.list:
         width = max(len(name) for name in BRICKS)

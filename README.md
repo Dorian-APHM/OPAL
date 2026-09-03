@@ -1066,6 +1066,7 @@ l'application complete.
 ```bash
 pip install -r standalone/requirements.txt
 cp standalone/config.example.toml standalone/config.toml   # renseignez la connexion OMOP
+python standalone/run.py --check                           # verifie config, pilote et acces au CDM
 streamlit run standalone/apps/quality.py                   # la brique Qualite, seule
 python standalone/run.py --list                            # lister toutes les briques
 python standalone/run.py                                   # les neuf briques dans une seule app
@@ -1083,7 +1084,10 @@ fichier SQLite local.
 Hors perimetre standalone : comptes et roles, partage, notifications,
 audit, outils OHDSI en R, assistant LLM et suggestions SapBERT.
 
-Details, configuration et tests : [`standalone/README.md`](standalone/README.md).
+Documentation complete : [docs/STANDALONE.md](docs/STANDALONE.md) (installation,
+reference de configuration, guide de chaque brique, securite, depannage, FAQ),
+demarrage rapide : [`standalone/README.md`](standalone/README.md), et
+[ADR 0002](docs/adr/0002-standalone-streamlit.md) pour le choix d'architecture.
 
 ---
 
@@ -1097,7 +1101,10 @@ Details, configuration et tests : [`standalone/README.md`](standalone/README.md)
 | [docs/METHODOLOGIE.md](docs/METHODOLOGIE.md) | Methodologie des analyses (qualite, cohortes, mapping) |
 | [docs/WEBSOCKET_NOTIFICATIONS.md](docs/WEBSOCKET_NOTIFICATIONS.md) | Architecture WebSocket notifications |
 | [docs/COHORT_LLM.md](docs/COHORT_LLM.md) | Assistant IA cohort-llm — modes (off/embedded/on-premise), install et usage |
+| [docs/STANDALONE.md](docs/STANDALONE.md) | Mode standalone — installation, configuration, guide des 9 briques, dépannage |
+| [docs/CDM_CONNECTORS.md](docs/CDM_CONNECTORS.md) | Connecteurs CDM multi-moteurs (PostgreSQL / Oracle / SQL Server) |
 | [docs/adr/0001-ohdsi-runner-dedie.md](docs/adr/0001-ohdsi-runner-dedie.md) | ADR — runner OHDSI dédié (suppression du socket Docker) |
+| [docs/adr/0002-standalone-streamlit.md](docs/adr/0002-standalone-streamlit.md) | ADR — briques autonomes Streamlit réutilisant les moteurs du backend |
 | [CHANGELOG.md](CHANGELOG.md) | Historique detaille des changements par version |
 
 ---

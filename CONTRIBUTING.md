@@ -136,6 +136,9 @@ npx vitest run src/pages/page-robustness.test.tsx   # un seul fichier
 # Runner OHDSI — 8 tests
 cd ohdsi-tools/runner
 pytest tests/ -v
+
+# Briques standalone — 106 tests (aucune base, ni Streamlit lancé)
+python -m pytest standalone/tests -q
 ```
 
 Le build TypeScript fait aussi office de vérification de types :
@@ -171,6 +174,10 @@ frontend/         React 18 + TypeScript + Vite
   src/components/ui/  design system neumorphique
   src/api/client.ts   client Axios, découpé par module
   src/i18n/         traductions frontend (en.json / fr.json)
+standalone/       briques autonomes Streamlit (voir docs/STANDALONE.md)
+  apps/             un point d'entrée par brique (+ opal.py, toutes les briques)
+  opal_standalone/  pont vers les moteurs backend, config TOML, SQLite, vues
+  tests/            pytest — sans base de données
 ohdsi-tools/      service runner des outils R OHDSI (paquets vendorés)
 sapbert-tools/    service d'embeddings SapBERT
 cohort-llm/       assistant IA de cohortes (RAG + LLM)
@@ -236,7 +243,20 @@ restent hors dépôt — vérifiez `.gitignore` avant de committer.
 
 Passez par `utils/csv_safety.py` pour tout nouvel export.
 
-### 7. Les paquets R OHDSI sont vendorés
+### 7. Les moteurs d'analyse restent importables sans le serveur
+
+Les briques standalone importent les moteurs de `backend/modules/**` au lieu de
+les dupliquer (voir [ADR 0002](docs/adr/0002-standalone-streamlit.md)). Un
+moteur ne doit donc **jamais importer FastAPI ou SQLAlchemy au niveau module** :
+gardez ces imports dans les routeurs, ou faites-les à l'intérieur des fonctions.
+`standalone/tests/test_bootstrap.py` échoue si un import serveur réapparaît dans
+un moteur.
+
+Corollaire : si vous modifiez la logique SQL d'un routeur reproduite par
+`standalone/opal_standalone/glue.py` (cohorte datée, Kaplan-Meier, requêtes
+vocabulaire, termes non mappés), mettez la glue à jour dans la même PR.
+
+### 8. Les paquets R OHDSI sont vendorés
 
 Les archives sous `ohdsi-tools/vendor/` sont des sources GitHub figées, pour que
 l'image se construise derrière un proxy d'entreprise. Si vous mettez à jour un

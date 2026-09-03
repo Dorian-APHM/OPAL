@@ -2,6 +2,78 @@
 
 ---
 
+## Non publie
+
+> **Base** : `v3.4.0`
+
+### Fonctionnalites
+
+- **Mode standalone — chaque brique en application Streamlit autonome**
+  ([`standalone/`](standalone), [docs/STANDALONE.md](docs/STANDALONE.md)) :
+  Python pur, sans Docker, sans base applicative, sans Keycloak et sans gestion
+  d'utilisateurs. Neuf briques lancables separement — Qualite, Cohortes,
+  Concepts, Concept sets, Mapping, Incidence, Estimation, Data management,
+  Lineage ETL — plus une application qui les regroupe. Un seul fichier de
+  configuration (`standalone/config.toml`) decrit la connexion OMOP, ouverte en
+  lecture seule. Installation : `pip install -r standalone/requirements.txt`
+  puis `streamlit run standalone/apps/quality.py`.
+- **Les analyses ne sont pas dupliquees** : les briques importent les moteurs de
+  `backend/modules/**` (memes requetes, memes calculs, memes structures de
+  resultats) ; seuls les trois modules lies au deploiement serveur
+  (`utils.cdm_helper`, `utils.reference_labels`, `db.app_db`) sont remplaces au
+  moment de l'import. Choix d'architecture detaille dans
+  [ADR 0002](docs/adr/0002-standalone-streamlit.md).
+- **Persistance locale SQLite** : snapshots qualite versionnes, cohortes,
+  concept sets, decisions de mapping, analyses d'incidence et d'estimation,
+  graphes de lignage — sans colonne de proprietaire.
+- **Diagnostic d'installation** : `python standalone/run.py --check` verifie la
+  configuration, la presence du pilote, l'acces au CDM et le fichier de donnees,
+  et sort en code 1 si une base est inaccessible.
+- **Connecteurs CDM multi-moteurs** (PostgreSQL / Oracle / SQL Server) : couche
+  de dialectes `backend/db/dialects/`, colonne `db_type` sur les CDM et portage
+  de 100 % du SQL analytique. Voir
+  [docs/CDM_CONNECTORS.md](docs/CDM_CONNECTORS.md). Le standalone en herite :
+  le moteur se choisit avec `db_type` dans son fichier de configuration, y
+  compris par base lorsque plusieurs `[[cdm]]` sont declares.
+
+### Securite
+
+- Session CDM forcee en **lecture seule** dans le standalone la ou le moteur le
+  permet (`default_transaction_read_only` sur PostgreSQL, applique en autocommit
+  pour survivre a un rollback ; `SET TRANSACTION READ ONLY` sur Oracle), bornee
+  par `statement_timeout`. Seules la caracterisation et l'analyse de parcours
+  ouvrent une session sans le verrou : elles creent des tables de travail de
+  session, comme dans l'application complete, et n'ecrivent jamais dans les
+  tables du CDM.
+- Console SQL du standalone restreinte a `SELECT` / `WITH` / `EXPLAIN`, avec
+  refus des mots-cles d'ecriture et plafond de lignes.
+- Les decisions de mapping du standalone restent locales : export CSV au format
+  `source_to_concept_map`, aucune ecriture dans le CDM.
+- `standalone/config.toml` ignore par git ; mot de passe fournissable par
+  `OPAL_OMOP_PASSWORD` plutot qu'en clair dans le fichier.
+
+### Corrections
+
+- **Listes d'identifiants sous Oracle** : un concept set resolu avec ses
+  descendants depasse facilement la limite de 1000 elements d'un `IN` Oracle
+  (ORA-01795). Les listes sont desormais decoupees en tranches OR-ees, ce qui
+  conserve une seule requete par domaine — donc un `COUNT(DISTINCT person_id)`
+  exact — et laisse PostgreSQL sur son unique tableau lie.
+- **Domaine sans valeur source** (`Note`) : la page qualite du standalone
+  l'annonce au lieu de supposer un bloc de statistiques de mapping.
+- **Concept sets** : les deux formats de payload (liste historique et dict) sont
+  acceptes a l'import et a l'usage, comme le serveur.
+
+### Tests
+
+- 106 tests standalone, sans base de donnees : pont vers les moteurs (echec si un
+  import FastAPI/SQLAlchemy reapparait dans un moteur), configuration, stockage,
+  SQL genere pour les trois moteurs, exports, rendu de chaque application sur
+  PostgreSQL / Oracle / SQL Server, aller-retour analyse -> snapshot -> affichage
+  sur connexion simulee, et diagnostic d'installation.
+
+---
+
 ## v3.4.0 (2026-05-29)
 
 > **Tag** : `v3.4.0`

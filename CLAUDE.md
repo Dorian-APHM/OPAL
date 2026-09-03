@@ -123,6 +123,8 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 
 ### Standalone bricks (`standalone/`)
 
+Reference doc: `docs/STANDALONE.md`; architecture decision: `docs/adr/0002-standalone-streamlit.md`.
+
 Every functional brick is also shipped as a **self-contained Streamlit app** —
 pure Python, no Docker, no application database, no Keycloak, no users. One TOML
 file (`standalone/config.toml`, modelled on `config.example.toml`) holds the
@@ -131,7 +133,8 @@ read-only OMOP connection — PostgreSQL, Oracle or SQL Server via `db_type`.
 - **Entry points**: `standalone/apps/<brick>.py` (`quality`, `cohort`, `concepts`,
   `concept_sets`, `mapping`, `incidence`, `estimation`, `datamanagement`,
   `lineage`) plus `apps/opal.py` bundling all nine. `standalone/run.py` is a thin
-  `streamlit run` launcher.
+  `streamlit run` launcher; `run.py --check` runs an install self-check (config,
+  driver, CDM reachability, local store) via `opal_standalone/diagnostics.py`.
 - **Code reuse, not a fork**: the apps import the *same* analysis engines from
   `backend/modules/**`. Those engines only need psycopg2; the three
   server-bound modules are replaced at import time by
@@ -160,7 +163,7 @@ read-only OMOP connection — PostgreSQL, Oracle or SQL Server via `db_type`.
 - **Out of scope by design**: auth/roles, sharing, groups, notifications,
   favorites, audit, OHDSI R tools, cohort-LLM, and SapBERT suggestions (mapping
   keeps its three deterministic strategies).
-- **Tests**: `python -m pytest standalone/tests -q` (101 tests, no database —
+- **Tests**: `python -m pytest standalone/tests -q` (106 tests, no database —
   includes Streamlit `AppTest` runs of every brick and per-dialect SQL checks).
 
 ### Key Design Decisions
