@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from opal_standalone.config import AppConfig, CdmConnection, ConfigError, load_config
-from opal_standalone.omop import connection, test_connection
+from opal_standalone.omop import connection, driver_status, test_connection
 from opal_standalone.store import Store
 
 BRICKS = [
@@ -72,6 +72,12 @@ def sidebar(active: str) -> tuple[AppConfig, CdmConnection, Store]:
             f"`{cdm.user}@{cdm.host}:{cdm.port}/{cdm.database}` — "
             f"schéma `{cdm.schema}` — moteur `{cdm.db_type}`"
         )
+
+        driver_ok, driver_hint = driver_status(cdm)
+        if not driver_ok:
+            st.warning(
+                f"Le pilote du moteur `{cdm.db_type}` est absent — {driver_hint}"
+            )
 
         if st.button("Tester la connexion", use_container_width=True):
             try:

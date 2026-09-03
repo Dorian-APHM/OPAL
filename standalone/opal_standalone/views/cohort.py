@@ -128,7 +128,11 @@ def _criterion_form(store, cdm, group_key: str) -> None:
             concepts = [{"concept_id": cid} for cid in _parse_ids(concepts_raw)]
             codes = _parse_codes(codes_raw)
             if chosen_set != "— aucun —":
-                payload = next(cs["payload"] for cs in concept_sets if cs["name"] == chosen_set)
+                from opal_standalone.views.concept_sets import normalise_payload
+
+                payload = normalise_payload(
+                    next(cs["payload"] for cs in concept_sets if cs["name"] == chosen_set)
+                )
                 concepts += [
                     {"concept_id": int(c["concept_id"])} for c in payload.get("concepts", [])
                 ]

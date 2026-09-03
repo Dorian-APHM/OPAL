@@ -45,6 +45,35 @@ def _col(dialect, name: str) -> str:
     return dialect.quote_ident(safe_identifier(name))
 
 
+# Oracle rejects an IN list longer than 1000 items (ORA-01795); PostgreSQL binds
+# the whole list as one array. Splitting below that ceiling keeps a single query
+# — and therefore a correct COUNT(DISTINCT …) — on every engine.
+_IN_LIST_CHUNK = 900
+
+
+def in_list_chunked(dialect, col_sql: str, values) -> tuple[str, list]:
+    """``(sql_fragment, params)`` for ``col IN (values)``, engine-safe at any size.
+
+    Small lists use the dialect's native form (an array bind on PostgreSQL).
+    Longer ones are split into OR-ed chunks so Oracle's 1000-item limit never
+    truncates a concept set.
+    """
+    values = list(values)
+    fragment, params = dialect.in_list(col_sql, values)
+    if len(values) <= _IN_LIST_CHUNK or fragment.count("%s") <= 1:
+        # Either short enough, or the engine binds the whole list as one value
+        # (PostgreSQL's ``= ANY(array)``), which has no such ceiling.
+        return fragment, params
+
+    fragments: list[str] = []
+    params: list = []
+    for start in range(0, len(values), _IN_LIST_CHUNK):
+        fragment, chunk_params = dialect.in_list(col_sql, values[start:start + _IN_LIST_CHUNK])
+        fragments.append(fragment)
+        params.extend(chunk_params)
+    return "(" + " OR ".join(fragments) + ")", params
+
+
 # ── cohort → dated cohort (incidence / estimation) ───────────────────────
 
 def dated_cohort_sql(criteria: dict, schema: SchemaMap) -> str:
@@ -454,7 +483,7 @@ def resolve_concepts(conn, schema: SchemaMap, concepts: list[dict]) -> list[int]
         if not isinstance(concept, dict) or concept.get("include_descendants", True):
             expand.append(cid)
     if expand:
-        fragment, params = conn.dialect.in_list("ancestor_concept_id", expand)
+        fragment, params = in_list_chunked(conn.dialect, "ancestor_concept_id", expand)
         rows = fetch_all(
             conn,
             f"SELECT DISTINCT descendant_concept_id FROM "
@@ -473,7 +502,9 @@ def concept_counts(conn, schema: SchemaMap, concept_ids: list[int]) -> list[dict
     ids = [int(c) for c in concept_ids]
     counts: list[dict] = []
     for domain_name, cfg in DOMAIN_CONFIG.items():
-        fragment, params = dialect.in_list(_col(dialect, cfg["concept_id"]), ids)
+        # A resolved concept set (descendants included) routinely runs into the
+        # thousands — chunk it rather than blow past Oracle's IN-list ceiling.
+        fragment, params = in_list_chunked(dialect, _col(dialect, cfg["concept_id"]), ids)
         try:
             rows = fetch_all(
                 conn,

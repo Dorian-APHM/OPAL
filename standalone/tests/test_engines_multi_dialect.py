@@ -155,6 +155,8 @@ class SessionRecordingDialect:
         recorder = self
 
         class _Conn:
+            autocommit = False  # psycopg2 connections expose it; the SET toggles it
+
             def cursor(self, *a, **k):
                 class _Cur:
                     def execute(self, sql, params=None):
@@ -210,3 +212,142 @@ def test_cohort_view_opens_scratch_capable_connections():
     for function in ("_tab_characterization", "_tab_pathways"):
         body = source.split(f"def {function}(")[1].split("\ndef ")[0]
         assert "allow_temp_tables=True" in body, f"{function} needs a writable session"
+
+
+# ── the reused engines must receive engine-correct context, end to end ────
+
+def test_cohort_builder_emits_engine_specific_sql_through_the_standalone_path():
+    """The builders only get a SchemaMap — it must carry the engine."""
+    criteria = {
+        "inclusion": {"criteria": [{
+            "domain": "Condition", "concepts": [{"concept_id": 201826}],
+            "include_descendants": True,
+        }]},
+        "demographics": {"age": {"min": 18, "max": 65}},
+    }
+    from modules.cohort.sql_builder import build_cohort_sql
+
+    pg = build_cohort_sql(criteria, schema_map(_cdm("postgresql")))
+    oracle = build_cohort_sql(criteria, schema_map(_cdm("oracle")))
+
+    assert "unnest(ARRAY[" in pg and "CURRENT_DATE" in pg
+    assert "unnest(ARRAY[" not in oracle
+    assert "odcinumberlist" in oracle, "Oracle expands id lists via a number collection"
+    assert "SYSDATE" in oracle
+
+
+def test_quality_engine_runs_oracle_flavoured_sql():
+    """A reused analysis engine, driven by a standalone Oracle connection."""
+    from modules.quality.engine import run_domain_analysis
+
+    conn = RecordingConnection("oracle", rows=[
+        {"n": 3, "gender_concept_id": 8532, "concept_name": "FEMALE",
+         "year_of_birth": 1980, "race_concept_id": 0, "ethnicity_concept_id": 0},
+    ])
+    result = run_domain_analysis(conn, "Person", omop_schema=schema_map(_cdm("oracle")))
+
+    assert result["domain"] == "Person"
+    assert conn.calls, "the engine must have queried the CDM"
+    for sql, _params in conn.calls:
+        assert "%s" not in sql, "placeholders must be translated for Oracle"
+
+
+def test_concept_set_resolution_survives_oracle_in_list_limit():
+    """A resolved set of >1000 concepts must not hit ORA-01795."""
+    many = list(range(1, 2501))
+
+    pg_conn = RecordingConnection("postgresql", rows=[{"n_records": 1, "n_persons": 1}])
+    glue.concept_counts(pg_conn, schema_map(_cdm("postgresql")), many)
+    pg_sql, pg_params = pg_conn.calls[0]
+    assert "= ANY(%s)" in pg_sql, "PostgreSQL keeps its single array bind"
+    assert len(pg_params) == 1
+
+    oracle_conn = RecordingConnection("oracle", rows=[{"n_records": 1, "n_persons": 1}])
+    glue.concept_counts(oracle_conn, schema_map(_cdm("oracle")), many)
+    oracle_sql, oracle_params = oracle_conn.calls[0]
+    assert " OR " in oracle_sql, "the id list must be split into OR-ed chunks"
+    assert len(oracle_params) == len(many)
+    chunks = oracle_sql.count(" IN (")
+    assert chunks == 3, "2500 ids -> 3 chunks under the 1000-item ceiling"
+    # One query per domain: COUNT(DISTINCT person_id) stays exact.
+    assert oracle_sql.count("COUNT(DISTINCT") == 1
+
+
+def test_driver_hint_names_the_missing_package(monkeypatch):
+    from opal_standalone import omop
+
+    monkeypatch.setitem(omop._DRIVERS, "oracle", ("not_a_real_module", "pip install oracledb"))
+    available, hint = omop.driver_status(_cdm("oracle"))
+    assert not available
+    assert "oracledb" in hint
+    assert omop.driver_status(_cdm("postgresql")) == (True, "")
+
+
+def test_no_postgres_only_constructs_left_in_the_package():
+    """Mirror of the backend's own guard: no psycopg2 composition, no PG-only SQL.
+
+    The local SQLite store is exempt — it is always SQLite, never the CDM.
+    """
+    import pathlib
+
+    package = pathlib.Path(__file__).resolve().parents[1] / "opal_standalone"
+    forbidden = ("psycopg2.sql", "RealDictCursor", "cursor_factory", "ILIKE",
+                 "information_schema", "unaccent(", "::date", "::text")
+    offenders = []
+    for path in package.rglob("*.py"):
+        if path.name == "store.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        # Ignore prose: only look at code lines.
+        code = "\n".join(
+            line for line in text.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for token in forbidden:
+            if token in code:
+                offenders.append(f"{path.name}: {token}")
+    assert not offenders, f"PostgreSQL-only constructs left: {offenders}"
+
+
+def test_domain_without_source_values_renders(monkeypatch):
+    """The Note domain has no mapping block — the page must not blow up."""
+    import streamlit as st
+
+    from opal_standalone.views import quality
+
+    captions: list[str] = []
+    monkeypatch.setattr(st, "caption", lambda text, *a, **k: captions.append(str(text)))
+    monkeypatch.setattr(st, "markdown", lambda *a, **k: None)
+    monkeypatch.setattr(st, "metric", lambda *a, **k: None)
+    monkeypatch.setattr(st, "columns", lambda n, *a, **k: [_Col() for _ in range(
+        n if isinstance(n, int) else len(n))])
+
+    quality.render_results("Note", {
+        "domain": "Note", "achilles_like": {"global": {"total_rows": 5}}, "mapping": {},
+    })
+    assert any("valeur source" in caption for caption in captions)
+
+
+class _Col:
+    def metric(self, *a, **k):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize("payload,expected_concepts,expected_codes", [
+    ({"concepts": [{"concept_id": 1}], "source_codes": ["A"]}, 1, 1),
+    ([{"concept_id": 1}, {"concept_id": 2}], 2, 0),          # legacy server format
+    ('{"concepts": [{"concept_id": 3}]}', 1, 0),             # raw JSON string
+    (None, 0, 0),
+])
+def test_concept_set_payloads_from_the_server_are_accepted(payload, expected_concepts, expected_codes):
+    from opal_standalone.views.concept_sets import normalise_payload
+
+    normalised = normalise_payload(payload)
+    assert len(normalised["concepts"]) == expected_concepts
+    assert len(normalised["source_codes"]) == expected_codes

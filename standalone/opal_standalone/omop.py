@@ -56,6 +56,33 @@ class StandaloneConnection:
         return False
 
 
+# Driver each engine needs, and how to install it. PostgreSQL's psycopg2 is a
+# base dependency; the others are optional and imported lazily by their dialect.
+_DRIVERS = {
+    "postgresql": ("psycopg2", "pip install psycopg2-binary"),
+    "oracle": ("oracledb", "pip install oracledb"),
+    "sqlserver": ("pyodbc", "pip install pyodbc (+ un pilote ODBC système)"),
+}
+
+
+def driver_status(cdm: CdmConnection) -> tuple[bool, str]:
+    """``(available, hint)`` for the driver this CDM's engine needs.
+
+    Lets the UI say « installez oracledb » up front instead of surfacing an
+    import error from the first query.
+    """
+    import importlib
+
+    module, hint = _DRIVERS.get(cdm.db_type, (None, ""))
+    if not module:
+        return True, ""
+    try:
+        importlib.import_module(module)
+        return True, ""
+    except Exception:
+        return False, hint
+
+
 def dialect_for(cdm: CdmConnection):
     """The :class:`Dialect` backing this CDM (PostgreSQL by default)."""
     return get_dialect(cdm.db_type)
@@ -74,14 +101,22 @@ def schema_map(cdm: CdmConnection) -> SchemaMap:
 def _apply_read_only(conn, dialect) -> None:
     """Make the session read-only where the engine supports it (best effort).
 
-    PostgreSQL has a session-level switch. Oracle's is transaction-scoped, so it
-    only guards the current transaction. SQL Server has no equivalent — there,
-    as everywhere, the real guarantee is a read-only database account.
+    PostgreSQL's switch is a session GUC, and ``SET`` is transactional there —
+    so it is applied in autocommit mode, otherwise a later ``rollback()`` (the
+    engines do roll back on a failed optional query) would silently undo it.
+    Oracle's equivalent is transaction-scoped by design. SQL Server has no
+    equivalent — there, as everywhere, the real guarantee is a read-only
+    database account.
     """
     try:
         if dialect.name == "postgresql":
-            with conn.cursor() as cur:
-                cur.execute("SET default_transaction_read_only = on")
+            previous = conn.autocommit
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SET default_transaction_read_only = on")
+            finally:
+                conn.autocommit = previous
         elif dialect.name == "oracle":
             with conn.cursor() as cur:
                 cur.execute("SET TRANSACTION READ ONLY")

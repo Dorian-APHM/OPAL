@@ -237,6 +237,12 @@ def _render_clinical(results: dict) -> None:
         ui.download_csv("Exporter les concepts (CSV)", top_concepts, "top_concepts.csv",
                         key="dl_top_concepts")
 
+    if not mapping:
+        # Domains without a source_value column (e.g. Note) carry no mapping
+        # block — the engine skips those statistics rather than failing.
+        st.caption("Ce domaine n'expose pas de valeur source : pas de statistiques de mapping.")
+        return
+
     unmapped = mapping.get("top_unmapped_terms", [])
     st.markdown("**Termes source non mappés**")
     if unmapped:

@@ -100,6 +100,34 @@ moteur non-PostgreSQL éventuel est à ajouter). Le dossier
 `backend/` du dépôt doit rester présent (les briques l'importent) ; il peut être
 déplacé via `OPAL_BACKEND_DIR`.
 
+## Moteurs de base de données
+
+| Moteur | `db_type` | Port par défaut | Pilote |
+| --- | --- | --- | --- |
+| PostgreSQL (référence) | `postgresql` | 5432 | inclus (`psycopg2-binary`) |
+| Oracle | `oracle` | 1521 | `pip install oracledb` |
+| SQL Server | `sqlserver` | 1433 | `pip install pyodbc` + pilote ODBC système |
+
+Le moteur se choisit dans `config.toml` (`db_type`), par base : plusieurs
+sections `[[cdm]]` peuvent mélanger PostgreSQL et Oracle. La barre latérale
+affiche le moteur actif et signale un pilote manquant.
+
+Tout le SQL des briques — celui des moteurs d'analyse réutilisés comme celui
+propre au standalone — passe par la couche de dialectes du dépôt : quoting des
+identifiants, pagination (`LIMIT` / `FETCH NEXT`), placeholders (`%s` traduits
+en `:1`), casts, arithmétique de dates, recherche insensible à la casse
+(`ILIKE` / `LOWER() LIKE LOWER()`) et listes d'identifiants (tableau lié sur
+PostgreSQL, `IN (…)` découpé en tranches sous la limite Oracle de 1000 éléments).
+
+Spécificités Oracle utiles à connaître :
+
+* `database` est le **service name** ;
+* les identifiants ne sont pas quotés, donc un schéma écrit `omop_cdm` dans la
+  configuration résout l'objet `OMOP_CDM` créé par les DDL OHDSI ;
+* Oracle et SQL Server restent **best-effort** côté dépôt : le SQL est généré
+  pour ces moteurs et testé, mais la validation sur instance réelle a été faite
+  pour l'application serveur, pas pour chaque brique standalone.
+
 ## Sécurité
 
 * La session est ouverte en **lecture seule** là où le moteur le permet

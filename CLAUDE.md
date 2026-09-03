@@ -147,15 +147,20 @@ read-only OMOP connection — PostgreSQL, Oracle or SQL Server via `db_type`.
   `build_schema_map` in the shim attaches `_dialect` to the SchemaMap, as the
   server does. All glue SQL is authored with `%s` placeholders and routed via
   `dialect.execute` / `quote_ident` / `ilike` / `limit_offset` / date helpers —
-  never PostgreSQL-only syntax. Unlike the server, unmapped source values are
-  read live from the CDM (no app-DB cache), through the dialect.
+  never PostgreSQL-only syntax (`standalone/tests` has a guard asserting no
+  `psycopg2.sql`/`RealDictCursor`/`ILIKE`/`information_schema` remains). Long id
+  lists are chunked under Oracle's 1000-item `IN` ceiling. Unlike the server,
+  unmapped source values are read live from the CDM (no app-DB cache), through
+  the dialect. Characterization and pathways open their connection with
+  `allow_temp_tables=True` — they build session scratch tables, which the
+  read-only session would otherwise block.
 - **Persistence**: SQLite (`opal_standalone/store.py`) replaces the app DB —
   snapshots, cohorts, concept sets, mapping decisions, incidence/estimation
   analyses, lineage graphs. No ownership columns.
 - **Out of scope by design**: auth/roles, sharing, groups, notifications,
   favorites, audit, OHDSI R tools, cohort-LLM, and SapBERT suggestions (mapping
   keeps its three deterministic strategies).
-- **Tests**: `python -m pytest standalone/tests -q` (77 tests, no database —
+- **Tests**: `python -m pytest standalone/tests -q` (101 tests, no database —
   includes Streamlit `AppTest` runs of every brick and per-dialect SQL checks).
 
 ### Key Design Decisions

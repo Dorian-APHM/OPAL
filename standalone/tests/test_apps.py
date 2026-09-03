@@ -15,6 +15,7 @@ APPS = sorted(p.stem for p in APPS_DIR.glob("*.py"))
 CONFIG = """
 [omop]
 name = "unreachable"
+db_type = "{db_type}"
 host = "127.0.0.1"
 port = 1
 database = "omop"
@@ -26,12 +27,19 @@ path = "{storage}"
 """
 
 
-@pytest.fixture
-def config_file(tmp_path, monkeypatch):
+def _write_config(tmp_path, monkeypatch, db_type="postgresql"):
     path = tmp_path / "config.toml"
-    path.write_text(CONFIG.format(storage=(tmp_path / "data").as_posix()), encoding="utf-8")
+    path.write_text(
+        CONFIG.format(db_type=db_type, storage=(tmp_path / "data").as_posix()),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("OPAL_STANDALONE_CONFIG", str(path))
     return path
+
+
+@pytest.fixture
+def config_file(tmp_path, monkeypatch):
+    return _write_config(tmp_path, monkeypatch)
 
 
 def test_every_brick_has_an_entrypoint():
@@ -47,6 +55,24 @@ def test_app_runs_without_uncaught_exception(app, config_file):
     at.run()
     assert not at.exception, f"{app}: {[e.value for e in at.exception]}"
     assert at.title, f"{app}: no page title rendered"
+
+
+@pytest.mark.parametrize("app", ["quality", "cohort", "concepts", "mapping", "datamanagement"])
+@pytest.mark.parametrize("db_type", ["oracle", "sqlserver"])
+def test_apps_run_against_a_non_postgres_cdm(app, db_type, tmp_path, monkeypatch):
+    """A CDM declared as Oracle / SQL Server must not break the pages.
+
+    The database is unreachable (and the driver may not even be installed), so
+    this pins that every engine-specific failure is handled by the view.
+    """
+    import streamlit as st
+
+    st.cache_resource.clear()
+    _write_config(tmp_path, monkeypatch, db_type=db_type)
+    at = AppTest.from_file(str(APPS_DIR / f"{app}.py"), default_timeout=60)
+    at.run()
+    assert not at.exception, f"{app}/{db_type}: {[e.value for e in at.exception]}"
+    assert at.title
 
 
 def test_missing_configuration_is_reported_not_raised(tmp_path, monkeypatch):

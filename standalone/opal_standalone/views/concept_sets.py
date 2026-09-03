@@ -25,6 +25,30 @@ def _parse_codes(raw: str) -> list[str]:
     return [t.strip() for t in raw.replace(";", ",").replace("\n", ",").split(",") if t.strip()]
 
 
+def normalise_payload(data) -> dict:
+    """Accept both concept-set shapes: the current dict and the legacy list.
+
+    Mirrors the server's ``_parse_payload`` so an export from the full
+    application imports cleanly.
+    """
+    if not data:
+        return {"concepts": [], "source_codes": []}
+    if isinstance(data, list):
+        return {"concepts": data, "source_codes": []}
+    if isinstance(data, str):
+        import json as _json
+
+        try:
+            return normalise_payload(_json.loads(data))
+        except ValueError:
+            return {"concepts": [], "source_codes": []}
+    return {
+        "concepts": data.get("concepts", []),
+        "source_codes": data.get("source_codes", []),
+        **{k: v for k, v in data.items() if k not in ("concepts", "source_codes")},
+    }
+
+
 def _editor(config, cdm, store) -> None:
     sets = store.list_concept_sets(cdm.name)
     labels = ["— nouveau —"] + [f"#{s['id']} {s['name']}" for s in sets]
@@ -34,7 +58,7 @@ def _editor(config, cdm, store) -> None:
     if chosen != labels[0]:
         current = store.get_concept_set(int(chosen.split()[0].lstrip("#")))
 
-    payload = (current or {}).get("payload", {}) if current else {}
+    payload = normalise_payload((current or {}).get("payload")) if current else {}
     name = st.text_input("Nom", value=(current or {}).get("name", ""), key="cs_name")
     description = st.text_input(
         "Description", value=(current or {}).get("description", ""), key="cs_desc"
@@ -105,14 +129,14 @@ def _library(config, cdm, store) -> None:
     else:
         ui.show_table([
             {
-                "id": s["id"],
-                "nom": s["name"],
-                "description": s["description"],
-                "concepts": len(s["payload"].get("concepts", [])),
-                "codes source": len(s["payload"].get("source_codes", [])),
-                "modifié": s["updated_at"],
+                "id": entry["id"],
+                "nom": entry["name"],
+                "description": entry["description"],
+                "concepts": len(normalise_payload(entry["payload"])["concepts"]),
+                "codes source": len(normalise_payload(entry["payload"])["source_codes"]),
+                "modifié": entry["updated_at"],
             }
-            for s in sets
+            for entry in sets
         ])
         ui.download_json("Exporter la bibliothèque (JSON)", sets, "concept_sets.json",
                          key="dl_cs_library")
@@ -128,7 +152,7 @@ def _library(config, cdm, store) -> None:
                 store.save_concept_set(
                     cdm.name,
                     entry.get("name", "import"),
-                    entry.get("payload") or entry.get("concepts_json") or {},
+                    normalise_payload(entry.get("payload") or entry.get("concepts_json")),
                     entry.get("description", ""),
                 )
             st.success(f"{len(entries)} concept set(s) importé(s).")
