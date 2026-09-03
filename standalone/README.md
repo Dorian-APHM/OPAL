@@ -74,8 +74,13 @@ rapports (`[ui]`). Référence complète :
 ## Données locales
 
 Snapshots, cohortes, concept sets, décisions de mapping, analyses et lignages
-sont conservés dans un fichier SQLite (`standalone/data/opal-standalone.db` par
-défaut). Le copier suffit à déplacer son travail, le supprimer remet à zéro.
+sont conservés dans **un seul fichier SQLite**, partagé par toutes les briques
+(`standalone/data/opal-standalone.db` par défaut). C'est ainsi qu'Incidence,
+Estimation et Data management retrouvent les cohortes enregistrées par le
+constructeur, même lancés dans des processus séparés. Le copier suffit à
+déplacer son travail, le supprimer remet à zéro. Détails et tableau des
+dépendances entre briques :
+[docs/STANDALONE.md §7](../docs/STANDALONE.md#7-données-locales).
 
 ## Ce qui n'est pas repris
 

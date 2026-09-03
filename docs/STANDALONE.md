@@ -357,13 +357,51 @@ Tout ce que vous produisez est conservé dans **un fichier SQLite**
 | `analyses` | analyses d'incidence et d'estimation enregistrées |
 | `lineage` | graphe de lignage par CDM |
 
-Aucune colonne de propriétaire : il n'y a pas d'utilisateurs.
+Aucune colonne de propriétaire : il n'y a pas d'utilisateurs. Le cloisonnement
+se fait **par base OMOP** : chaque enregistrement porte le `name` du CDM, donc
+deux bases déclarées dans la configuration ne mélangent ni leurs snapshots ni
+leurs cohortes.
+
+### Un seul fichier, partagé par toutes les briques
+
+Il n'y a **pas une base par brique** : toutes écrivent dans le même fichier.
+C'est ce qui permet aux briques de se passer des données alors qu'elles tournent
+dans des processus séparés — une cohorte enregistrée dans la brique Cohortes est
+immédiatement visible dans la brique Incidence, sans que celle-ci ait à tourner
+au même moment.
+
+| Brique | Lit d'une autre brique | Écrit |
+|---|---|---|
+| Qualité | — | `snapshots` (analyses + conformité) |
+| Cohortes | `concept_sets` | `cohorts` (définition, caractérisation, parcours) |
+| Concepts | — | — (exploration seule) |
+| Concept sets | — | `concept_sets` |
+| Mapping | — | `mapping_decisions` |
+| Incidence | `cohorts` | `analyses` (kind = `incidence`) |
+| Estimation | `cohorts` | `analyses` (kind = `estimation`) |
+| Data management | `cohorts` | — (l'export part dans le navigateur) |
+| Lineage ETL | — | `lineage` |
+
+**Conséquence pratique** : Incidence, Estimation et Data management ont besoin
+d'au moins une cohorte enregistrée, et le constructeur de cohortes n'affiche des
+concept sets que si vous en avez créé. Ce sont des dépendances de *données*, pas
+de *processus* : rien n'oblige les briques concernées à tourner simultanément.
+
+### Exploitation
 
 - **Sauvegarder / déplacer** : copiez le fichier `.db` (fermez les applications
   d'abord, ou copiez aussi les fichiers `-wal` / `-shm`).
 - **Remettre à zéro** : supprimez le fichier, il est recréé au démarrage.
-- **Partager** : pointez `storage.path` vers un dossier partagé — SQLite
-  supporte plusieurs lecteurs, mais évitez les écritures simultanées intensives.
+- **Accès concurrent** : SQLite est ouvert en mode WAL et chaque opération ouvre
+  puis referme sa connexion — plusieurs briques peuvent donc lire et écrire en
+  parallèle sans se bloquer durablement. Gardez en revanche le fichier sur un
+  **disque local** : le verrouillage SQLite est peu fiable sur un partage réseau
+  (NFS/SMB).
+- **Isoler une brique** : donnez-lui sa propre configuration avec un
+  `storage.path` distinct
+  (`python standalone/run.py mapping --config mapping.toml`). Elle ne verra alors
+  plus les données des autres — à ne faire que pour les briques sans dépendance
+  (Qualité, Mapping, Concepts, Lineage).
 
 ---
 
