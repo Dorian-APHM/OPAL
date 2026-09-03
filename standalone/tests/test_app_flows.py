@@ -7,21 +7,10 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import FakeRow
 from streamlit.testing.v1 import AppTest
 
 APP = Path(__file__).resolve().parents[1] / "apps" / "quality.py"
-
-
-class FakeRow(dict):
-    """Row behaving like psycopg2's DictRow: mapping access *and* value iteration."""
-
-    def __iter__(self):
-        return iter(self.values())
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return list(self.values())[key]
-        return super().__getitem__(key)
 
 
 class FakeCursor:
@@ -85,10 +74,17 @@ def fake_cdm(tmp_path, monkeypatch):
 
     st.cache_resource.clear()
 
+    from db.dialects import get_dialect
+
     connection = MagicMock()
     connection.cursor.return_value = FakeCursor()
     connection.dsn = "fake"
-    monkeypatch.setattr("opal_standalone.omop.connect", lambda cdm: connection)
+    # The engines reach for conn.dialect to emit engine-correct SQL; the fake
+    # speaks the reference (PostgreSQL) dialect.
+    connection.dialect = get_dialect("postgresql")
+    monkeypatch.setattr(
+        "opal_standalone.omop.connect", lambda cdm, **kwargs: connection
+    )
     return tmp_path
 
 

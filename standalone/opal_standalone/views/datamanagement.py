@@ -78,12 +78,25 @@ def _extract_zip(cdm, cohort_sql: str, selections: list[dict], same_visit_only: 
                 writer = csv.writer(text)
                 writer.writerow(selection["columns"])
                 rows = 0
-                with conn.cursor(name=f"opal_extract_{table}") as cur:
-                    cur.itersize = _FETCH_SIZE
-                    cur.execute(sql)
-                    for row in cur:
-                        writer.writerow([csv_safe(value) for value in row])
-                        rows += 1
+                # The dialect streams dict rows in batches (a server-side cursor
+                # on PostgreSQL) so a large table never lands in memory at once.
+                cur = conn.dialect.stream_cursor(conn, sql, _FETCH_SIZE)
+                try:
+                    while True:
+                        batch = cur.fetchmany(_FETCH_SIZE)
+                        if not batch:
+                            break
+                        for row in batch:
+                            writer.writerow(
+                                [csv_safe(row.get(col.lower(), row.get(col)))
+                                 for col in selection["columns"]]
+                            )
+                            rows += 1
+                finally:
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
                 archive.writestr(f"{table}.csv", text.getvalue())
                 report.append({"table": table, "lignes": rows, "colonnes": len(selection["columns"])})
         progress.progress(1.0, text="Terminé")

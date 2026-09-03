@@ -126,7 +126,7 @@ Docker Compose runs four services: `opal-frontend`, `opal-backend`, `opal-db`, `
 Every functional brick is also shipped as a **self-contained Streamlit app** —
 pure Python, no Docker, no application database, no Keycloak, no users. One TOML
 file (`standalone/config.toml`, modelled on `config.example.toml`) holds the
-read-only OMOP connection.
+read-only OMOP connection — PostgreSQL, Oracle or SQL Server via `db_type`.
 
 - **Entry points**: `standalone/apps/<brick>.py` (`quality`, `cohort`, `concepts`,
   `concept_sets`, `mapping`, `incidence`, `estimation`, `datamanagement`,
@@ -142,14 +142,21 @@ read-only OMOP connection.
 - **Router-level glue** (dated cohort SQL, Kaplan-Meier SQL, concept/vocabulary
   queries, unmapped terms, read-only SQL guard, criteria validation) is
   reimplemented in `opal_standalone/glue.py`; keep it aligned with the routers.
+- **Multi-engine**: `opal_standalone/omop.py` opens connections through
+  `db.dialects` and exposes `conn.dialect` (what every ported engine reads);
+  `build_schema_map` in the shim attaches `_dialect` to the SchemaMap, as the
+  server does. All glue SQL is authored with `%s` placeholders and routed via
+  `dialect.execute` / `quote_ident` / `ilike` / `limit_offset` / date helpers —
+  never PostgreSQL-only syntax. Unlike the server, unmapped source values are
+  read live from the CDM (no app-DB cache), through the dialect.
 - **Persistence**: SQLite (`opal_standalone/store.py`) replaces the app DB —
   snapshots, cohorts, concept sets, mapping decisions, incidence/estimation
   analyses, lineage graphs. No ownership columns.
 - **Out of scope by design**: auth/roles, sharing, groups, notifications,
   favorites, audit, OHDSI R tools, cohort-LLM, and SapBERT suggestions (mapping
   keeps its three deterministic strategies).
-- **Tests**: `python -m pytest standalone/tests -q` (66 tests, no database —
-  includes Streamlit `AppTest` runs of every brick).
+- **Tests**: `python -m pytest standalone/tests -q` (77 tests, no database —
+  includes Streamlit `AppTest` runs of every brick and per-dialect SQL checks).
 
 ### Key Design Decisions
 

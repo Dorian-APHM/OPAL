@@ -446,7 +446,9 @@ def _tab_characterization(config, cdm, store) -> None:
             progress.progress(min(completed / max(total, 1), 1.0), text=label)
 
         try:
-            with connection(cdm) as conn:
+            # Characterization builds a session scratch table (as on the server),
+            # so this connection is opened without the read-only session switch.
+            with connection(cdm, allow_temp_tables=True) as conn:
                 result = run_characterization(
                     conn, criteria, schema_map(cdm), top_n=int(top_n),
                     visit_level=visit_level, progress_callback=_on_progress,
@@ -515,7 +517,8 @@ def _tab_pathways(config, cdm, store) -> None:
             progress.progress(min(completed / max(total, 1), 1.0), text=label)
 
         try:
-            with connection(cdm) as conn:
+            # Pathways builds session scratch tables and drops them at the end.
+            with connection(cdm, allow_temp_tables=True) as conn:
                 result = run_pathways_analysis(
                     conn, criteria, events, schema_map(cdm),
                     max_depth=int(max_depth), min_cell_count=int(min_cell),

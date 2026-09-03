@@ -13,6 +13,23 @@ from opal_standalone.config import AnalysisParams, AppConfig, CdmConnection  # n
 from opal_standalone.store import Store  # noqa: E402
 
 
+class FakeRow(dict):
+    """A row that behaves like a driver row on every engine.
+
+    psycopg2's RealDictCursor hands back mappings, while the dialect's
+    ``DictRowCursor`` rebuilds dicts from ``zip(columns, row)`` — which iterates
+    the row. Supporting both means mapping access *and* value iteration.
+    """
+
+    def __iter__(self):
+        return iter(self.values())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
 @pytest.fixture
 def cdm() -> CdmConnection:
     return CdmConnection(

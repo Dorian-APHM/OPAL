@@ -1,7 +1,12 @@
 # OPAL standalone — dépendances complètes (aucun Docker, aucune base applicative).
-# Les moteurs d'analyse réutilisés depuis backend/ n'ont besoin que de psycopg2 :
-# ni FastAPI, ni SQLAlchemy, ni Keycloak, ni les services compagnons.
+# Les moteurs d'analyse réutilisés depuis backend/ n'ont besoin que de psycopg2 et
+# de la couche de dialectes : ni FastAPI, ni SQLAlchemy, ni Keycloak, ni les
+# services compagnons.
 streamlit>=1.40
 pandas>=2.0
-psycopg2-binary>=2.9
-plotly>=5.18          # diagramme sunburst des parcours de soins (facultatif)
+psycopg2-binary>=2.9   # moteur de référence (PostgreSQL) — toujours requis
+plotly>=5.18           # diagramme sunburst des parcours de soins (facultatif)
+
+# Pilotes optionnels des autres moteurs CDM (chargés à la demande) :
+#   oracledb>=3.0      # CDM Oracle       (db_type = "oracle")
+#   pyodbc>=5.0        # CDM SQL Server   (db_type = "sqlserver", + pilote ODBC système)

@@ -11,14 +11,15 @@
 
 [omop]
 name = "omop"                 # nom affiché de la base
+db_type = "postgresql"        # postgresql (défaut) | oracle | sqlserver
 host = "localhost"
-port = 5432
-database = "omop"
+port = 5432                   # défaut selon le moteur : 5432 / 1521 / 1433
+database = "omop"             # Oracle : le *service name*
 user = "opal_readonly"
 password = ""                 # laissez vide et exportez OPAL_OMOP_PASSWORD
 schema = "omop_cdm"           # schéma par défaut
 statement_timeout_ms = 1800000
-read_only = true              # force la session PostgreSQL en lecture seule
+read_only = true              # session en lecture seule (natif PostgreSQL/Oracle)
 
 # Schémas par catégorie de tables OMOP (facultatif). Les catégories non
 # renseignées retombent sur le schéma par défaut ci-dessus.
@@ -27,13 +28,18 @@ read_only = true              # force la session PostgreSQL en lecture seule
 # [omop.schema_categories]
 # vocabulary = "omop_vocabulary"
 
+# Pilotes : PostgreSQL fonctionne avec les dépendances de base ; Oracle
+# nécessite « pip install oracledb » et SQL Server « pip install pyodbc »
+# (plus un pilote ODBC système).
+
 # Bases supplémentaires (facultatif) — un sélecteur apparaît alors dans la
 # barre latérale, ce qui permet notamment de comparer deux CDM dans la
 # brique Qualité.
 # [[cdm]]
 # name = "omop-2023"
+# db_type = "oracle"
 # host = "localhost"
-# port = 5432
+# port = 1521
 # database = "omop_2023"
 # user = "opal_readonly"
 # password = ""

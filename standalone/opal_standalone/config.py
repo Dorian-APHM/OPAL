@@ -21,8 +21,9 @@ from opal_standalone.bootstrap import STANDALONE_DIR
 DEFAULT_CONFIG_PATH = STANDALONE_DIR / "config.toml"
 EXAMPLE_CONFIG_PATH = STANDALONE_DIR / "config.example.toml"
 
-# env var -> (section, key) applied to the *first* CDM connection
+# env var -> attribute applied to the *first* CDM connection
 _ENV_OVERRIDES = {
+    "OPAL_OMOP_DB_TYPE": "db_type",
     "OPAL_OMOP_HOST": "host",
     "OPAL_OMOP_PORT": "port",
     "OPAL_OMOP_DATABASE": "database",
@@ -38,10 +39,15 @@ class ConfigError(RuntimeError):
 
 @dataclass
 class CdmConnection:
-    """Connection details for one OMOP CDM database (read-only)."""
+    """Connection details for one OMOP CDM database (read-only).
+
+    ``db_type`` selects the engine dialect: ``postgresql`` (default, reference
+    engine), ``oracle`` or ``sqlserver``.
+    """
 
     name: str
     host: str
+    db_type: str = "postgresql"
     port: int = 5432
     database: str = "omop"
     user: str = "postgres"
@@ -52,7 +58,7 @@ class CdmConnection:
     read_only: bool = True
 
     def label(self) -> str:
-        return f"{self.name} ({self.user}@{self.host}:{self.port}/{self.database})"
+        return f"{self.name} [{self.db_type}] ({self.user}@{self.host}:{self.port}/{self.database})"
 
 
 @dataclass
@@ -88,19 +94,39 @@ class AppConfig:
         return [cdm.name for cdm in self.cdms]
 
 
+def _validate_db_type(db_type: str, cdm_name: str) -> str:
+    """Check the engine is one the dialect layer supports."""
+    from db.dialects import SUPPORTED_DB_TYPES
+
+    if db_type not in SUPPORTED_DB_TYPES:
+        raise ConfigError(
+            f"CDM '{cdm_name}': unsupported db_type '{db_type}'. "
+            f"Supported: {', '.join(SUPPORTED_DB_TYPES)}"
+        )
+    return db_type
+
+
+def _default_port(db_type: str) -> int:
+    from db.dialects import default_port_for
+
+    return default_port_for(db_type)
+
+
 def _connection_from(raw: dict, *, fallback_name: str) -> CdmConnection:
     if not isinstance(raw, dict):
         raise ConfigError("A CDM connection must be a TOML table")
     missing = [k for k in ("host", "database", "user") if not raw.get(k)]
+    name = str(raw.get("name") or fallback_name)
     if missing:
         raise ConfigError(
-            f"CDM '{raw.get('name', fallback_name)}': missing required key(s) "
-            + ", ".join(missing)
+            f"CDM '{name}': missing required key(s) " + ", ".join(missing)
         )
+    db_type = _validate_db_type(str(raw.get("db_type", "postgresql")).strip().lower(), name)
     return CdmConnection(
-        name=str(raw.get("name") or fallback_name),
+        name=name,
         host=str(raw["host"]),
-        port=int(raw.get("port", 5432)),
+        db_type=db_type,
+        port=int(raw.get("port", _default_port(db_type))),
         database=str(raw["database"]),
         user=str(raw["user"]),
         password=str(raw.get("password", "")),
@@ -114,11 +140,21 @@ def _connection_from(raw: dict, *, fallback_name: str) -> CdmConnection:
 
 
 def _apply_env_overrides(cdm: CdmConnection) -> None:
+    explicit_port = os.environ.get("OPAL_OMOP_PORT")
     for env_name, attr in _ENV_OVERRIDES.items():
         value = os.environ.get(env_name)
         if value is None or value == "":
             continue
-        setattr(cdm, attr, int(value) if attr == "port" else value)
+        if attr == "port":
+            setattr(cdm, attr, int(value))
+        elif attr == "db_type":
+            new_type = _validate_db_type(value.strip().lower(), cdm.name)
+            # Switching engines moves the default port too, unless it was set.
+            if cdm.port == _default_port(cdm.db_type) and not explicit_port:
+                cdm.port = _default_port(new_type)
+            cdm.db_type = new_type
+        else:
+            setattr(cdm, attr, value)
 
 
 def config_path(explicit: str | os.PathLike | None = None) -> Path:

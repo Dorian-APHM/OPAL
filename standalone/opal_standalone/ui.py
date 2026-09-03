@@ -68,15 +68,19 @@ def sidebar(active: str) -> tuple[AppConfig, CdmConnection, Store]:
             selected = names[0]
             st.caption(f"Base OMOP : **{selected}**")
         cdm = config.cdm(selected)
-        st.caption(f"`{cdm.user}@{cdm.host}:{cdm.port}/{cdm.database}` — schéma `{cdm.schema}`")
+        st.caption(
+            f"`{cdm.user}@{cdm.host}:{cdm.port}/{cdm.database}` — "
+            f"schéma `{cdm.schema}` — moteur `{cdm.db_type}`"
+        )
 
         if st.button("Tester la connexion", use_container_width=True):
             try:
                 info = test_connection(cdm)
                 st.success(
-                    f"OK — PostgreSQL {info['server_version'].split()[1]}, "
-                    f"{info['tables_in_schema']} tables dans `{info['schema']}`"
-                    + (f", {info['persons']:,} patients".replace(",", " ") if info["persons"] is not None else "")
+                    f"OK — {info['engine']}, {info['tables_in_schema']} tables "
+                    f"dans `{info['schema']}`"
+                    + (f", {info['persons']:,} patients".replace(",", " ")
+                       if info["persons"] is not None else "")
                 )
             except Exception as exc:  # noqa: BLE001 - surfaced to the user
                 st.error(f"Connexion impossible : {exc}")

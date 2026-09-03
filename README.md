@@ -1059,7 +1059,9 @@ Les tests backend utilisent une base SQLite en memoire et un mock psycopg2 (`omo
 Chaque brique fonctionnelle d'OPAL est egalement disponible en **application
 Streamlit autonome**, en Python pur : pas de Docker, pas de base applicative,
 pas de Keycloak, pas de gestion d'utilisateurs. Un seul fichier de
-configuration decrit la connexion OMOP, ouverte en lecture seule.
+configuration decrit la connexion OMOP, ouverte en lecture seule — PostgreSQL,
+Oracle ou SQL Server (`db_type`), via la meme couche de dialectes que
+l'application complete.
 
 ```bash
 pip install -r standalone/requirements.txt
@@ -1071,7 +1073,8 @@ python standalone/run.py                                   # les neuf briques da
 
 Briques disponibles : Qualite, Cohortes, Concepts, Concept sets, Mapping,
 Incidence, Estimation, Data management, Lineage ETL. Elles **reutilisent les
-moteurs d'analyse de `backend/modules/`** (memes requetes, memes calculs) ;
+moteurs d'analyse de `backend/modules/`** (memes requetes, memes calculs,
+meme routage multi-moteurs) ;
 seuls les trois modules lies au serveur (base applicative, referentiels,
 FastAPI) sont remplaces par des equivalents standalone. La persistance
 (snapshots, cohortes, concept sets, decisions de mapping) se fait dans un

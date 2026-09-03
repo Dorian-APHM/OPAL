@@ -3,7 +3,7 @@
 Chaque brique d'OPAL, exécutable seule, en Python pur avec **Streamlit** :
 pas de Docker, pas de base applicative PostgreSQL, pas de Keycloak, pas de
 gestion d'utilisateurs. Un seul fichier de configuration décrit la connexion à
-la base OMOP, en lecture seule.
+la base OMOP, en lecture seule — **PostgreSQL, Oracle ou SQL Server**.
 
 ```bash
 pip install -r standalone/requirements.txt
@@ -43,13 +43,20 @@ Tout tient dans `standalone/config.toml` (modèle commenté :
 
 ```toml
 [omop]
+db_type = "postgresql"   # postgresql (défaut) | oracle | sqlserver
 host = "localhost"
-port = 5432
-database = "omop"
+port = 5432              # défaut selon le moteur : 5432 / 1521 / 1433
+database = "omop"        # Oracle : le service name
 user = "opal_readonly"
 password = ""            # ou variable d'environnement OPAL_OMOP_PASSWORD
 schema = "omop_cdm"
 ```
+
+* **Moteur** : `db_type` sélectionne le dialecte partagé avec l'application
+  complète (`backend/db/dialects/`). PostgreSQL est le moteur de référence et
+  fonctionne avec les dépendances de base ; Oracle demande
+  `pip install oracledb`, SQL Server `pip install pyodbc` (+ un pilote ODBC
+  système). Le port par défaut suit le moteur choisi.
 
 * **Mot de passe** : laissez le champ vide et exportez `OPAL_OMOP_PASSWORD`.
   `OPAL_OMOP_HOST`, `_PORT`, `_DATABASE`, `_USER`, `_SCHEMA` fonctionnent de la
@@ -61,6 +68,7 @@ schema = "omop_cdm"
   sélecteur dans la barre latérale — utile pour comparer deux CDM dans la brique
   Qualité.
 * **Chemin de la configuration** : `OPAL_STANDALONE_CONFIG=/chemin/config.toml`.
+  `OPAL_OMOP_DB_TYPE` change le moteur sans toucher au fichier.
 * **Persistance** : `[storage] path` désigne le dossier du fichier SQLite qui
   conserve snapshots, cohortes, concept sets, décisions de mapping, analyses et
   lignages (par défaut `standalone/data/opal-standalone.db`). Le supprimer
@@ -70,9 +78,13 @@ schema = "omop_cdm"
 
 Les briques **réutilisent les moteurs d'analyse du dépôt** (`backend/modules/**`) :
 mêmes requêtes SQL, mêmes calculs, mêmes structures de résultats que
-l'application complète — il n'y a pas de fork à maintenir en parallèle.
+l'application complète — il n'y a pas de fork à maintenir en parallèle. Elles
+héritent donc aussi du **support multi-moteurs** : tout le SQL passe par la
+couche de dialectes, y compris les requêtes propres au standalone
+(`opal_standalone/glue.py`).
 
-Ces moteurs sont volontairement purs (psycopg2 + `config` + `utils.sql_safety`).
+Ces moteurs sont volontairement purs (psycopg2 + `db.dialects` + `config` +
+`utils.sql_safety`).
 Trois modules du backend sont, eux, liés au déploiement serveur ; ils sont
 remplacés au démarrage par des versions standalone (`opal_standalone/shims/`) :
 
@@ -83,16 +95,26 @@ remplacés au démarrage par des versions standalone (`opal_standalone/shims/`) 
 | `db.app_db` | Session inerte : la persistance passe par SQLite |
 
 Conséquence : `pip install -r standalone/requirements.txt` suffit — ni FastAPI,
-ni SQLAlchemy, ni cryptography, ni les services compagnons. Le dossier
+ni SQLAlchemy, ni cryptography, ni les services compagnons (seul le pilote du
+moteur non-PostgreSQL éventuel est à ajouter). Le dossier
 `backend/` du dépôt doit rester présent (les briques l'importent) ; il peut être
 déplacé via `OPAL_BACKEND_DIR`.
 
 ## Sécurité
 
-* La session PostgreSQL est ouverte en **lecture seule**
-  (`default_transaction_read_only`) et bornée par `statement_timeout` : aucune
-  brique n'écrit dans le CDM, y compris la brique Mapping — ses décisions
-  restent locales et s'exportent en CSV `source_to_concept_map`.
+* La session est ouverte en **lecture seule** là où le moteur le permet
+  (`default_transaction_read_only` sur PostgreSQL, `SET TRANSACTION READ ONLY`
+  sur Oracle — SQL Server n'a pas d'équivalent) et bornée par un timeout de
+  requête. Aucune brique n'écrit dans le CDM, y compris la brique Mapping —
+  ses décisions restent locales et s'exportent en CSV `source_to_concept_map`.
+  Utilisez de toute façon un compte de base en lecture seule : c'est la seule
+  garantie valable sur les trois moteurs.
+* Deux analyses font exception au verrou de session : **caractérisation** et
+  **parcours de soins** créent des tables de travail de session (comme dans
+  l'application complète) puis les suppriment ; leur connexion est donc ouverte
+  sans le verrou. Elles n'écrivent jamais dans les tables du CDM. Si votre
+  compte n'a pas le droit de créer de table temporaire, ces deux onglets sont
+  les seuls à échouer.
 * La console SQL n'accepte que `SELECT` / `WITH` / `EXPLAIN` et refuse les
   mots-clés d'écriture.
 * Les identifiants SQL passent par `safe_identifier()` et les exports CSV par la
@@ -120,6 +142,7 @@ python -m pytest standalone/tests -q
 
 La suite tourne sans base de données : elle vérifie le pont vers les moteurs
 (aucun import de FastAPI ou SQLAlchemy), la configuration, le stockage SQLite,
-le SQL généré, les exports, et lance chaque application via `AppTest` de
-Streamlit, y compris un aller-retour complet « analyse → snapshot → affichage »
-sur une connexion OMOP simulée.
+le SQL généré pour les trois dialectes (pagination, placeholders, arithmétique
+de dates), les exports, et lance chaque application via `AppTest` de Streamlit,
+y compris un aller-retour complet « analyse → snapshot → affichage » sur une
+connexion OMOP simulée.

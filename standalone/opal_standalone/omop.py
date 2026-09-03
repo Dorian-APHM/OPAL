@@ -1,58 +1,124 @@
 """Read-only connections to the external OMOP CDM database.
 
-The server keeps a per-CDM ``ThreadedConnectionPool``; a standalone app is a
-single user driving one query at a time, so it simply opens a connection per
-operation and closes it. The important behaviours of the server are kept: a
-statement timeout, and a session forced read-only so a standalone brick can
-never write to the CDM.
+Engine support comes from the repository's dialect layer (``db.dialects``):
+PostgreSQL (reference), Oracle and SQL Server. The engine is chosen per CDM with
+``db_type`` in the configuration file.
+
+The server keeps a per-CDM connection pool; a standalone app is a single user
+driving one query at a time, so it opens a connection per operation and closes
+it. The important behaviours are kept: a statement timeout, a session made
+read-only where the engine supports it, and a connection object exposing
+``.dialect`` — the attribute every ported engine reads to emit engine-correct
+SQL.
 """
 from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
 
-import psycopg2
-from psycopg2.extras import DictCursor
-
+from db.dialects import get_dialect
 from opal_standalone.config import CdmConnection
 from utils.cdm_helper import SchemaMap, build_schema_map
 
 logger = logging.getLogger(__name__)
 
 
+class StandaloneConnection:
+    """A DBAPI connection that also carries its :class:`Dialect`.
+
+    The analysis engines reach for ``conn.dialect``; the server provides it
+    through its pooled connection wrapper, the standalone apps through this one.
+    Every other attribute is proxied to the underlying driver connection.
+    """
+
+    def __init__(self, conn, dialect):
+        self._conn = conn
+        self._dialect = dialect
+
+    @property
+    def dialect(self):
+        return self._dialect
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def dialect_for(cdm: CdmConnection):
+    """The :class:`Dialect` backing this CDM (PostgreSQL by default)."""
+    return get_dialect(cdm.db_type)
+
+
 def schema_map(cdm: CdmConnection) -> SchemaMap:
-    """Schema resolver for a CDM (per-category overrides included)."""
+    """Schema resolver for a CDM, carrying the engine dialect.
+
+    ``build_schema_map`` attaches ``_dialect``: the SQL builders that only
+    receive a schema (cohort builder, characterization, incidence) read it from
+    there, so a single object carries both the schema layout and the engine.
+    """
     return build_schema_map(cdm)
 
 
-def connect(cdm: CdmConnection):
-    """Open a psycopg2 connection to the CDM, read-only and timeout-bounded."""
-    conn = psycopg2.connect(
-        host=cdm.host,
-        port=cdm.port,
-        dbname=cdm.database,
-        user=cdm.user,
-        password=cdm.password,
+def _apply_read_only(conn, dialect) -> None:
+    """Make the session read-only where the engine supports it (best effort).
+
+    PostgreSQL has a session-level switch. Oracle's is transaction-scoped, so it
+    only guards the current transaction. SQL Server has no equivalent — there,
+    as everywhere, the real guarantee is a read-only database account.
+    """
+    try:
+        if dialect.name == "postgresql":
+            with conn.cursor() as cur:
+                cur.execute("SET default_transaction_read_only = on")
+        elif dialect.name == "oracle":
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+    except Exception:
+        logger.warning(
+            "Could not force a read-only session on %s — relying on the database "
+            "account's privileges.", dialect.name,
+        )
+
+
+def connect(cdm: CdmConnection, *, allow_temp_tables: bool = False):
+    """Open a connection to the CDM: read-only, timeout-bounded, dialect-aware.
+
+    ``allow_temp_tables=True`` skips the read-only session for the two analyses
+    that need session-scratch tables (characterization and pathways build
+    temporary tables and drop them at the end — the server does the same). They
+    still never write to the CDM's own tables.
+    """
+    dialect = dialect_for(cdm)
+    conn = dialect.connect(
+        cdm.host, cdm.port, cdm.database, cdm.user, cdm.password,
         connect_timeout=10,
-        application_name="opal-standalone",
+        statement_timeout_ms=int(cdm.statement_timeout_ms),
     )
     try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SET statement_timeout = %s", (int(cdm.statement_timeout_ms),))
-            if cdm.read_only:
-                cur.execute("SET default_transaction_read_only = on")
-        conn.autocommit = False
+        dialect.set_statement_timeout(conn, int(cdm.statement_timeout_ms))
     except Exception:
-        conn.close()
-        raise
-    return conn
+        logger.debug("Statement timeout not applied on %s", dialect.name, exc_info=True)
+    if cdm.read_only and not allow_temp_tables:
+        _apply_read_only(conn, dialect)
+    return StandaloneConnection(conn, dialect)
 
 
 @contextmanager
-def connection(cdm: CdmConnection):
+def connection(cdm: CdmConnection, *, allow_temp_tables: bool = False):
     """Context manager yielding a CDM connection, always closed afterwards."""
-    conn = connect(cdm)
+    conn = connect(cdm, allow_temp_tables=allow_temp_tables)
     try:
         yield conn
     finally:
@@ -63,26 +129,23 @@ def connection(cdm: CdmConnection):
 
 
 def test_connection(cdm: CdmConnection) -> dict:
-    """Probe the CDM: server version, schema presence and person count."""
+    """Probe the CDM: engine, schema presence and person count."""
     schema = schema_map(cdm)
     with connection(cdm) as conn:
-        with conn.cursor(cursor_factory=DictCursor) as cur:
-            cur.execute("SELECT version() AS version")
-            version = cur.fetchone()["version"]
-            cur.execute(
-                "SELECT COUNT(*) AS n FROM information_schema.tables "
-                "WHERE table_schema = %s",
-                (schema.schema_for("person"),),
+        dialect = conn.dialect
+        tables = len(dialect.list_tables(conn, schema.schema_for("person")))
+        persons = None
+        try:
+            row = fetch_one(
+                conn,
+                f"SELECT COUNT(*) AS n FROM "
+                f"{dialect.quote_ident(schema.schema_for('person'))}.person",
             )
-            tables = int(cur.fetchone()["n"])
-            persons = None
-            try:
-                cur.execute(f"SELECT COUNT(*) AS n FROM {schema.t('person')}")
-                persons = int(cur.fetchone()["n"])
-            except Exception:
-                conn.rollback()
+            persons = int(row["n"]) if row else None
+        except Exception:
+            conn.rollback()
     return {
-        "server_version": version.split(",")[0],
+        "engine": dialect.label,
         "schema": str(schema),
         "tables_in_schema": tables,
         "persons": persons,
@@ -90,13 +153,12 @@ def test_connection(cdm: CdmConnection) -> dict:
 
 
 def fetch_all(conn, sql: str, params=None) -> list[dict]:
-    """Run a SELECT and return a list of dicts."""
-    with conn.cursor(cursor_factory=DictCursor) as cur:
-        cur.execute(sql, params)
+    """Run a SELECT (psycopg2-style ``%s`` placeholders) and return dicts."""
+    with conn.dialect.dict_cursor(conn) as cur:
+        conn.dialect.execute(cur, sql, params)
         if cur.description is None:
             return []
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+        return [dict(row) for row in cur.fetchall()]
 
 
 def fetch_one(conn, sql: str, params=None) -> dict | None:
@@ -104,12 +166,10 @@ def fetch_one(conn, sql: str, params=None) -> dict | None:
     return rows[0] if rows else None
 
 
-def has_unaccent(conn) -> bool:
-    """Whether the ``unaccent`` extension is available (search falls back if not)."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM pg_proc WHERE proname = 'unaccent' LIMIT 1")
-            return cur.fetchone() is not None
-    except Exception:
-        conn.rollback()
-        return False
+def table_ref(conn_or_dialect, schema: SchemaMap, table: str) -> str:
+    """Schema-qualified table reference for engine-neutral SQL strings."""
+    from utils.sql_safety import safe_identifier
+
+    dialect = getattr(conn_or_dialect, "dialect", conn_or_dialect)
+    name = schema.schema_for(table) if hasattr(schema, "schema_for") else schema
+    return f"{dialect.quote_ident(safe_identifier(name))}.{table}"

@@ -53,7 +53,9 @@ def build_schema_map(cdm, settings=None) -> SchemaMap:
     """Build a :class:`SchemaMap` from anything exposing ``omop_schema``/``schema``.
 
     Accepts the standalone ``CdmConnection`` as well as any object with
-    ``omop_schema`` and ``schema_categories`` attributes.
+    ``omop_schema`` and ``schema_categories`` attributes. As on the server, the
+    CDM's engine dialect is attached to the map (``_dialect``) so the SQL
+    builders that only receive a schema still emit engine-correct SQL.
     """
     default = (
         getattr(cdm, "schema", None)
@@ -65,7 +67,13 @@ def build_schema_map(cdm, settings=None) -> SchemaMap:
         if getattr(settings, "omop_schema", None):
             default = settings.omop_schema
         categories.update(getattr(settings, "schema_categories", None) or {})
-    return SchemaMap(default, categories)
+
+    schema_map = SchemaMap(default, categories)
+    from db.dialects import get_dialect
+
+    db_type = getattr(cdm, "db_type", None) if cdm is not None else None
+    schema_map._dialect = get_dialect(db_type if isinstance(db_type, str) else None)
+    return schema_map
 
 
 _column_exists_cache: dict[tuple[str, str, str, str], bool] = {}
@@ -73,7 +81,7 @@ _column_exists_lock = threading.Lock()
 
 
 def _column_exists(conn, schema: str, table: str, column: str) -> bool:
-    """Check whether a column exists in a table via information_schema (cached)."""
+    """Check whether a column exists in a table (cached), via the CDM's dialect."""
     dsn = conn.dsn if hasattr(conn, "dsn") else str(id(conn))
     cache_key = (dsn, schema, table, column)
     with _column_exists_lock:
@@ -81,14 +89,9 @@ def _column_exists(conn, schema: str, table: str, column: str) -> bool:
     if cached is not None:
         return cached
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_schema = %s AND table_name = %s AND column_name = %s LIMIT 1",
-            (schema, table, column),
-        )
-        exists = cur.fetchone() is not None
-        cur.close()
+        # Each engine queries its own metadata catalog (information_schema on
+        # PostgreSQL, ALL_TAB_COLUMNS on Oracle, …).
+        exists = conn.dialect.column_exists(conn, schema, table, column)
     except Exception:
         # Do not cache failures: a transient error must not permanently disable
         # a column that actually exists.
@@ -131,3 +134,16 @@ def get_cdm_connection(*_args, **_kwargs):  # pragma: no cover - not reachable
 def check_cdm_access(*_args, **_kwargs) -> None:
     """No-op: the standalone apps have no users and no access control."""
     return None
+
+
+def raise_source_value_cache_missing(cdm_name: str, domain: str | None = None):
+    """Server-side signal that the source-value cache is missing.
+
+    The standalone bricks query the CDM directly (there is no app-DB cache), so
+    nothing raises this; it exists to keep the module's surface compatible with
+    ``backend/utils/cdm_helper.py``.
+    """
+    raise RuntimeError(
+        f"Source value cache is not available in standalone mode (CDM '{cdm_name}', "
+        f"domain '{domain}')."
+    )

@@ -1,10 +1,12 @@
 """Bootstrap for the standalone (Streamlit) apps.
 
 The standalone bricks reuse OPAL's *analysis engines* verbatim — the code in
-``backend/modules/**`` that talks to the OMOP CDM through psycopg2. Those
-engines are pure: they only need ``psycopg2``, ``config`` and
-``utils.sql_safety``. Three backend modules they touch are, however, tied to the
-server deployment (FastAPI, SQLAlchemy, the application database, Keycloak):
+``backend/modules/**`` that talks to the OMOP CDM through the engine dialects
+(``db.dialects``: PostgreSQL, Oracle, SQL Server). Those engines are pure: they
+only need ``psycopg2`` (plus the optional driver of the engine actually used),
+``config``, ``db.dialects`` and ``utils.sql_safety``. Three backend modules they
+touch are, however, tied to the server deployment (FastAPI, SQLAlchemy, the
+application database, Keycloak):
 
 * ``utils.cdm_helper``      — CDM lookup in the app DB + FastAPI ``HTTPException``
 * ``utils.reference_labels``— reference codebooks stored in the app DB
@@ -12,7 +14,7 @@ server deployment (FastAPI, SQLAlchemy, the application database, Keycloak):
 
 This module puts ``backend/`` on ``sys.path`` and substitutes standalone
 replacements for exactly those three modules, so importing an engine pulls in
-psycopg2 and nothing else. Everything else (domain analyses, conformity, the
+psycopg2 and the dialect layer, and nothing else. Everything else (domain analyses, conformity, the
 cohort SQL builder, mapping suggestions, incidence, survival, extraction,
 lineage) is the *same code the server runs* — no fork, no copy to keep in sync.
 """
